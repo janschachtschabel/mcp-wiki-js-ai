@@ -1,0 +1,146 @@
+# =============================================================================
+# Wiki.js + MCP-Server — Team-Wissensspeicher-Appliance
+# =============================================================================
+# Vier Services, EIN Host, EINE Domain:
+#   db     Postgres 15 (Wiki.js-Datenbank)
+#   wiki   Wiki.js 2 (offizielles Image — unabhängig updatebar)
+#   mcp    MCP-Server (dieses Repo) — OAuth mit Wiki.js-Login, /me, Guardrails
+#   caddy  Reverse-Proxy mit Auto-HTTPS: eine Domain für Wiki UND MCP
+#          (gleiche Domain = Ein-Klick-SSO: die Wiki-Session gilt beim Autorisieren)
+#
+# Quick-Start:
+#   cp .env.example .env        # DOMAIN, Passwörter, MCP_SESSION_SECRET setzen
+#   docker compose up -d
+#   https://<DOMAIN>            → Wiki.js (Setup beim ersten Start)
+#   https://<DOMAIN>/mcp        → MCP-Endpoint (Connector-URL für alle Clients)
+#   https://<DOMAIN>/me         → eigene KI-Zugänge ansehen/widerrufen
+#
+# Update:   docker compose pull && docker compose build --pull mcp && docker compose up -d
+# Logs:     docker compose logs -f
+# Backup:   db-Volume (Wiki-Inhalte) + mcp-data-Volume (KI-Sessions) sichern
+# Reset:    docker compose down -v   # ACHTUNG: löscht ALLE Daten
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: wiki
+      POSTGRES_USER: wikijs
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD fehlt — bitte .env anlegen}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wikijs -d wiki"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  wiki:
+    image: requarks/wiki:2
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_TYPE: postgres
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: wikijs
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: wiki
+      # DB-Connection-Pool von Wiki.js (Knex). Default des Images wäre max 10 —
+      # mit parallelen KI-Agenten + Browser-Nutzung zu knapp. 20 direkte
+      # Verbindungen sind für Postgres (max_connections=100) völlig unkritisch;
+      # PgBouncer ist bei EINER Wiki-Instanz unnötig.
+      DB_POOL_MIN: ${WIKIJS_DB_POOL_MIN:-2}
+      DB_POOL_MAX: ${WIKIJS_DB_POOL_MAX:-20}
+    volumes:
+      # Wie die config.yml des Images, plus pool-Block (siehe Datei-Kommentar).
+      - ./deploy/wiki/config.yml:/wiki/config.yml:ro
+    # Kein Port nach außen — Zugriff ausschließlich über caddy.
+
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${MCP_IMAGE:-wikijs-mcp:local}
+    restart: unless-stopped
+    environment:
+      # Wiki.js über das interne Docker-Netz — kein Traffic verlässt den Host,
+      # keine Rate-Limits/Firewalls zwischen MCP und Wiki (das Vercel-Problem).
+      WIKIJS_URL: http://wiki:3000
+      # Öffentliche Basis-URL (OAuth-Issuer, Discovery, Links) — MUSS zur Domain passen.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN:?DOMAIN fehlt — bitte .env anlegen}}
+      # OAuth an: Login = Wiki.js-Login, Sessions verschlüsselt in /data.
+      MCP_SESSION_SECRET: ${MCP_SESSION_SECRET:?MCP_SESSION_SECRET fehlt — bitte .env anlegen}
+      MCP_DATA_DIR: /data
+      # Rechte kommen pro User aus Wiki.js → Ceiling öffnen, Agenten-Schutz als Overlay.
+      WIKIJS_PERMISSION_PRESET: ${WIKIJS_PERMISSION_PRESET:-full}
+      WIKIJS_OAUTH_ROLE: ${WIKIJS_OAUTH_ROLE:-wiki}
+      # Seiten mit diesen Tags sind für KI unsichtbar & unantastbar (leer = aus).
+      WIKIJS_BLOCKED_TAGS: ${WIKIJS_BLOCKED_TAGS:-kein-ki}
+      WIKIJS_AUDIT: ${WIKIJS_AUDIT:-true}
+      # Max. gleichzeitige GraphQL-Requests an Wiki.js — unter DB_POOL_MAX halten,
+      # damit fürs Browsen der Menschen Pool-Luft bleibt.
+      WIKIJS_MAX_CONCURRENCY: ${WIKIJS_MAX_CONCURRENCY:-12}
+    volumes:
+      - mcp-data:/data
+    depends_on:
+      - wiki
+
+  # Tägliches pg_dump-Backup mit Retention — deckt ALLE Wiki-Inhalte ab.
+  # (mcp-data enthält nur widerrufbare KI-Sessions + Audit-Log; ein Verlust
+  # bedeutet lediglich, dass sich Clients neu autorisieren müssen.)
+  # Restore:
+  #   docker compose stop wiki
+  #   docker compose exec db sh -c 'pg_restore -U wikijs -d wiki --clean /backups/<datei>.dump'
+  #   docker compose start wiki
+  db-backup:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+    volumes:
+      - db-backups:/backups
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          ts=$$(date +%Y%m%d-%H%M%S)
+          if pg_dump -h db -U wikijs -d wiki -F c -f "/backups/wiki-$$ts.dump"; then
+            echo "backup ok: wiki-$$ts.dump"
+            ls -1t /backups/wiki-*.dump 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
+          else
+            echo "backup FAILED at $$ts" >&2
+          fi
+          sleep "$$BACKUP_INTERVAL_SECONDS"
+        done
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - wiki
+      - mcp
+
+volumes:
+  db-data:
+  db-backups:
+  mcp-data:
+  caddy-data:
+  caddy-config:

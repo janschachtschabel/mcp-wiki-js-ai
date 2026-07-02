@@ -1,0 +1,32 @@
+# Eine Domain für Wiki.js UND den MCP-Server.
+#
+# Gleiche Domain ist Absicht: die Wiki.js-Session (jwt-Cookie) gilt dadurch auch
+# auf der OAuth-Freigabeseite des MCP-Servers → Ein-Klick-Autorisierung.
+#
+# Bei echter Domain besorgt Caddy TLS automatisch (Let's Encrypt, Ports 80+443
+# müssen erreichbar sein). Mit DOMAIN=localhost stellt Caddy ein lokales
+# Zertifikat aus (Browser-Warnung beim ersten Mal ist normal).
+#
+# Diese Pfade gehören dem MCP-Server — im Wiki KEINE Seiten unter
+# me/, oauth/, mcp, sse, api/ anlegen (siehe mcp-for-wiki-js/docs/oauth.md).
+
+{$DOMAIN:localhost} {
+	@mcp path \
+		/mcp /mcp/* \
+		/sse /sse/* \
+		/oauth/* \
+		/me /me/* \
+		/api/health \
+		/.well-known/oauth-authorization-server* \
+		/.well-known/oauth-protected-resource* \
+		/.well-known/mcp.json \
+		/_next/*
+
+	handle @mcp {
+		reverse_proxy mcp:3000
+	}
+
+	handle {
+		reverse_proxy wiki:3000
+	}
+}

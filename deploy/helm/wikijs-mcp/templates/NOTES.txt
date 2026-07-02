@@ -1,0 +1,35 @@
+{{ .Chart.Name }} {{ .Chart.Version }} (app {{ default .Chart.AppVersion .Values.image.tag }}) deployed.
+
+Image: {{ include "wikijs-mcp.image" . }}
+
+{{- if .Values.ingress.enabled }}
+
+URL(s):
+{{- range .Values.ingress.hosts }}
+{{- $scheme := "http" }}
+{{- if $.Values.ingress.tls }}{{ $scheme = "https" }}{{ end }}
+  {{ $scheme }}://{{ . }}/mcp        (MCP endpoint — the connector URL for all clients)
+  {{ $scheme }}://{{ . }}/me         (self-service: view/revoke own AI connections)
+{{- end }}
+{{- else }}
+
+No ingress enabled. Reach the app via port-forward:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "wikijs-mcp.fullname" . }} 3000:{{ .Values.service.port }}
+  open http://localhost:3000
+{{- end }}
+
+Health check: GET /api/health
+
+{{- if .Values.config.oauth.sessionSecret }}
+
+OAuth mode is ON — clients authorize via the Wiki.js login.
+IMPORTANT: serve this chart's ingress paths on the SAME host as Wiki.js
+(one-click SSO consent) and do not create wiki pages under
+me/, oauth/, mcp, sse, api/.
+{{- else }}
+
+OAuth mode is OFF (config.oauth.sessionSecret is empty) — clients must use
+legacy handles/BYOK credentials. To enable, set:
+  --set config.oauth.sessionSecret=<32-random-bytes> \
+  --set config.oauth.publicBaseUrl=https://<host>
+{{- end }}

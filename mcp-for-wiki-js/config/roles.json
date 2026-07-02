@@ -1,0 +1,22 @@
+{
+  "_comment": "Rights ROLES — assign ONE to each person via WIKIJS_PROFILES (\"role\": \"...\"). A role lists category modes (allow | confirm | block) and/or per-tool overrides, and may `extends` another role (inherit + override). The graduated ladder below goes from 'leser' (read-only) up to 'systemadmin' (everything). Categories: read, write, delete, manage_users, manage_groups, manage_system, manage_auth. NOTE: a role can only grant up to the global ceiling WIKIJS_PERMISSION_PRESET (set that to your most-privileged role). Edit freely; on Vercel REDEPLOY to apply (bundled at build), or override at runtime via the WIKIJS_ROLES env var (same JSON). `defaultRole` is used for the ceiling and for entries without a role. The 'wiki' role is the default overlay for OAuth sessions (WIKIJS_OAUTH_ROLE): access control itself lives in Wiki.js (the user's real groups/page-rules), this server only keeps confirm gates on destructive/admin actions.",
+  "defaultRole": "safe",
+  "roles": {
+    "leser":       { "categories": { "read": "allow", "write": "block", "delete": "block", "manage_users": "block", "manage_groups": "block", "manage_system": "block", "manage_auth": "block" } },
+    "kommentator": { "extends": "leser", "tools": { "wiki_comment_create": "allow", "wiki_comment_update": "allow" } },
+    "autor":       { "extends": "leser", "categories": { "write": "allow" } },
+    "redakteur":   { "extends": "autor", "categories": { "delete": "confirm" } },
+    "moderator":   { "extends": "redakteur", "categories": { "manage_users": "confirm" } },
+    "betreuer":    { "extends": "redakteur", "categories": { "manage_system": "confirm" } },
+    "admin":       { "extends": "redakteur", "categories": { "manage_users": "confirm", "manage_groups": "confirm", "manage_system": "confirm" } },
+    "systemadmin": { "categories": { "read": "allow", "write": "allow", "delete": "allow", "manage_users": "allow", "manage_groups": "allow", "manage_system": "allow", "manage_auth": "allow" } },
+
+    "wiki":        { "categories": { "read": "allow", "write": "allow", "delete": "confirm", "manage_users": "confirm", "manage_groups": "confirm", "manage_system": "confirm", "manage_auth": "confirm" } },
+
+    "safe":        { "categories": { "read": "allow", "write": "confirm", "delete": "confirm", "manage_users": "block", "manage_groups": "block", "manage_system": "block", "manage_auth": "block" } },
+    "readonly":    { "extends": "leser" },
+    "editor":      { "extends": "redakteur" },
+    "maintainer":  { "extends": "betreuer", "categories": { "manage_users": "confirm", "manage_groups": "confirm", "manage_auth": "confirm" } },
+    "full":        { "extends": "systemadmin" }
+  }
+}

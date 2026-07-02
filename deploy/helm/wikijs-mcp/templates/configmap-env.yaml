@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "wikijs-mcp.fullname" . }}-env
+  labels: {{ include "wikijs-mcp.labels" . | nindent 4 }}
+data:
+  # ---- Wiki.js ----
+  WIKIJS_URL: {{ required "config.wikijs.url is required (base URL of the Wiki.js instance)" .Values.config.wikijs.url | quote }}
+
+  # ---- OAuth (Wiki.js login as identity) ----
+  {{- if .Values.config.oauth.sessionSecret }}
+  PUBLIC_BASE_URL: {{ required "config.oauth.publicBaseUrl is required when OAuth is enabled" .Values.config.oauth.publicBaseUrl | quote }}
+  WIKIJS_OAUTH_ROLE: {{ .Values.config.oauth.role | quote }}
+  MCP_DATA_DIR: {{ .Values.persistence.mountPath | quote }}
+  {{- end }}
+
+  # ---- Policy / Guardrails ----
+  WIKIJS_PERMISSION_PRESET: {{ .Values.config.policy.permissionPreset | quote }}
+  WIKIJS_BLOCKED_TAGS: {{ .Values.config.policy.blockedTags | quote }}
+  WIKIJS_AUDIT: {{ .Values.config.audit | quote }}
+
+  # ---- Next.js runtime ----
+  PORT: {{ .Values.service.port | quote }}
+  HOSTNAME: "0.0.0.0"
+  {{- range $key, $value := .Values.config.extraEnv }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}

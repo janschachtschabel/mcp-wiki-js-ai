@@ -1,0 +1,12 @@
+apiVersion: v2
+
+name: edu_sharing-projects-wlo-wikijs-mcp
+description: MCP-Server für Wiki.js — OAuth mit Wiki.js-Login, per-User-Rechte, Tag-Guardrail
+
+type: application
+
+# Chart-Version (SemVer der Verpackung selbst).
+version: 0.1.0
+# Version der ausgelieferten Anwendung — entspricht dem Image-Tag.
+appVersion: "latest"
+kubeVersion: ">=1.23.0-0"

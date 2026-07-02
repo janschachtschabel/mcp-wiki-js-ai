@@ -1,0 +1,21 @@
+# Referenzmaterial — nicht Teil dieses Repos:
+# wiki/ = Clone von requarks/wiki, mcp2/ = Community-MCP-Server zum Vergleich.
+wiki/
+mcp2/
+
+# Secrets & lokale Konfiguration
+.env
+.env.*
+!.env.example
+
+# Node / Next.js
+node_modules/
+.next/
+*.tsbuildinfo
+
+# Laufzeitdaten
+data/
+*.log
+
+# Helm-Pakete
+*.tgz

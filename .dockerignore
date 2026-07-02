@@ -1,0 +1,15 @@
+# Build context = repo root; only mcp-for-wiki-js/ is copied into the image.
+# Everything irrelevant or heavy is excluded so builds stay fast and clean.
+wiki/
+mcp2/
+deploy/
+.github/
+.git/
+**/.git
+**/node_modules
+**/.next
+**/data
+**/*.log
+**/.env
+**/.env.*
+!**/.env.example

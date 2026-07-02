@@ -1,0 +1,38 @@
+# Throwaway Wiki.js + Postgres for LOCAL live testing of the MCP tool handlers.
+#
+#   docker compose -f docker-compose.test.yml up -d
+#   # 1) open http://localhost:3000 -> finish the first-run setup (admin account)
+#   # 2) Administration -> API -> enable, then create a Full-Access key
+#   # 3) run the live tool suite against this disposable instance:
+#   WIKIJS_URL=http://localhost:3000 WIKIJS_TOKEN=<key> npm run test:live
+#   docker compose -f docker-compose.test.yml down -v   # tear down (incl. data)
+#
+# The suite is self-cleaning, but use this DISPOSABLE wiki — never a wiki with real content.
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: wikijs
+      POSTGRES_PASSWORD: wikijsrocks
+      POSTGRES_DB: wiki
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U wikijs -d wiki']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  wiki:
+    image: ghcr.io/requarks/wiki:2
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_TYPE: postgres
+      DB_HOST: db
+      DB_PORT: '5432'
+      DB_USER: wikijs
+      DB_PASS: wikijsrocks
+      DB_NAME: wiki
+    ports:
+      - '3000:3000'

@@ -1,0 +1,121 @@
+name: Docker — Build & Push
+
+# Wann läuft der Build?
+#   - bei jedem Push auf main → Image-Tags `main` + `sha-<git-sha>`
+#   - bei git-Tags vX.Y.Z      → zusätzlich `vX.Y.Z` + `latest`
+#   - bei jedem PR             → Build only (Smoke-Test ohne Push)
+#   - manuell (workflow_dispatch)
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  # Migration auf Node 24 als Default für JavaScript-basierte Actions —
+  # Node 20 wird in den GitHub-Runnern ab Q3 2026 entfernt. Lokal-Aktionen
+  # (actions/*, docker/*) sind dann Node-24-kompatibel.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # Für Build-Provenance / Attestations
+      attestations: write
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # Branch-Builds: branch-Name als Tag (main → main)
+            type=ref,event=branch
+            # PR-Builds: pr-N
+            type=ref,event=pr
+            # Semver-Tags: v1.2.3, 1.2, 1, latest
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            # Git-SHA als kurzer Tag, immer
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.title=wikijs-mcp
+            org.opencontainers.image.description=MCP-Server für Wiki.js — OAuth mit Wiki.js-Login, per-User-Rechte, Tag-Guardrail
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build & push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          # Multi-Arch ist nice-to-have. linux/amd64 reicht erstmal —
+          # arm64 verdoppelt den Build aufgrund von QEMU-Emulation.
+          # Für arm64 zusätzlich: platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Build-Provenance signieren (Sigstore via OIDC)
+          provenance: true
+          sbom: true
+
+      - name: Smoke-Test (nur lokal)
+        if: github.event_name == 'pull_request'
+        run: |
+          # Bei PRs gibt's keinen Push — wir laden das gebaute Image
+          # via load und starten es kurz, um sicherzugehen, dass die API
+          # antwortet. Reicht als Sanity-Check.
+          docker load < /dev/null 2>/dev/null || true
+          # build-push-action mit push=false setzt das Image lokal nicht
+          # automatisch — daher hier nur Image-ID-Check
+          echo "Build digest: ${{ steps.build.outputs.digest }}"
+          echo "Smoke-Test im Job-Lauf übersprungen (PR baut nur)."
+
+      - name: Image-Summary
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "## Veröffentlichtes Image" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Pull:**" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

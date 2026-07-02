@@ -1,0 +1,23 @@
+# Lokales Testen OHNE Domain/TLS — Caddy dient plain HTTP auf Port 8080.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#   http://localhost:8090       → Wiki.js
+#   http://localhost:8090/mcp   → MCP-Endpoint
+#   http://localhost:8090/me    → Selbstverwaltung
+#
+# In der .env reichen dafür: DOMAIN=localhost (Platzhalter), POSTGRES_PASSWORD,
+# MCP_SESSION_SECRET. Produktion nutzt NUR docker-compose.yml (Auto-HTTPS).
+
+services:
+  caddy:
+    ports: !override
+      - "127.0.0.1:8090:80"
+    environment:
+      # Site-Adresse ":80" = plain HTTP für jeden Host (kein Auto-HTTPS lokal).
+      DOMAIN: ":80"
+
+  mcp:
+    environment:
+      # Überschreibbar via .env — z. B. mit einer Cloudflare-Tunnel-URL, um den
+      # Stack testweise von außen (claude.ai, ChatGPT) erreichbar zu machen.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8090}

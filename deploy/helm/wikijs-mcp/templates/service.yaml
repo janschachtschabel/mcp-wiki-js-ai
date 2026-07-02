@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wikijs-mcp.fullname" . }}
+  labels: {{ include "wikijs-mcp.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector: {{ include "wikijs-mcp.selectorLabels" . | nindent 4 }}
+  ports:
+  - name: http
+    port: {{ .Values.service.port }}
+    targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "wikijs-mcp.fullname" . }}-headless
+  labels: {{ include "wikijs-mcp.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {{ include "wikijs-mcp.selectorLabels" . | nindent 4 }}
+  ports:
+  - name: http
+    port: {{ .Values.service.port }}

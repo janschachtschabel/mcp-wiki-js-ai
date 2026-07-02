@@ -1,0 +1,43 @@
+{
+  "name": "mcp-wikijs-mv",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Wiki.js MCP server — full GraphQL API coverage, runs on Vercel (Streamable HTTP) and locally (stdio), with per-user API keys and a fine-grained permission policy (allow / confirm / block).",
+  "scripts": {
+    "dev": "next dev -p 3030",
+    "build": "next build",
+    "start": "next start",
+    "stdio": "tsx bin/stdio.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:policy && npm run test:nav && npm run test:sema && npm run test:ctx && npm run test:oauth && npm run test:guard",
+    "test:policy": "tsx scripts/test-policy.ts",
+    "test:nav": "tsx scripts/test-navigation.ts",
+    "test:sema": "tsx scripts/test-semaphore.ts",
+    "test:ctx": "tsx scripts/test-context.ts",
+    "test:oauth": "tsx scripts/test-oauth.ts",
+    "test:guard": "tsx scripts/test-guardrails.ts",
+    "test:live": "tsx scripts/test-local-live.ts",
+    "smoke": "node scripts/smoke.mjs",
+    "gen:profile": "node scripts/gen-profile.mjs",
+    "roles": "tsx scripts/show-roles.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.2",
+    "mcp-handler": "^1.0.7",
+    "next": "14.2.35",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.2.66",
+    "@types/react-dom": "^18.2.22",
+    "tsx": "^4.16.0",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=18.18.0"
+  }
+}

@@ -1,0 +1,259 @@
+########################################################################################################################
+# GLOBAL
+########################################################################################################################
+
+## @section Global parameters
+global:
+
+  ## @param global.annotations Define global annotations added to every pod
+  annotations: {}
+
+  cluster:
+
+    cert:
+      ## @param global.cluster.cert.annotations Set custom global cert annotations on the ingress
+      annotations: {}
+
+    ## @param global.cluster.domain Set global domain for the cluster
+    domain: cluster.local
+
+    ingress:
+      ## @param global.cluster.ingress.ingressClassName Set global ingress class name
+      ingressClassName: "nginx"
+
+    pdb:
+      ## @param global.cluster.pdb.enabled Enable PodDisruptionBudget
+      enabled: false
+
+  ## @param global.debug Enable global debugging
+  debug: false
+
+  image:
+    ## @param global.image.pullPolicy Set global image pullPolicy
+    pullPolicy: IfNotPresent
+    ## @param global.image.pullSecrets Set global image pullSecrets
+    pullSecrets: []
+    ## @param global.image.registry Set global image container registry
+    registry: docker.edu-sharing.com
+    ## @param global.image.repository Set global image container repository (path under the registry)
+    repository: projects/wlo/wikijs-mcp
+
+  metrics:
+    servicemonitor:
+      ## @param global.metrics.servicemonitor.enabled Enable a Prometheus ServiceMonitor (the app exposes no /metrics yet)
+      enabled: false
+
+  ## @param global.security Set global custom pod security context parameters (merged into podSecurityContext)
+  security: {}
+
+########################################################################################################################
+# LOCAL
+########################################################################################################################
+
+## @section Local parameters
+## @param nameOverride Override the chart name used for resource names
+nameOverride: "wikijs-mcp"
+## @param fullnameOverride Fully override the generated resource name
+fullnameOverride: ""
+
+image:
+  ## @param image.name Override image repository (defaults to global.image.registry/global.image.repository)
+  name: ""
+  ## @param image.tag Set image tag (defaults to .Chart.AppVersion)
+  tag: ""
+
+########################################################################################################################
+
+## @param replicaCount Amount of replicas. MUST stay 1 — OAuth sessions live in a single-writer sqlite DB on one PVC.
+replicaCount: 1
+
+########################################################################################################################
+
+service:
+  ## @param service.type Set service type
+  type: ClusterIP
+  ## @param service.port Set service port (cluster-internal; the container listens on 3000)
+  port: 3000
+
+########################################################################################################################
+
+ingress:
+
+  ## @param ingress.enabled Enable ingress
+  enabled: true
+
+  annotations:
+    ## @param ingress.annotations.nginx.ingress.kubernetes.io/proxy-body-size Max request body size (asset uploads go through the MCP endpoint)
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    ## @param ingress.annotations.nginx.ingress.kubernetes.io/proxy-read-timeout Streamable-HTTP requests may run up to 60s
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    ## @param ingress.annotations.nginx.ingress.kubernetes.io/proxy-send-timeout Set proxy-send-timeout on nginx ingress
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    ## @param ingress.annotations.nginx.ingress.kubernetes.io/proxy-buffering Disable response buffering (SSE/streaming responses)
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+
+  ## @param ingress.hosts Set ingress hosts. RECOMMENDED: the SAME host that serves Wiki.js —
+  ## the wiki session cookie then makes the OAuth consent one-click (SSO). The path list below
+  ## routes only the MCP endpoints to this service; everything else stays with the wiki.
+  hosts:
+  - wiki.127.0.0.1.nip.io
+
+  ## @param ingress.paths Paths owned by the MCP server on the shared host (pathType Prefix)
+  paths:
+  - /mcp
+  - /sse
+  - /oauth
+  - /me
+  - /.well-known/oauth-authorization-server
+  - /.well-known/oauth-protected-resource
+  - /.well-known/mcp.json
+  - /_next
+  - /api/health
+
+  ## @param ingress.tls Set TLS for ingress
+  #  - secretName: wikijs-mcp-tls
+  #    hosts:
+  #    - wiki.example.de
+  tls: []
+
+########################################################################################################################
+
+## @section Application configuration
+config:
+
+  wikijs:
+    ## @param config.wikijs.url Base URL of the Wiki.js instance (REQUIRED). Cluster-internal service URL
+    ## (e.g. http://wiki.wiki-ns.svc:3000) or public URL — no trailing /graphql.
+    url: ""
+    ## @param config.wikijs.token OPTIONAL single-tenant Wiki.js API key (legacy mode; stored in the chart secret).
+    ## Leave empty when OAuth mode is on — sessions then carry per-user JWTs instead.
+    token: ""
+
+  oauth:
+    ## @param config.oauth.sessionSecret Enables OAuth mode ("wiki login is the login"). 32+ random bytes,
+    ## base64url. Empty = OAuth off (legacy handle/BYOK only). Stored in the chart secret.
+    sessionSecret: ""
+    ## @param config.oauth.publicBaseUrl Public base URL of THIS service (issuer for OAuth discovery),
+    ## e.g. https://wiki.example.de — REQUIRED when sessionSecret is set.
+    publicBaseUrl: ""
+    ## @param config.oauth.role Agent-safety overlay role for OAuth sessions (config/roles.json)
+    role: "wiki"
+
+  policy:
+    ## @param config.policy.permissionPreset Global capability ceiling. Keep "full" in OAuth mode —
+    ## effective rights come from each wiki user's own groups/page-rules.
+    permissionPreset: "full"
+    ## @param config.policy.blockedTags Comma-separated tags that hide pages from AI agents (e.g. "kein-ki")
+    blockedTags: "kein-ki"
+
+  ## @param config.audit Log write/delete/admin actions (and persist them when OAuth mode is on)
+  audit: true
+
+  ## @param config.extraEnv Extra plain environment variables (map) injected into the container
+  extraEnv: {}
+
+########################################################################################################################
+
+## @param debug Enable debugging for this release (overrides global.debug)
+debug: false
+
+########################################################################################################################
+
+persistence:
+  ## @param persistence.enabled Enable persistent storage for /data (OAuth session store + audit log)
+  enabled: true
+  ## @param persistence.mountPath Mount path for the data volume
+  mountPath: /data
+  ## @param persistence.storageClassName StorageClass for the data PVC (empty → cluster default)
+  storageClassName: ""
+  ## @param persistence.accessModes Access modes for the data PVC
+  accessModes: [ "ReadWriteOnce" ]
+  ## @param persistence.size Storage request for the data PVC (sessions + audit are tiny)
+  size: 1Gi
+
+########################################################################################################################
+
+## @param nodeAffinity Set node affinity
+nodeAffinity: {}
+
+## @param tolerations Set tolerations
+tolerations: []
+
+## @param podAnnotations Set custom pod annotations
+podAnnotations: {}
+
+podSecurityContext:
+  ## @param podSecurityContext.fsGroup Set fs group for volume access (matches the image's "node" user)
+  fsGroup: 1000
+  ## @param podSecurityContext.fsGroupChangePolicy Set change policy for fs group
+  fsGroupChangePolicy: OnRootMismatch
+
+securityContext:
+  ## @param securityContext.allowPrivilegeEscalation Allow privilege escalation
+  allowPrivilegeEscalation: false
+  ## @param securityContext.readOnlyRootFilesystem Mount the root filesystem read-only (the app writes only to /data)
+  readOnlyRootFilesystem: false
+  capabilities:
+    ## @param securityContext.capabilities.drop Set drop capabilities
+    drop:
+    - ALL
+  ## @param securityContext.runAsNonRoot Require running as non-root
+  runAsNonRoot: true
+  ## @param securityContext.runAsUser User id to run as (the node image's "node" user)
+  runAsUser: 1000
+
+########################################################################################################################
+
+## @param terminationGracePeriod Grace period for termination in seconds
+terminationGracePeriod: 60
+
+startupProbe:
+  ## @param startupProbe.failureThreshold Failure threshold for startupProbe
+  failureThreshold: 30
+  ## @param startupProbe.initialDelaySeconds Initial delay seconds for startupProbe
+  initialDelaySeconds: 5
+  ## @param startupProbe.periodSeconds Period seconds for startupProbe
+  periodSeconds: 5
+  ## @param startupProbe.successThreshold Success threshold for startupProbe
+  successThreshold: 1
+  ## @param startupProbe.timeoutSeconds Timeout seconds for startupProbe
+  timeoutSeconds: 5
+
+livenessProbe:
+  ## @param livenessProbe.failureThreshold Failure threshold for livenessProbe
+  failureThreshold: 3
+  ## @param livenessProbe.initialDelaySeconds Initial delay seconds for livenessProbe
+  initialDelaySeconds: 0
+  ## @param livenessProbe.periodSeconds Period seconds for livenessProbe
+  periodSeconds: 30
+  ## @param livenessProbe.timeoutSeconds Timeout seconds for livenessProbe
+  timeoutSeconds: 5
+
+readinessProbe:
+  ## @param readinessProbe.failureThreshold Failure threshold for readinessProbe
+  failureThreshold: 3
+  ## @param readinessProbe.initialDelaySeconds Initial delay seconds for readinessProbe
+  initialDelaySeconds: 0
+  ## @param readinessProbe.periodSeconds Period seconds for readinessProbe
+  periodSeconds: 10
+  ## @param readinessProbe.successThreshold Set threshold for success on readiness probe
+  successThreshold: 1
+  ## @param readinessProbe.timeoutSeconds Timeout seconds for readinessProbe
+  timeoutSeconds: 5
+
+########################################################################################################################
+
+resources:
+
+  limits:
+    ## @param resources.limits.cpu Set CPU limit on resources
+    cpu: 1000m
+    ## @param resources.limits.memory Set memory limit on resources
+    memory: 512Mi
+  requests:
+    ## @param resources.requests.cpu Set CPU for requests on resources
+    cpu: 100m
+    ## @param resources.requests.memory Set memory for requests on resources
+    memory: 256Mi
+
+########################################################################################################################

@@ -1,0 +1,11 @@
+{{- if .Values.global.cluster.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "wikijs-mcp.fullname" . }}
+  labels: {{ include "wikijs-mcp.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {{ include "wikijs-mcp.selectorLabels" . | nindent 6 }}
+{{- end }}

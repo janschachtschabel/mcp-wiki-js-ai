@@ -1,0 +1,55 @@
+name: CI — Typecheck, Tests & Build
+
+# Schnelle Sanity-Checks vor dem Docker-Build:
+# - TypeScript kompiliert (tsc --noEmit)
+# - Offline-Testsuiten (Policy, Navigation, Semaphore, Context, OAuth, Guardrails)
+# - Next.js-Produktionsbuild läuft durch (standalone output)
+# Läuft bei jedem Push + PR auf main.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  # Node 24 als Action-Runtime — Node 20 wird in GitHub-Runnern
+  # ab Q3 2026 entfernt.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  server:
+    name: MCP-Server — Typecheck + Tests + Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp-for-wiki-js
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # Node 24: node:sqlite (OAuth-Session-Store) ist hier stabil —
+          # gleiche Major-Version wie das Docker-Runtime-Image.
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: mcp-for-wiki-js/package-lock.json
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Offline-Tests
+        run: npm test
+
+      - name: Build (standalone)
+        run: npm run build
+
+      - name: Verify standalone output
+        run: |
+          test -f .next/standalone/server.js || (echo "standalone server.js fehlt" && exit 1)
+          echo "OK: standalone bundle gebaut"

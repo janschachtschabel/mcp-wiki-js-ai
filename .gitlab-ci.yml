@@ -1,0 +1,169 @@
+# =============================================================================
+# GitLab CI/CD — wikijs-mcp: MCP-Server für Wiki.js (produktives Deployment)
+# =============================================================================
+# Aktive Pipeline-Konfiguration für das firmeninterne GitLab-Repo (Standard-
+# Pfad im Repo-Root). Berührt die GitHub-Workflows (.github/workflows/) nicht
+# — beide Plattformen laufen parallel (GitHub → ghcr.io, GitLab → self-hosted).
+#
+# CREDENTIALS / FIRMEN-SPEZIFISCHES — NICHT hier eintragen, sondern in GitLab
+# unter  Settings → CI/CD → Variables  als (masked + protected) Variablen
+# anlegen:
+#   DOCKER_REGISTRY   z.B. docker.edu-sharing.com   (Registry-Host)
+#   DOCKER_USERNAME   CI-Benutzer / Deploy-Token-User
+#   DOCKER_PASSWORD   CI-Token / Passwort           (masked + protected)
+#   DIND_IMAGE        z.B. docker:27-dind
+#   DIND_HOST         z.B. tcp://docker:2376
+#   DIND_DRIVER       z.B. overlay2
+#   DIND_TLS_CERTDIR  z.B. /certs
+#
+# Image-Pfad: DOCKER_IMAGE_PATH unten — Default leitet sich automatisch aus
+# dem Projektpfad ab. Bei Bedarf als CI/CD-Variable überschreiben.
+#
+# Der Docker-Build (Stage „build") läuft nur, wenn DOCKER_REGISTRY gesetzt ist
+# — solange die Variablen fehlen, bleibt die Pipeline grün (nur Lint läuft).
+# =============================================================================
+
+stages:
+  - lint
+  - build
+  - deploy
+
+variables:
+  # Image-Pfad in der Registry (ohne Registry-Host). Voller Pull-Pfad ergibt
+  # sich als "$DOCKER_REGISTRY/$DOCKER_IMAGE_PATH" →
+  #   docker.edu-sharing.com/projects/wlo/wikijs-mcp
+  # Fester Pfad statt $CI_PROJECT_PATH, damit die GitLab-Gruppenhierarchie
+  # (z.B. "edu-sharing/projects/...") nicht ins Image-Repo durchschlägt.
+  # Bei Bedarf als CI/CD-Variable überschreiben.
+  DOCKER_IMAGE_PATH: "projects/wlo/wikijs-mcp"
+
+  # --- Folgende Variablen NICHT hier setzen, sondern als CI/CD-Variablen ---
+  # DOCKER_REGISTRY   z.B. registry.example.com         (Registry-Host)
+  # DOCKER_USERNAME   CI-Benutzer / Deploy-Token-User
+  # DOCKER_PASSWORD   CI-Token / Passwort  (masked + protected)
+  # DIND_IMAGE        z.B. docker:27-dind
+  # DIND_HOST         z.B. tcp://docker:2376
+  # DIND_DRIVER       z.B. overlay2
+  # DIND_TLS_CERTDIR  z.B. /certs
+  #
+  # --- Helm-Chart-Push (Stage „deploy") ---
+  # HELM_REGISTRY     Upload-URL des Chart-Repos (z.B. https://charts.example.com/...)
+  # HELM_USERNAME     Chart-Repo-Benutzer / Deploy-Token-User
+  # HELM_PASSWORD     Chart-Repo-Token / Passwort  (masked + protected)
+
+# -----------------------------------------------------------------------------
+# MCP-Server — Typecheck + Offline-Tests + Build-Probe (Next.js standalone)
+# Gleiche Checks wie der GitHub-Workflow (.github/workflows/ci.yml).
+# -----------------------------------------------------------------------------
+typecheck & tests:
+  stage: lint
+  interruptible: true
+  image: node:24-bookworm-slim
+  before_script:
+    - cd "$CI_PROJECT_DIR/mcp-for-wiki-js"
+    - node --version
+    - npm ci --no-audit --no-fund
+  script:
+    - npm run typecheck
+    - npm test
+    - npm run build
+    - test -f .next/standalone/server.js
+  cache:
+    key:
+      files:
+        - mcp-for-wiki-js/package-lock.json
+    paths:
+      - mcp-for-wiki-js/node_modules/
+    policy: pull-push
+
+# -----------------------------------------------------------------------------
+# Docker-Image bauen + in (self-hosted) Registry pushen — main + develop
+# Tag = Branch-Slug (z.B. "main", "develop")
+# -----------------------------------------------------------------------------
+build and push (branches):
+  stage: build
+  image: $DIND_IMAGE
+  variables:
+    DOCKER_HOST: "$DIND_HOST"
+    DOCKER_DRIVER: "$DIND_DRIVER"
+    DOCKER_TLS_CERTDIR: "$DIND_TLS_CERTDIR"
+  services:
+    - name: "$DIND_IMAGE"
+      alias: docker
+      entrypoint: [ "env", "-u", "DOCKER_HOST" ]
+      command: [ "dockerd-entrypoint.sh" ]
+  before_script:
+    - docker --version
+  script:
+    - docker login "$DOCKER_REGISTRY" -u "$DOCKER_USERNAME" -p "$DOCKER_PASSWORD"
+    - docker buildx build --tag "$DOCKER_REGISTRY/$DOCKER_IMAGE_PATH:$CI_COMMIT_REF_SLUG" .
+    - docker image push "$DOCKER_REGISTRY/$DOCKER_IMAGE_PATH:$CI_COMMIT_REF_SLUG"
+  rules:
+    # Läuft nur, wenn die Registry-Variable gesetzt ist. Solange die
+    # CI/CD-Variablen (DOCKER_REGISTRY etc.) fehlen, wird der Job
+    # übersprungen — die Pipeline bleibt grün (statt am Login zu scheitern).
+    - if: "$CI_COMMIT_BRANCH == 'main' && $DOCKER_REGISTRY"
+    - if: "$CI_COMMIT_BRANCH == 'develop' && $DOCKER_REGISTRY"
+
+# -----------------------------------------------------------------------------
+# Docker-Image bauen + pushen bei Tag-Erstellung (z.B. v1.2.0)
+# Tag = exakter Git-Tag-Name
+# -----------------------------------------------------------------------------
+build and push (tags):
+  stage: build
+  image: $DIND_IMAGE
+  variables:
+    DOCKER_HOST: "$DIND_HOST"
+    DOCKER_DRIVER: "$DIND_DRIVER"
+    DOCKER_TLS_CERTDIR: "$DIND_TLS_CERTDIR"
+  services:
+    - name: "$DIND_IMAGE"
+      alias: docker
+      entrypoint: [ "env", "-u", "DOCKER_HOST" ]
+      command: [ "dockerd-entrypoint.sh" ]
+  before_script:
+    - docker --version
+  script:
+    - docker login "$DOCKER_REGISTRY" -u "$DOCKER_USERNAME" -p "$DOCKER_PASSWORD"
+    - docker buildx build --tag "$DOCKER_REGISTRY/$DOCKER_IMAGE_PATH:$CI_COMMIT_REF_NAME" .
+    - docker image push "$DOCKER_REGISTRY/$DOCKER_IMAGE_PATH:$CI_COMMIT_REF_NAME"
+  rules:
+    # Nur bei Tag UND konfigurierter Registry (siehe oben).
+    - if: "$CI_COMMIT_TAG && $DOCKER_REGISTRY"
+
+# -----------------------------------------------------------------------------
+# Helm-Chart paketieren + ins Chart-Repo pushen
+# Chart-/App-Version = Git-Tag (bei Tag) bzw. 0.0.0-<branch-slug> (bei Branch)
+# -----------------------------------------------------------------------------
+.helm_base:
+  stage: deploy
+  image:
+    name: alpine/helm:latest
+    entrypoint: [""]
+  before_script:
+    - helm version
+  script:
+    - helm lint deploy/helm/wikijs-mcp
+        --set config.wikijs.url=http://wiki:3000
+    - helm package deploy/helm/wikijs-mcp
+        --version "$CHART_VERSION"
+        --app-version "$APP_VERSION"
+    - >
+      curl --fail --silent --show-error
+      -u "$HELM_USERNAME:$HELM_PASSWORD"
+      --upload-file edu_sharing-projects-wlo-wikijs-mcp-${CHART_VERSION}.tgz
+      $HELM_REGISTRY
+
+build and push helm chart:
+  extends: .helm_base
+  variables:
+    CHART_VERSION: "0.0.0-$CI_COMMIT_REF_SLUG"
+    APP_VERSION: "$CI_COMMIT_REF_SLUG"
+  rules:
+    # Tag → Chart-/App-Version = exakter Tag-Name. Nur mit konfiguriertem
+    # Chart-Repo (HELM_REGISTRY) — sonst übersprungen, Pipeline bleibt grün.
+    - if: "$CI_COMMIT_TAG && $HELM_REGISTRY"
+      variables:
+        CHART_VERSION: "$CI_COMMIT_REF_NAME"
+        APP_VERSION: "$CI_COMMIT_REF_NAME"
+    - if: "$CI_COMMIT_BRANCH && $HELM_REGISTRY"
