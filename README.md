@@ -78,30 +78,14 @@ Danach Nutzer anlegen: Administration → Groups (Gruppe mit `read:pages`,
 
 ## Bestehendes Wiki.js? Nur den MCP-Server ergänzen
 
-Läuft bei euch schon ein Wiki.js-2.x-Container, braucht ihr nur den
-MCP-Server daneben (das Wiki bleibt unangetastet — kein Fork, keine Migration):
+Läuft bei euch schon ein Wiki.js-2.x-Container, braucht ihr nur den MCP-Server
+daneben (das Wiki bleibt unangetastet — kein Fork, keine Migration): Image
+bauen → Container ins selbe Docker-Netz (`WIKIJS_URL=http://<wiki>:3000` +
+`MCP_SESSION_SECRET` + `PUBLIC_BASE_URL`) → im **vorhandenen** Reverse-Proxy die
+MCP-Pfade auf dieselbe Domain legen → in Wiki.js eine „Team"-Gruppe (ohne
+`manage:system`) anlegen.
 
-```bash
-docker build -t wikijs-mcp .
-docker run -d --name wikijs-mcp --restart unless-stopped \
-  --network <netz-des-wiki-containers> \
-  -v mcp-data:/data \
-  -e WIKIJS_URL=http://<wiki-container>:3000 \
-  -e PUBLIC_BASE_URL=https://wiki.example.org \
-  -e MCP_SESSION_SECRET=<32-zufallsbytes> \
-  -e WIKIJS_PERMISSION_PRESET=full \
-  -e WIKIJS_BLOCKED_TAGS=kein-ki \
-  wikijs-mcp
-```
-
-Dann im **vorhandenen** Reverse-Proxy die MCP-Pfade auf denselben Host legen
-(`/mcp`, `/oauth`, `/me`, `/.well-known/oauth-*`, `/.well-known/mcp.json`,
-`/_next`, `/api/health` → `wikijs-mcp:3000`, alles andere weiter zum Wiki) —
-Vorlage: [deploy/caddy/Caddyfile](deploy/caddy/Caddyfile). Gleiche Domain ist
-wichtig: Sie macht die OAuth-Freigabe per Wiki-Sitzung zum Ein-Klick.
-Empfohlen außerdem: den Wiki-DB-Pool anheben (max 10 → 20, siehe
-[deploy/wiki/config.yml](deploy/wiki/config.yml)) und die
-PostgreSQL-Suchmaschine aktivieren.
+**→ Schritt-für-Schritt-Anleitung: [docs/integration-bestehendes-wiki.md](mcp-for-wiki-js/docs/integration-bestehendes-wiki.md).**
 
 | URL | Zweck |
 |---|---|

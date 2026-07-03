@@ -14,6 +14,7 @@ frühere Vercel/Handle-Betrieb funktioniert weiter, ist aber eingefroren
 |---|---|
 | [**Konzept & Rechtemodell**](./konzept-ki-zugang.md) (🇬🇧 [EN](./concept-ai-access.en.md)) | Vorgehensweise für Nutzer & Admins, Umbauten, wer welche Rechte steuert — **hier anfangen** |
 | [OAuth-Technik](./oauth.md) | Aktivierung, Flow (Code+PKCE, DCR), Session-Store, Guardrails, Grenzen |
+| [**Integration in bestehendes Wiki.js**](./integration-bestehendes-wiki.md) | MCP neben eine laufende Wiki.js-Installation hängen — Schritt für Schritt |
 | [Root-README](../../README.md) (🇬🇧 [EN](../../README.en.md)) | Deployment (Compose/Helm), Ersteinrichtung (Bootstrap), Client verbinden |
 
 **Kurzfassung Verbinden:** MCP-URL `https://<host>/mcp` im Client eintragen
