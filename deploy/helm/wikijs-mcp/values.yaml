@@ -99,9 +99,10 @@ ingress:
   - wiki.127.0.0.1.nip.io
 
   ## @param ingress.paths Paths owned by the MCP server on the shared host (pathType Prefix)
+  # No /sse: the SSE transport is disabled in the server (disableSse), so routing
+  # it would only expose a dead path that nginx's read timeout would cut anyway.
   paths:
   - /mcp
-  - /sse
   - /oauth
   - /me
   - /.well-known/oauth-authorization-server
@@ -191,7 +192,7 @@ podSecurityContext:
 securityContext:
   ## @param securityContext.allowPrivilegeEscalation Allow privilege escalation
   allowPrivilegeEscalation: false
-  ## @param securityContext.readOnlyRootFilesystem Mount the root filesystem read-only (the app writes only to /data)
+  ## @param securityContext.readOnlyRootFilesystem Keep false: the Next.js standalone server writes to .next/cache (and /tmp) at runtime, so a read-only rootfs needs emptyDir mounts there first. Persistent app data lives on the /data PVC regardless.
   readOnlyRootFilesystem: false
   capabilities:
     ## @param securityContext.capabilities.drop Set drop capabilities

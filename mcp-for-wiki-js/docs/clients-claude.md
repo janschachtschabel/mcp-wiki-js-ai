@@ -1,5 +1,12 @@
 # Client-Einrichtung: Claude
 
+> ⚠️ **Legacy-Betrieb.** Diese Anleitung beschreibt den Handle-/BYOK-Weg (ohne
+> OAuth, z. B. auf Vercel). Der **empfohlene** Weg ist OAuth: eine geheimnislose
+> URL, Freigabe über den normalen Wiki-Login (ein Klick) — siehe
+> [Konzept & Rechtemodell](./konzept-ki-zugang.md) und
+> [Root-README › Client verbinden](../../README.md). Nur weiterlesen, wenn OAuth
+> bewusst aus ist.
+
 Voraussetzung: Der Server ist auf Vercel deployt → Endpoint `https://<deploy>/mcp`. (Lokal: `npm run dev` → `http://localhost:3030/mcp`.)
 
 **Zwei Wege, deinen Zugang zu übergeben:**

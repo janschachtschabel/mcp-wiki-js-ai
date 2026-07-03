@@ -35,4 +35,6 @@ services:
       DB_PASS: wikijsrocks
       DB_NAME: wiki
     ports:
-      - '3000:3000'
+      # Nur an localhost binden — das Wegwerf-Wiki (inkl. Setup-Wizard) soll
+      # nicht im LAN erreichbar sein.
+      - '127.0.0.1:3000:3000'

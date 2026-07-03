@@ -108,6 +108,7 @@ CREATE TABLE IF NOT EXISTS oauth_sessions (
   revoked_at        INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_email ON oauth_sessions(user_email);
+CREATE INDEX IF NOT EXISTS idx_sessions_prev_refresh ON oauth_sessions(prev_refresh_hash);
 CREATE TABLE IF NOT EXISTS audit_log (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   ts         INTEGER NOT NULL,
@@ -242,12 +243,18 @@ function rowToSession(r: Record<string, unknown>): SessionRow {
  *  sessions die after the wiki's 14d renewal window anyway — purge at 28d. */
 const REVOKED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const IDLE_RETENTION_MS = 28 * 24 * 60 * 60 * 1000;
+/** Audit rows are the persisted accountability trail; keep them longer than sessions. */
+const AUDIT_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
 
-/** Delete dead session rows. Called opportunistically on session creation. */
+/** Delete dead session rows and aged-out audit entries. Called opportunistically
+ *  on session creation, so the store stays bounded without a background job. */
 export function cleanupSessions(at: number = now()): void {
-  getDb()
-    .prepare('DELETE FROM oauth_sessions WHERE (revoked_at IS NOT NULL AND revoked_at < ?) OR last_used_at < ?')
-    .run(at - REVOKED_RETENTION_MS, at - IDLE_RETENTION_MS);
+  const d = getDb();
+  d.prepare('DELETE FROM oauth_sessions WHERE (revoked_at IS NOT NULL AND revoked_at < ?) OR last_used_at < ?').run(
+    at - REVOKED_RETENTION_MS,
+    at - IDLE_RETENTION_MS,
+  );
+  d.prepare('DELETE FROM audit_log WHERE ts < ?').run(at - AUDIT_RETENTION_MS);
 }
 
 export function insertSession(s: SessionRow): void {

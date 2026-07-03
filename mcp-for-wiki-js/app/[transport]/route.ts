@@ -2,6 +2,7 @@ import { createMcpHandler, withMcpAuth } from 'mcp-handler';
 import { registerAll } from '../../lib/register';
 import { SERVER_INFO, INSTRUCTIONS } from '../../lib/meta';
 import { oauthEnabled } from '../../lib/oauth/store';
+import { shouldUseOAuth } from '../../lib/oauth/routing';
 
 export const dynamic = 'force-dynamic';
 // 60s deploys on every Vercel plan (incl. Hobby). Pro/Enterprise can raise this.
@@ -84,14 +85,6 @@ const QUERY_TO_HEADER: Array<[aliases: string[], header: string, guard: string[]
   [['policy'], 'x-wikijs-policy', ['x-wikijs-policy']],
 ];
 
-/** Legacy (non-OAuth) credentials present? Header/query handle, BYOK key, or single-tenant env. */
-function hasLegacyCredentials(headers: Headers): boolean {
-  if (headers.has('x-wikijs-token')) return true;
-  const auth = headers.get('authorization') ?? '';
-  if (/^bearer\s+/i.test(auth) && !/^bearer\s+mcp_at_/i.test(auth)) return true;
-  return Boolean(process.env.WIKIJS_TOKEN || process.env.WIKIJS_API_KEY);
-}
-
 async function handler(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const params = url.searchParams;
@@ -108,15 +101,10 @@ async function handler(req: Request): Promise<Response> {
     request = new Request(req.url, { method: req.method, headers, body });
   }
 
-  // OAuth is active → OUR access tokens (mcp_at_*) always take the OAuth path,
-  // even when a single-tenant env token is ALSO configured (mixed setups must
-  // not silently forward opaque tokens to Wiki.js as raw keys). Requests with
-  // explicit legacy credentials keep working untouched; requests with nothing
-  // get the 401 → discovery chain.
-  if (oauthEnabled()) {
-    const isOurToken = /^bearer\s+mcp_at_/i.test(request.headers.get('authorization') ?? '');
-    if (isOurToken || !hasLegacyCredentials(request.headers)) return mcpWithOauth(request);
-  }
+  // OAuth vs legacy transport decision (see lib/oauth/routing.ts). A single
+  // env WIKIJS_TOKEN no longer diverts credential-less requests to the legacy
+  // path, so a mixed OAuth+env-token setup can never serve /mcp unauthenticated.
+  if (shouldUseOAuth(oauthEnabled(), request.headers)) return mcpWithOauth(request);
   return mcp(request);
 }
 

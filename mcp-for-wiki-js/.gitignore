@@ -12,6 +12,10 @@ build
 # vercel
 .vercel
 
+# OAuth session store (encrypted user JWTs + audit log) — NEVER commit.
+# Local default is ./data when MCP_DATA_DIR is unset; the container uses /data.
+data/
+
 # misc
 *.log
 .DS_Store

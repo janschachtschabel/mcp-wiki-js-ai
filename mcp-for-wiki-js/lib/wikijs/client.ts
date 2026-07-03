@@ -16,6 +16,8 @@
  * sustained ceiling. For a hard global cap across instances, back the gate with Redis.
  */
 
+import { exceedsByteLimit } from './format';
+
 export interface GraphQLErrorEntry {
   message: string;
   extensions?: Record<string, unknown>;
@@ -27,6 +29,9 @@ const MAX_RETRIES = Math.max(0, Number(process.env.WIKIJS_RETRIES) || 2);
 
 /** Thrown when a request never reached Wiki.js (DNS/TCP/TLS). Safe to retry — even mutations, since nothing ran. */
 export class WikiConnectionError extends Error {}
+
+/** Thrown by download() when the asset's Content-Length exceeds the caller's byte cap. */
+export class AssetTooLargeError extends Error {}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Exponential backoff with jitter, capped at 2s. */
@@ -213,8 +218,13 @@ export class WikiClient {
   /**
    * Download an asset by its wiki path (e.g. "uploads/diagram.png"). Wiki.js
    * serves assets on GET /<path> and enforces read:assets + page rules itself.
+   *
+   * `maxBytes` guards memory: if the response advertises a larger Content-Length
+   * the body is NEVER buffered. Wiki.js serves assets with a Content-Length, so
+   * this covers the real case; a response without one still buffers (the caller
+   * applies a post-read cap as a backstop).
    */
-  async download(path: string): Promise<{ data: Uint8Array; mime: string }> {
+  async download(path: string, maxBytes = Infinity): Promise<{ data: Uint8Array; mime: string }> {
     return upstreamGate.run(async () => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -226,6 +236,12 @@ export class WikiClient {
         });
         this.captureRenewedJwt(res);
         if (!res.ok) throw new Error(`Asset download failed: HTTP ${res.status} for ${path}`);
+        if (exceedsByteLimit(res.headers.get('content-length'), maxBytes)) {
+          controller.abort(); // release the body without reading it into memory
+          throw new AssetTooLargeError(
+            `Asset ${path} is ${res.headers.get('content-length')} bytes, over the ${maxBytes}-byte limit.`,
+          );
+        }
         return {
           data: new Uint8Array(await res.arrayBuffer()),
           mime: res.headers.get('content-type') ?? 'application/octet-stream',

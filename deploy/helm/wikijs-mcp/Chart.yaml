@@ -7,6 +7,10 @@ type: application
 
 # Chart-Version (SemVer der Verpackung selbst).
 version: 0.1.0
-# Version der ausgelieferten Anwendung — entspricht dem Image-Tag.
-appVersion: "latest"
+# Default-Image-Tag für manuelle Installs. Absichtlich NICHT "latest" (den Tag
+# pusht die Pipeline nie → ImagePullBackOff). "main" existiert nach dem ersten
+# main-Branch-Pipeline-Lauf. Die CI überschreibt appVersion beim Paketieren
+# (--app-version). Für Produktion einen unveränderlichen Release-Tag pinnen:
+#   helm install ... --set image.tag=vX.Y.Z
+appVersion: "main"
 kubeVersion: ">=1.23.0-0"

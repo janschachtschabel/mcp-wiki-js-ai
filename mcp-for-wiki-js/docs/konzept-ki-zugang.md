@@ -271,7 +271,7 @@ nur noch für Legacy-Handle-Zugänge (`WIKIJS_PROFILES`).
 - `tree`/`links`, Kommentar-Tools und `wiki_graphql` sind von der
   **Tag**-Sperre ausgenommen (für harte Sperren Pfad-Rules nutzen);
   `wiki_graphql` ist für OAuth-Sessions `confirm`-gegated.
-- Im Wiki keine Seiten unter `me/`, `oauth/`, `mcp`, `sse`, `api/` anlegen
+- Im Wiki keine Seiten unter `me/`, `oauth/`, `mcp`, `api/` anlegen
   (Pfade gehören dem MCP-Server, siehe Caddy-/Ingress-Routing).
 - claude.ai/ChatGPT (Web) erreichen kein `localhost` — Web-Clients erst nach
   Deployment auf eine öffentliche Domain testen.

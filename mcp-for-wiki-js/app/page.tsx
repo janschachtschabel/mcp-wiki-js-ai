@@ -6,8 +6,8 @@ import { card, code, h2, mono, muted, ol } from './theme';
 
 export const dynamic = 'force-dynamic';
 
-export default function Home() {
-  const h = headers();
+export default async function Home() {
+  const h = await headers();
   const proto = h.get('x-forwarded-proto') ?? 'https';
   const host = h.get('x-forwarded-host') ?? h.get('host') ?? 'your-deploy.example.com';
   const base = `${proto}://${host}`;

@@ -33,6 +33,18 @@ export function assertOk(rr: ResponseStatus | undefined | null, action: string):
   }
 }
 
+/**
+ * Decide from a `Content-Length` header whether a response body exceeds a byte
+ * cap — so a download can be rejected BEFORE it is buffered into memory.
+ * Returns false when the header is absent/unparseable (caller then falls back to
+ * a post-read size check), true only when a known length is over the limit.
+ */
+export function exceedsByteLimit(contentLength: string | null, maxBytes: number): boolean {
+  if (!contentLength) return false;
+  const len = Number(contentLength);
+  return Number.isFinite(len) && len > maxBytes;
+}
+
 /** Convert a shell-style wildcard (`*`, `?`) into an anchored RegExp. */
 export function wildcardToRegExp(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');

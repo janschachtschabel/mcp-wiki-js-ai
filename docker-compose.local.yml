@@ -1,4 +1,4 @@
-# Lokales Testen OHNE Domain/TLS — Caddy dient plain HTTP auf Port 8080.
+# Lokales Testen OHNE Domain/TLS — Caddy dient plain HTTP auf Port 8090.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
 #   http://localhost:8090       → Wiki.js

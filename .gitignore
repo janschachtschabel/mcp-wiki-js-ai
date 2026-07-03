@@ -8,6 +8,9 @@ mcp2/
 .env.*
 !.env.example
 
+# Persönliche Tooling-Konfiguration (nicht teamweit)
+.claude/settings.local.json
+
 # Node / Next.js
 node_modules/
 .next/

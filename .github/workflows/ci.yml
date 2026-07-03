@@ -1,17 +1,23 @@
 name: CI — Typecheck, Tests & Build
 
-# Schnelle Sanity-Checks vor dem Docker-Build:
+# Sanity-Checks:
 # - TypeScript kompiliert (tsc --noEmit)
-# - Offline-Testsuiten (Policy, Navigation, Semaphore, Context, OAuth, Guardrails)
+# - Offline-Testsuiten (Policy, Navigation, Semaphore, Context, OAuth,
+#   Guardrails, Routing, Format)
 # - Next.js-Produktionsbuild läuft durch (standalone output)
-# Läuft bei jedem Push + PR auf main.
+#
+# Aufgerufen als GATE vom Docker-Build (workflow_call) — so laufen die Checks
+# auch bei Release-Tags, bevor ein Image gepusht wird. workflow_dispatch für
+# manuelle Läufe.
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_call:
   workflow_dispatch:
+
+# Least privilege: npm ci / Tests führen Dependency-Lifecycle-Skripte aus —
+# der Job braucht nur Lese-Zugriff auf das Repo.
+permissions:
+  contents: read
 
 env:
   # Node 24 als Action-Runtime — Node 20 wird in GitHub-Runnern
@@ -39,6 +45,11 @@ jobs:
 
       - name: Install
         run: npm ci --no-audit --no-fund
+
+      # Gate auf HIGH+: blockt ernste CVEs in Runtime-Deps, lässt fixbare
+      # Moderates (oft transitiv, brauchen Parent-Patch) als Warnung durch.
+      - name: Security-Audit (Runtime-Deps)
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Typecheck
         run: npm run typecheck

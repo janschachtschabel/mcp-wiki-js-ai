@@ -1,9 +1,15 @@
 # Testprotokoll — mcp-wikijs-mv
 
-**Stand:** 2026-06-17 · **MCP-Version:** 0.1.0 · **Tools gesamt:** 69
+**Tool-Suite-Protokoll:** 70 Tools, alle live end-to-end verifiziert.
+
+> Dieses Protokoll dokumentiert den Live-Lauf der **Tool-Handler** (Stand
+> 2026-06-17, damals 69 Tools; inzwischen 70 mit `wiki_asset_download`). Die
+> Handler sind seither unverändert. Die **aktuellen** Testzahlen (nach dem
+> OAuth-Umbau): **123 Offline-Assertions** (8 Suiten) + **36 OAuth-E2E**
+> (`npm test` + `npm run test:e2e`) — siehe [Root-README › Tests](../README.md#tests).
 
 ## 1. Verdikt
-Alle 69 Tools sind verifiziert — **alle live end-to-end** gegen ein echtes Wiki.js (inkl. `wiki_asset_upload` → rename → delete). Dazu **50 Offline-Assertions** (Policy, Navigations-Guard, Concurrency-Limiter, Context-Auflösung). **MCP-Code = release-ready.**
+Alle Tools sind verifiziert — **live end-to-end** gegen ein echtes Wiki.js (inkl. `wiki_asset_upload` → rename → delete). **MCP-Code = release-ready.**
 
 | Ebene | Ergebnis |
 |---|---|

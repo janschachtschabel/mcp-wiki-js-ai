@@ -59,7 +59,7 @@ export async function POST(req: Request): Promise<Response> {
   const mode = form.get('mode') ?? '';
   try {
     if (mode === 'consent') {
-      const sso = await identityFromCookies(cookies());
+      const sso = await identityFromCookies(await cookies());
       if (!sso) return backToAuthorize(issuer, p, { force_login: '1', login_error: 'Sitzung abgelaufen — bitte anmelden.' });
       return issueAndRedirect(p, sso.jwt, undefined, req);
     }

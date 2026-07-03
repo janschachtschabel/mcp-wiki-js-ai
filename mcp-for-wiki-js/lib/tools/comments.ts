@@ -2,7 +2,10 @@ import { z } from 'zod';
 import { ok, assertOk } from '../wikijs/format';
 import { DEFAULT_RESPONSE, type ToolDef } from './types';
 
-const COMMENT_FIELDS = 'id content render authorId authorName authorEmail createdAt updatedAt';
+// authorEmail is deliberately excluded: it is PII (incl. guest emails) that an
+// agent listing comments rarely needs, and it would flow into the model context
+// on every read. authorId/authorName are enough to attribute a comment.
+const COMMENT_FIELDS = 'id content render authorId authorName createdAt updatedAt';
 
 export const commentTools: ToolDef[] = [
   {

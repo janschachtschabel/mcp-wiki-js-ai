@@ -10,18 +10,23 @@ angebunden.
 
 ```bash
 helm install wikijs-mcp ./deploy/helm/wikijs-mcp \
+  --set image.tag=vX.Y.Z \
   --set config.wikijs.url=http://wiki.wiki-namespace.svc:3000 \
   --set config.oauth.sessionSecret="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')" \
   --set config.oauth.publicBaseUrl=https://wiki.example.de \
   --set 'ingress.hosts[0]=wiki.example.de'
 ```
 
+`image.tag` auf einen von der Pipeline gepushten Tag setzen — einen Release
+(`vX.Y.Z`) für Produktion, oder `main` für den letzten main-Stand. Ohne Angabe
+gilt der Chart-Default (`appVersion` = `main`).
+
 **Wichtig — gleiche Domain wie Wiki.js:** Der Ingress dieses Charts belegt auf
 dem Wiki-Host nur die MCP-Pfade (`/mcp`, `/oauth`, `/me`, `/.well-known/...`,
 `/_next`, `/api/health`); alle anderen Pfade bedient weiterhin der
 Wiki.js-Ingress. Gleiche Domain ⇒ die Wiki-Session macht die OAuth-Freigabe zum
-Ein-Klick (SSO). Im Wiki keine Seiten unter `me/`, `oauth/`, `mcp`, `sse`,
-`api/` anlegen.
+Ein-Klick (SSO). Im Wiki keine Seiten unter `me/`, `oauth/`, `mcp`, `api/`
+anlegen.
 
 ## Betriebsmodi
 

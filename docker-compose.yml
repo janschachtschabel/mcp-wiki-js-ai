@@ -17,13 +17,18 @@
 #
 # Update:   docker compose pull && docker compose build --pull mcp && docker compose up -d
 # Logs:     docker compose logs -f
-# Backup:   db-Volume (Wiki-Inhalte) + mcp-data-Volume (KI-Sessions) sichern
+# Backup:   der db-backup-Service sichert automatisch BEIDES ins db-backups-Volume:
+#           Postgres (Wiki-Inhalte) via pg_dump UND die MCP-sqlite (Audit-Log +
+#           Sessions) via `sqlite3 .backup`. Volume off-host replizieren.
 # Reset:    docker compose down -v   # ACHTUNG: löscht ALLE Daten
 
 services:
   db:
     image: postgres:15-alpine
     restart: unless-stopped
+    # Resource-Ceilings, damit kein Service den Appliance-Host OOMt.
+    mem_limit: 512m
+    cpus: 1.0
     environment:
       POSTGRES_DB: wiki
       POSTGRES_USER: wikijs
@@ -39,6 +44,9 @@ services:
   wiki:
     image: requarks/wiki:2
     restart: unless-stopped
+    # Höheres Ceiling: Wiki.js rendert Seiten in Node (der schwerste Service).
+    mem_limit: 1g
+    cpus: 1.5
     depends_on:
       db:
         condition: service_healthy
@@ -66,6 +74,8 @@ services:
       dockerfile: Dockerfile
     image: ${MCP_IMAGE:-wikijs-mcp:local}
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
     environment:
       # Wiki.js über das interne Docker-Netz — kein Traffic verlässt den Host,
       # keine Rate-Limits/Firewalls zwischen MCP und Wiki (das Vercel-Problem).
@@ -89,16 +99,19 @@ services:
     depends_on:
       - wiki
 
-  # Tägliches pg_dump-Backup mit Retention — deckt ALLE Wiki-Inhalte ab.
-  # (mcp-data enthält nur widerrufbare KI-Sessions + Audit-Log; ein Verlust
-  # bedeutet lediglich, dass sich Clients neu autorisieren müssen.)
-  # Restore:
+  # Periodisches Backup mit Retention — deckt BEIDE Datenquellen ab:
+  #   Postgres (Wiki-Inhalte) via pg_dump, und die MCP-sqlite (Audit-Log +
+  #   Sessions) via `sqlite3 .backup` (konsistenter Hot-Backup, kein naives cp).
+  # Restore Wiki:
   #   docker compose stop wiki
   #   docker compose exec db sh -c 'pg_restore -U wikijs -d wiki --clean /backups/<datei>.dump'
   #   docker compose start wiki
+  # Restore MCP-Store: mcp stoppen, mcp-<ts>.sqlite als /data/mcp.sqlite einspielen, mcp starten.
   db-backup:
     image: postgres:15-alpine
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
     depends_on:
       db:
         condition: service_healthy
@@ -108,16 +121,29 @@ services:
       BACKUP_KEEP: ${BACKUP_KEEP:-7}
     volumes:
       - db-backups:/backups
+      # MCP-Store read-write mitmounten: der sqlite-Online-Backup nimmt einen
+      # WAL-Read-Lock (braucht Schreibzugriff aufs -shm), läuft aber gefahrlos
+      # parallel zum MCP-Writer.
+      - mcp-data:/mcp-data
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        apk add --no-cache sqlite >/dev/null 2>&1 || true
         while true; do
           ts=$$(date +%Y%m%d-%H%M%S)
           if pg_dump -h db -U wikijs -d wiki -F c -f "/backups/wiki-$$ts.dump"; then
             echo "backup ok: wiki-$$ts.dump"
             ls -1t /backups/wiki-*.dump 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
           else
-            echo "backup FAILED at $$ts" >&2
+            echo "backup FAILED (postgres) at $$ts" >&2
+          fi
+          if [ -f /mcp-data/mcp.sqlite ]; then
+            if sqlite3 /mcp-data/mcp.sqlite ".backup '/backups/mcp-$$ts.sqlite'"; then
+              echo "backup ok: mcp-$$ts.sqlite"
+              ls -1t /backups/mcp-*.sqlite 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
+            else
+              echo "backup FAILED (mcp sqlite) at $$ts" >&2
+            fi
           fi
           sleep "$$BACKUP_INTERVAL_SECONDS"
         done
@@ -125,6 +151,8 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.5
     ports:
       - "80:80"
       - "443:443"

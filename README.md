@@ -50,11 +50,16 @@ kann jederzeit erneut laufen (Node ≥ 18 auf dem Host):
 
 ```bash
 ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='sicheres-passwort' \
-  node deploy/scripts/bootstrap.mjs --locale=de --demo
+  node deploy/scripts/bootstrap.mjs --locale=de
 # Windows PowerShell:
 #   $env:ADMIN_EMAIL='admin@example.org'; $env:ADMIN_PASSWORD='...'
-#   node deploy\scripts\bootstrap.mjs --locale=de --demo
+#   node deploy\scripts\bootstrap.mjs --locale=de
 ```
+
+`--demo` legt zusätzlich eine Gruppe „Team" + Testnutzer an und **verlangt
+dann `DEMO_PASSWORD`** (kein Default, sonst entstünde ein Konto mit öffentlich
+bekanntem Passwort). Nur für Test-Instanzen, nicht auf Produktiv-Wikis:
+`… ADMIN_PASSWORD='…' DEMO_PASSWORD='…' node deploy/scripts/bootstrap.mjs --demo`.
 
 Das legt an: Admin-Konto, Startseite, **PostgreSQL-Suchmaschine** (Wörterbuch
 passend zur Sprache — deutlich bessere Agenten-Suche als der Default), mit
@@ -90,7 +95,7 @@ docker run -d --name wikijs-mcp --restart unless-stopped \
 ```
 
 Dann im **vorhandenen** Reverse-Proxy die MCP-Pfade auf denselben Host legen
-(`/mcp`, `/sse`, `/oauth`, `/me`, `/.well-known/oauth-*`, `/.well-known/mcp.json`,
+(`/mcp`, `/oauth`, `/me`, `/.well-known/oauth-*`, `/.well-known/mcp.json`,
 `/_next`, `/api/health` → `wikijs-mcp:3000`, alles andere weiter zum Wiki) —
 Vorlage: [deploy/caddy/Caddyfile](deploy/caddy/Caddyfile). Gleiche Domain ist
 wichtig: Sie macht die OAuth-Freigabe per Wiki-Sitzung zum Ein-Klick.
@@ -121,7 +126,7 @@ Wiki.js läuft aus dem offiziellen Image und bleibt unabhängig updatebar.
 
 | Pfad | Inhalt |
 |---|---|
-| [`mcp-for-wiki-js/`](mcp-for-wiki-js/) | Der MCP-Server (Next.js/TypeScript): ~69 Tools über die Wiki.js-GraphQL-API, OAuth-Layer, Rechte-Engine, Tests. Details: [README](mcp-for-wiki-js/README.md) · [Konzept & Rechtemodell (deutsch)](mcp-for-wiki-js/docs/konzept-ki-zugang.md) · [OAuth-Doku](mcp-for-wiki-js/docs/oauth.md) |
+| [`mcp-for-wiki-js/`](mcp-for-wiki-js/) | Der MCP-Server (Next.js/TypeScript): 70 Tools über die Wiki.js-GraphQL-API, OAuth-Layer, Rechte-Engine, Tests. Details: [README](mcp-for-wiki-js/README.md) · [Konzept & Rechtemodell (deutsch)](mcp-for-wiki-js/docs/konzept-ki-zugang.md) · [OAuth-Doku](mcp-for-wiki-js/docs/oauth.md) |
 | [`Dockerfile`](Dockerfile) | Production-Image des MCP-Servers (Next.js standalone, Node 24) |
 | [`docker-compose.yml`](docker-compose.yml) | Komplett-Stack: Postgres + Wiki.js + MCP + Caddy (Auto-HTTPS) |
 | [`deploy/caddy/`](deploy/caddy/) | Reverse-Proxy-Routing (eine Domain für Wiki & MCP → Ein-Klick-SSO) |
@@ -142,7 +147,7 @@ von requarks/wiki) und `mcp2/` (Community-MCP-Server zum Vergleich).
 | Agenten-Schutz | MCP-Rolle `wiki` (Default für OAuth-Sessions) | destruktive/Admin-Aktionen erst nach `confirm:true` (Dry-Run) |
 
 Wichtig: KI-Zugängen in Wiki.js **nie** `manage:system` geben — das umgeht dort
-alle Page-Rules. Und im Wiki keine Seiten unter `me/`, `oauth/`, `mcp`, `sse`,
+alle Page-Rules. Und im Wiki keine Seiten unter `me/`, `oauth/`, `mcp`,
 `api/` anlegen (Pfade gehören dem MCP-Server, siehe Caddy/Ingress-Routing).
 
 ## Kubernetes / GitLab
@@ -157,15 +162,37 @@ Registry-Variablen fehlen (Jobs werden übersprungen).
 
 ## Veröffentlichen (GitHub / GitLab)
 
-`mcp-for-wiki-js/` trägt aktuell eine **eigene Git-Historie** (eingebettetes
-Repo). Vor dem ersten Push dieses Root-Repos entscheiden:
+Der Baum ist publish-fertig vorbereitet: [.gitignore](.gitignore) schließt
+Secrets (`.env`), `node_modules/`, Build-Artefakte, Referenz-Ordner
+(`wiki/`, `mcp2/`) und persönliche Tooling-Config aus;
+[.gitattributes](.gitattributes) normalisiert Zeilenenden auf LF (wichtig, weil
+Container-Skripte in Linux laufen). Kurz gegenchecken, dass keine Secrets
+mitgehen: `git status` nach `git add .` darf **keine** `.env` zeigen.
 
-- **Ein Repo (empfohlen):** `mcp-for-wiki-js/.git` entfernen, dann im Root
-  `git init && git add . && git commit`. Die App-Historie geht dabei verloren
-  (oder vorher per `git subtree`/`git filter-repo` übernehmen).
-- **Zwei Repos:** `mcp-for-wiki-js` als eigenes Repo pushen und hier als
-  Submodule einbinden — mehr Pflegeaufwand, nur bei getrennten Release-Zyklen
-  sinnvoll.
+`mcp-for-wiki-js/` trägt eine **eigene Git-Historie** (eingebettetes Repo) —
+das ist die einzige topologie-relevante Entscheidung:
+
+**Option A — ein Repo (empfohlen, am einfachsten für CI/Helm):**
+```bash
+rm -rf mcp-for-wiki-js/.git      # App-Historie verwerfen …
+# … ODER vorher übernehmen: git -C mcp-for-wiki-js log bleibt via `git subtree`/`git filter-repo` importierbar
+git init && git add . && git commit -m "chore: initial import"
+git remote add origin <deine-repo-url> && git push -u origin main
+```
+
+**Option B — zwei Repos + Submodule (nur bei getrennten Release-Zyklen):**
+```bash
+# mcp-for-wiki-js zuerst als eigenes Repo pushen (behält seine Historie), dann:
+git init
+git submodule add <mcp-repo-url> mcp-for-wiki-js
+git add . && git commit -m "chore: root deployment repo + mcp submodule"
+```
+
+Beide Topologien lassen `mcp-for-wiki-js/` am selben relativen Pfad — die
+CI-Pipelines ([.gitlab-ci.yml](.gitlab-ci.yml), [.github/](.github/)) und der
+[Dockerfile](Dockerfile)-Build-Context (`context: .`, kopiert `mcp-for-wiki-js/`)
+funktionieren unverändert. GitLab-Helm-Push braucht die CI/CD-Variablen aus dem
+Kopf der `.gitlab-ci.yml`.
 
 ## Lizenz
 

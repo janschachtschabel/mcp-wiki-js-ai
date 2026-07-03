@@ -110,7 +110,7 @@ export const userTools: ToolDef[] = [
     inputSchema: {
       email: z.string().email(),
       name: z.string().min(1),
-      passwordRaw: z.string().optional().describe('Plain password (for local provider).'),
+      passwordRaw: z.string().min(8).optional().describe('Plain password for the local provider (min 8 chars).'),
       providerKey: z.string().default('local'),
       groups: z.array(z.number().int()).default([]).describe('Group ids to assign.'),
       mustChangePassword: z.boolean().default(false),
@@ -151,7 +151,7 @@ export const userTools: ToolDef[] = [
       id: z.number().int(),
       email: z.string().email().optional(),
       name: z.string().optional(),
-      newPassword: z.string().optional(),
+      newPassword: z.string().min(8).optional().describe('New password (min 8 chars).'),
       groups: z.array(z.number().int()).optional(),
       location: z.string().optional(),
       jobTitle: z.string().optional(),

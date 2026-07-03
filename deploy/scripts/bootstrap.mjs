@@ -26,10 +26,12 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const WITH_DEMO = process.argv.includes('--demo');
 const LOCALE = (process.argv.find((a) => a.startsWith('--locale=')) ?? '').split('=')[1];
 
+// No hardcoded default password: a committed default would ship a
+// write-capable, publicly-known account into any wiki this runs against.
 const DEMO = {
   email: process.env.DEMO_EMAIL || 'test@team.local',
   name: process.env.DEMO_NAME || 'Test-Zugang',
-  password: process.env.DEMO_PASSWORD || 'WikiTest2026!',
+  password: process.env.DEMO_PASSWORD,
 };
 
 const TEAM_PERMS = [
@@ -39,6 +41,10 @@ const TEAM_PERMS = [
 
 if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
   console.error('ADMIN_EMAIL und ADMIN_PASSWORD müssen als Umgebungsvariablen gesetzt sein.');
+  process.exit(1);
+}
+if (WITH_DEMO && !DEMO.password) {
+  console.error('--demo verlangt DEMO_PASSWORD (kein Default — sonst entstünde ein Konto mit öffentlich bekanntem Passwort).');
   process.exit(1);
 }
 

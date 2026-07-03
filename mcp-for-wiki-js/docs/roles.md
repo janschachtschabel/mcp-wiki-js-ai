@@ -1,5 +1,11 @@
 # Rollen & Rechte-Matrix
 
+> ⚠️ **Nur Legacy-Betrieb.** Diese MCP-Rollenleiter (`config/roles.json`,
+> zugewiesen über `WIKIJS_PROFILES`) greift **nur ohne OAuth**. Im OAuth-Betrieb
+> kommen die Rechte pro Person aus **Wiki.js** (Gruppen + Page-Rules); der
+> MCP-Server nutzt dort nur das `confirm`-Overlay der Rolle `wiki`
+> (`WIKIJS_OAUTH_ROLE`). Siehe [oauth.md](./oauth.md).
+
 Rollen sind in [`config/roles.json`](../config/roles.json) definiert (frei editierbar). Jede Rolle bildet die 7 **Kategorien** auf einen **Modus** ab — und kann einzelne **Tools** abweichend setzen.
 
 **Modi:** `allow` = sofort · `confirm` = Dry-Run-Vorschau, echte Ausführung erst mit `confirm:true` · `block` = ausgeblendet/verweigert.

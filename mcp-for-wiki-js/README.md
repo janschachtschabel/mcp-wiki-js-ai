@@ -27,55 +27,59 @@ Details: [docs/oauth.md](docs/oauth.md) · Komplett-Stack: `docker-compose.yml` 
 
 ## Inhalt
 
-- [Funktionen](#funktionen)
-- [Schnellstart](#schnellstart)
-- [OAuth mit Wiki.js-Login (self-hosted)](docs/oauth.md)  ← **empfohlen**
-- [Auf Vercel deployen + Umgebungsvariablen](#auf-vercel-deployen--umgebungsvariablen)  ← **ausführlich**
-- [Mehrbenutzer: Profile & Handle-Generierung](#mehrbenutzer-profile--handle-generierung)  ← Fallback ohne OAuth
-- [Clients verbinden: ChatGPT & Claude Code](#clients-verbinden-chatgpt--claude-code)  ← **ausführlich**
-- [Rechtesteuerung (Permission Policy)](#rechtesteuerung-permission-policy)
-- [Tool-Übersicht](#tool-übersicht)
-- [Architektur](#architektur) · [Robustheit](#robustheit) · [Tests](#tests) · [Grenzen](#grenzen)
+**Empfohlen (OAuth-Betrieb):**
+- [Deployment, Ersteinrichtung & Client verbinden → Root-README](../README.md)  ← **hier anfangen**
+- [Konzept & Rechtemodell](docs/konzept-ki-zugang.md) · [OAuth-Technik](docs/oauth.md)
+- [Funktionen](#funktionen) · [Tool-Übersicht](#tool-übersicht) · [Architektur](#architektur) · [Robustheit](#robustheit) · [Tests](#tests) · [Grenzen](#grenzen)
+
+**Legacy-Fallback (ohne OAuth — Vercel/Serverless/stdio):**
+- [Schnellstart (lokale Entwicklung)](#schnellstart)
+- [Auf Vercel deployen + Umgebungsvariablen](#auf-vercel-deployen--umgebungsvariablen)
+- [Mehrbenutzer: Profile & Handle-Generierung](#mehrbenutzer-profile--handle-generierung)
+- [Clients verbinden (Legacy): ChatGPT & Claude Code](#clients-verbinden-chatgpt--claude-code)
+- [Rechtesteuerung (Legacy-Rollen)](#rechtesteuerung-permission-policy)
 
 ---
 
 ## Funktionen
 
-- **Volle GraphQL-API** — Pages-CRUD, Tree/History/Version/Links/Search/Tags, Batch- & Tree-Delete, Assets, Users, Groups, Comments, Navigation, API-Keys, Site/System + Raw-GraphQL.
-- **Vercel-tauglich** — stateless Streamable HTTP über [`mcp-handler`](https://github.com/vercel/mcp-handler) (kein Session-State, **kein Redis** nötig).
-- **Mehrbenutzer ohne Key-Leak** — Profile-Map: jeder Nutzer hat einen geheimen **Handle**; der echte Key bleibt serverseitig in der Vercel-Env.
-- **Rechtesteuerung** — `allow` / `confirm` (Dry-Run-Vorschau) / `block`, pro Kategorie **und** pro Tool, mit Presets und „nur-verschärfen"-Overlays pro Nutzer.
-- **Robust** — Request-Timeout, Auto-Preserve bei Updates, Content-Truncation, ID-oder-Pfad, Graceful Shutdown.
-
-Live-Beispiel-Deployment: `https://mcp-for-wiki-js.vercel.app` (Landing-Page = Verbindungsanleitung).
+- **Volle GraphQL-API** — 70 Tools: Pages-CRUD, Tree/History/Version/Links/Search/Tags, Batch- & Tree-Delete, Assets (inkl. Download), Users, Groups, Comments, Navigation, API-Keys, Site/System + Raw-GraphQL.
+- **OAuth mit Wiki.js-Login (empfohlen)** — eine geheimnislose URL für alle; jede Session trägt den **User-JWT** der Person, Wiki.js erzwingt deren Rechte. Keine doppelte User-Pflege.
+- **Agenten-Schutz** — Dry-Run-`confirm` vor destruktiven Aktionen und Tag-Sperre (`WIKIJS_BLOCKED_TAGS`, z. B. `kein-ki`), die Seiten für KI unsichtbar/unantastbar macht.
+- **Selbstverwaltung** — `/me`: eigene KI-Verbindungen ansehen/widerrufen; Admins sehen alle Sessions + Audit-Log.
+- **Robust** — Concurrency-Gate, Request-Timeout, Auto-Preserve bei Updates, Content-Truncation, Session-Auto-Cleanup, Graceful Shutdown.
+- **Legacy-Fallback** — Vercel/Serverless via [`mcp-handler`](https://github.com/vercel/mcp-handler) mit Handle-/BYOK-/stdio-Auth bleibt möglich (eingefroren; Abschnitte unten).
 
 ---
 
 ## Schnellstart
 
+**Production:** Der empfohlene Weg ist die **Docker-Appliance mit OAuth** —
+Deployment, Ersteinrichtung und Client-Verbindung stehen im
+[Root-README](../README.md). Dieser Abschnitt hier ist nur die lokale
+Entwicklung des Servercodes.
+
 ```bash
 cd mcp-wikijs-mv
 npm install
+npm run dev           # lokal als HTTP-Server: http://localhost:3030/mcp
+npm run stdio         # lokal als stdio-Server (Claude Desktop / Cursor), Creds aus .env
 ```
 
-**Lokal als HTTP-Server (zum Testen):**
-```bash
-npm run dev           # http://localhost:3030/mcp
-```
+Für OAuth lokal genügt `MCP_SESSION_SECRET` + `WIKIJS_URL` (siehe
+[docs/oauth.md](./docs/oauth.md)). Die Abschnitte unten (Vercel, Profile &
+Handle, Rollen) beschreiben den **Legacy-Fallback-Betrieb** — für neue
+Deployments nicht nötig.
 
-**Lokal als stdio-Server (Claude Desktop / Cursor):**
-```bash
-# .env: WIKIJS_URL + WIKIJS_TOKEN setzen (siehe .env.example)
-npm run stdio
-```
+---
 
-**Auf Vercel deployen:**
-```bash
-npm i -g vercel
-vercel --prod         # Endpoint: https://<deploy>/mcp
-```
-
-> **Wiki.js-API-Key erzeugen:** In Wiki.js → **Administration → API** → API aktivieren → **New API Key** → Name + Ablauf wählen → Key kopieren. Tipp: **scoped** Key (read-only/gruppenbeschränkt) für Nutzer mit wenig Rechten. Die im Key hinterlegten Wiki.js-Rechte gelten **zusätzlich** zur Policy dieses Servers.
+<a id="legacy"></a>
+> ## ⚙️ Ab hier: Legacy-Fallback-Betrieb (ohne OAuth)
+> Alles Folgende — Vercel-Deploy, `WIKIJS_TOKEN`/`WIKIJS_PROFILES`-Handles, die
+> MCP-Rollenleiter — gilt **nur**, wenn OAuth aus ist (kein
+> `MCP_SESSION_SECRET`), etwa auf Vercel/Serverless. Im OAuth-Betrieb kommen
+> Identität und Rechte aus Wiki.js; diese Mechaniken sind dort ohne Funktion,
+> bleiben aber als eingefrorener Fallback erhalten.
 
 ---
 
@@ -376,11 +380,16 @@ scripts/           gen-profile.mjs (Handle-Generator) · show-roles.ts · smoke*
 
 ```bash
 npm run typecheck                  # TypeScript ohne Build
-npm test                           # Offline-Suite: policy + nav + semaphor + context (50 Assertions)
-npm run build                      # Production-Build (Vercel-Artefakt)
+npm test                           # Offline-Suite: policy/nav/semaphore/context/oauth/guardrails/routing/format (123 Assertions)
+npm run build                      # Production-Build (Next-standalone)
 
 # Live-Integrationstest: ALLE Tool-Handler gegen ein WEGWERF-/leeres Wiki.js
 WIKIJS_URL=http://localhost:3000 WIKIJS_TOKEN=<key-oder-admin-jwt> npm run test:live
+
+# OAuth-E2E gegen die laufende Appliance (Login → Code → Token → Tools →
+# Guardrails → /me inkl. Admin-Rendering-Gate). Braucht einen gestarteten
+# Stack + `bootstrap.mjs --demo` (siehe Skript-Kopf). 36 Assertions.
+npm run test:e2e                   # Basis/Creds via E2E_BASE / E2E_*_USER / E2E_*_PASS
 
 # E2E gegen ein Deployment (HTTP-Transport):
 npm run smoke           -- <url>   # Handshake, Tool-Sichtbarkeit, Confirm-Gate, Header-Auth
@@ -388,7 +397,7 @@ node scripts/smoke-urlauth.mjs  <url>   # URL-Parameter-Auth (?url=&token=&prese
 node scripts/probe-deploy.mjs   <url>   # Deploy ohne Creds prüfen (Env-Status)
 ```
 
-Vollständiges Per-Tool-Ergebnis (zuletzt **79 ok / 0 FAIL**, alle 69 Tools): **[docs/TESTPROTOKOLL.md](./docs/TESTPROTOKOLL.md)**. Wegwerf-Wiki dafür: `docker compose -f docker-compose.test.yml up -d` (Setup-Automatisierung siehe Protokoll). CI: `.github/workflows/ci.yml`.
+Vollständiges Per-Tool-Live-Ergebnis (alle 70 Tools): **[docs/TESTPROTOKOLL.md](./docs/TESTPROTOKOLL.md)**. Wegwerf-Wiki dafür: `docker compose -f docker-compose.test.yml up -d` (Setup-Automatisierung siehe Protokoll). Offline-Suite (123 Assertions) + OAuth-E2E (36) laufen in der CI: `.github/workflows/ci.yml`.
 
 ---
 
@@ -404,7 +413,7 @@ Vollständiges Per-Tool-Ergebnis (zuletzt **79 ok / 0 FAIL**, alle 69 Tools): **
 
 - **Konzept & Rechtemodell (deutsch, empfohlen):** [docs/konzept-ki-zugang.md](./docs/konzept-ki-zugang.md) — Vorgehensweise für Nutzer/Admins, Umbauten am Server, wer welche Rechte steuert · [docs/oauth.md](./docs/oauth.md) (technischer Tiefgang)
 - **Rechte & Clients (Legacy-Handle-Modus):** [docs/roles.md](./docs/roles.md) (Rollen × Rechte-Matrix) · [docs/permissions.md](./docs/permissions.md) · [docs/clients-claude.md](./docs/clients-claude.md) · [docs/clients-chatgpt.md](./docs/clients-chatgpt.md) · [docs/admin-extension.md](./docs/admin-extension.md)
-- **Test & Betrieb:** [docs/TESTPROTOKOLL.md](./docs/TESTPROTOKOLL.md) (vollständiges Protokoll, alle 69 Tools) · [docs/pgbouncer.md](./docs/pgbouncer.md) (Prod-Hardening für Vercel/Serverless-Betrieb — im Container-Setup nicht nötig)
+- **Test & Betrieb:** [docs/TESTPROTOKOLL.md](./docs/TESTPROTOKOLL.md) (vollständiges Protokoll, alle 70 Tools) · [docs/pgbouncer.md](./docs/pgbouncer.md) (Prod-Hardening für Vercel/Serverless-Betrieb — im Container-Setup nicht nötig)
 
 ## Lizenz
 MIT

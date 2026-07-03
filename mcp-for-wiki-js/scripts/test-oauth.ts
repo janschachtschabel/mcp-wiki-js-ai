@@ -213,6 +213,24 @@ async function main(): Promise<void> {
   const audit = store.listAudit(10);
   check('listAudit returns entries, newest first', audit.length >= 1 && audit[0].tool === 'wiki_page_update');
 
+  // Audit retention: entries older than the window are purged, recent ones kept.
+  const ancient = Date.now() - 200 * 24 * 60 * 60 * 1000; // 200 days — beyond the 180d audit window
+  store.insertAudit({ ts: ancient, sessionId: null, profile: 'Old', tool: 'wiki_page_delete', category: 'delete', outcome: 'ok', ms: 5 });
+  store.cleanupSessions();
+  const afterCleanup = store.listAudit(50);
+  check('cleanup purges aged-out audit rows', !afterCleanup.some((a) => a.ts === ancient));
+  check('cleanup keeps recent audit rows', afterCleanup.some((a) => a.tool === 'wiki_page_update'));
+
+  // A refresh grant also triggers cleanup (bounds the store without new sessions).
+  const issuedR = service.issueAuthorizationCode(params, identity, 'WIKI_JWT_R');
+  const tokR = service.exchangeAuthorizationCode({
+    code: issuedR.code, clientId: reg.client_id, redirectUri: params.redirectUri, codeVerifier: verifier,
+  });
+  const ancient2 = Date.now() - 210 * 24 * 60 * 60 * 1000;
+  store.insertAudit({ ts: ancient2, sessionId: null, profile: 'Old2', tool: 'x', category: 'delete', outcome: 'ok', ms: 1 });
+  service.refreshAccessToken({ refreshToken: tokR.refresh_token, clientId: reg.client_id });
+  check('refresh grant triggers audit cleanup', !store.listAudit(50).some((a) => a.ts === ancient2));
+
   if (failed === 0) {
     console.log(`\n${pass} oauth assertions passed.`);
   } else {

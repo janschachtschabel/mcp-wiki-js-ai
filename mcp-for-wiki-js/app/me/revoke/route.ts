@@ -11,7 +11,7 @@ export async function POST(req: Request): Promise<Response> {
   const issuer = resolveIssuer(req);
   if (!sameOrigin(req, issuer)) return new Response('Cross-origin form post rejected.', { status: 403 });
 
-  const me = await identityFromCookies(cookies());
+  const me = await identityFromCookies(await cookies());
   if (!me) return new Response(null, { status: 303, headers: { Location: `${issuer}/me` } });
 
   const form = new URLSearchParams(await req.text());

@@ -51,14 +51,18 @@ one go — **idempotent**, safe to re-run (Node ≥ 18 on the host):
 
 ```bash
 ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='secure-password' \
-  node deploy/scripts/bootstrap.mjs --locale=de --demo
+  node deploy/scripts/bootstrap.mjs --locale=de
 ```
 
 This creates: the admin account, a home page, the **PostgreSQL search
 engine** (dictionary matching the locale — much better agent search than the
-default), with `--locale=de` the German UI, and with `--demo` a "Team" group
-(read/write, no delete) plus a test user. For a stack on another URL prefix
-with `WIKI_URL=https://wiki.example.org`.
+default), and with `--locale=de` the German UI. For a stack on another URL
+prefix set `WIKI_URL=https://wiki.example.org`.
+
+`--demo` additionally creates a "Team" group (read/write, no delete) plus a
+test user and then **requires `DEMO_PASSWORD`** (no default — a committed one
+would ship a publicly-known write-capable account). Test instances only, never
+a production wiki.
 
 Tip if a manual browser login won't stick (logged out again after signing
 in): an ad/tracking blocker (e.g. Brave Shields) is usually blocking the
@@ -87,7 +91,7 @@ docker run -d --name wikijs-mcp --restart unless-stopped \
 ```
 
 Then route the MCP paths on the **same host** in your existing reverse proxy
-(`/mcp`, `/sse`, `/oauth`, `/me`, `/.well-known/oauth-*`,
+(`/mcp`, `/oauth`, `/me`, `/.well-known/oauth-*`,
 `/.well-known/mcp.json`, `/_next`, `/api/health` → `wikijs-mcp:3000`,
 everything else to the wiki) — template:
 [deploy/caddy/Caddyfile](deploy/caddy/Caddyfile). The shared domain matters:

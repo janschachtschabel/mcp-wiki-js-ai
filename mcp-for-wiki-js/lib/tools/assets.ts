@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ok, fail, assertOk } from '../wikijs/format';
+import { AssetTooLargeError } from '../wikijs/client';
 import { DEFAULT_RESPONSE, type ToolDef } from './types';
 
 export const assetTools: ToolDef[] = [
@@ -48,10 +49,17 @@ export const assetTools: ToolDef[] = [
         .describe('Refuse files larger than this (protects the context window). Max 5 MB.'),
     },
     handler: async (a, ctx) => {
+      const limit = a.maxBytes ?? 1_000_000;
       let payload: { data: Uint8Array; mime: string };
       try {
-        payload = await ctx.client.download(a.path);
+        // The limit is enforced twice: download() rejects via Content-Length
+        // BEFORE buffering (the memory guard); the post-read check below is the
+        // backstop for responses without a Content-Length header.
+        payload = await ctx.client.download(a.path, limit);
       } catch (e) {
+        if (e instanceof AssetTooLargeError) {
+          return fail(`${e.message} Raise maxBytes (up to 5000000) if you really need it.`);
+        }
         const msg = e instanceof Error ? e.message : String(e);
         // Wiki.js routes *.md/*.html/*.txt to the PAGE renderer, so such assets
         // 404 even when they exist — surface the real cause instead of a bare 404.
@@ -64,7 +72,6 @@ export const assetTools: ToolDef[] = [
         throw e;
       }
       const { data, mime } = payload;
-      const limit = a.maxBytes ?? 1_000_000;
       if (data.byteLength > limit) {
         return fail(
           `Asset ${a.path} is ${data.byteLength} bytes (limit ${limit}). Raise maxBytes (up to 5000000) if you really need it.`,

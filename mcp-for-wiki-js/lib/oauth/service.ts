@@ -254,6 +254,10 @@ export function refreshAccessToken(p: { refreshToken: string; clientId: string }
   }
   const t = issueSessionTokens();
   store.rotateSessionTokens(session.id, sha256hex(t.access), sha256hex(t.refresh), t.accessExpiresAt);
+  // Opportunistic prune on the refresh path too (runs ~hourly per active client),
+  // so a deployment where sessions are refreshed rather than freshly created
+  // still bounds the store — not only on insertSession.
+  store.cleanupSessions();
   return {
     access_token: t.access,
     token_type: 'Bearer',

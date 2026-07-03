@@ -238,7 +238,7 @@ legacy handle access (`WIKIJS_PROFILES`).
 - `tree`/`links`, comment tools and `wiki_graphql` are exempt from the
   **tag** guardrail (use path rules for hard blocking); `wiki_graphql` is
   confirm-gated for OAuth sessions.
-- Do not create wiki pages under `me/`, `oauth/`, `mcp`, `sse`, `api/` —
+- Do not create wiki pages under `me/`, `oauth/`, `mcp`, `api/` —
   those paths belong to the MCP server (reverse-proxy routing).
 - Wiki.js cannot serve assets whose extension is a page extension
   (default `.md/.html/.txt`) — `wiki_asset_download` explains this case.

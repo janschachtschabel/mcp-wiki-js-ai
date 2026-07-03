@@ -13,7 +13,6 @@
 {$DOMAIN:localhost} {
 	@mcp path \
 		/mcp /mcp/* \
-		/sse /sse/* \
 		/oauth/* \
 		/me /me/* \
 		/api/health \

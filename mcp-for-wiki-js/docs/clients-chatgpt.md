@@ -1,5 +1,10 @@
 # Client-Einrichtung: ChatGPT
 
+> ⚠️ **Legacy-Betrieb.** Beschreibt den URL-Handle-Weg (ohne OAuth). Der
+> **empfohlene** Weg ist OAuth: dieselbe geheimnislose `…/mcp`-URL, der
+> OAuth-Login startet automatisch — siehe [Konzept](./konzept-ki-zugang.md) und
+> [Root-README](../../README.md). Nur weiterlesen, wenn OAuth bewusst aus ist.
+
 ChatGPT bindet eigene MCP-Server über **Developer Mode → Custom Connectors** ein. Diese unterstützen **kein** Custom-Header-Auth — daher kommt dein Zugang in die **URL**.
 
 **Empfohlen — Profil-Handle:** Der Betreiber hat dich in `WIKIJS_PROFILES` angelegt; du bekommst einen **geheimen Handle** (`wzp_…`) und gibst **nur diesen** in der URL an. Der echte Wiki.js-Key bleibt serverseitig und gelangt **nie** zu ChatGPT. (Hintergrund: [Profile & Handle](../README.md#mehrbenutzer-profile--handle-generierung).)

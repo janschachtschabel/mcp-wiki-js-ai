@@ -71,7 +71,7 @@ volumes: { pgdata: {} }
 
 **Warum das den Leak killt:** `transaction`-Mode gibt die echte Postgres-Verbindung nach jeder Transaktion zurück; `IDLE_TRANSACTION_TIMEOUT` schließt steckende `idle in transaction`-Clients (rollback) — Knex bekommt seinen Pool-Slot zurück, **ohne Wiki-Neustart**.
 
-**Validiert (lokal, 2026-06-17):** Wiki.js-**Setup/Migrationen** (`POST /finalize` → `ok:true`) **und** die komplette MCP-Tool-Suite (alle 69 Tools, `npm run test:live` → **79/0**) laufen sauber durch die **3-Schicht-Topologie** Knex `pool.max=50` → PgBouncer `DEFAULT_POOL_SIZE=25` (`transaction`-Mode) → Postgres `max_connections=100` — inkl. aller Schreib-/Lösch-/Transaktions-Tools. Der „transaction-mode bricht Writes/Migrationen"-Verdacht ist damit ausgeräumt.
+**Validiert (lokal, 2026-06-17):** Wiki.js-**Setup/Migrationen** (`POST /finalize` → `ok:true`) **und** die komplette MCP-Tool-Suite (alle Tools, `npm run test:live`) laufen sauber durch die **3-Schicht-Topologie** Knex `pool.max=50` → PgBouncer `DEFAULT_POOL_SIZE=25` (`transaction`-Mode) → Postgres `max_connections=100` — inkl. aller Schreib-/Lösch-/Transaktions-Tools. Der „transaction-mode bricht Writes/Migrationen"-Verdacht ist damit ausgeräumt.
 
 **Caveats:** Bei eigenem (Nicht-`public`) DB-Schema `ALTER ROLE wikijs SET search_path=…` statt per-Connection-`SET`. In `pg_stat_activity` erscheinen künftig PgBouncer-Connections statt `application_name='Wiki.js'`.
 

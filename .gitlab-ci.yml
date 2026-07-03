@@ -95,7 +95,8 @@ build and push (branches):
   before_script:
     - docker --version
   script:
-    - docker login "$DOCKER_REGISTRY" -u "$DOCKER_USERNAME" -p "$DOCKER_PASSWORD"
+    # --password-stdin: das Passwort nicht als argv übergeben (in `ps` sichtbar).
+    - echo "$DOCKER_PASSWORD" | docker login "$DOCKER_REGISTRY" -u "$DOCKER_USERNAME" --password-stdin
     - docker buildx build --tag "$DOCKER_REGISTRY/$DOCKER_IMAGE_PATH:$CI_COMMIT_REF_SLUG" .
     - docker image push "$DOCKER_REGISTRY/$DOCKER_IMAGE_PATH:$CI_COMMIT_REF_SLUG"
   rules:
@@ -124,7 +125,8 @@ build and push (tags):
   before_script:
     - docker --version
   script:
-    - docker login "$DOCKER_REGISTRY" -u "$DOCKER_USERNAME" -p "$DOCKER_PASSWORD"
+    # --password-stdin: das Passwort nicht als argv übergeben (in `ps` sichtbar).
+    - echo "$DOCKER_PASSWORD" | docker login "$DOCKER_REGISTRY" -u "$DOCKER_USERNAME" --password-stdin
     - docker buildx build --tag "$DOCKER_REGISTRY/$DOCKER_IMAGE_PATH:$CI_COMMIT_REF_NAME" .
     - docker image push "$DOCKER_REGISTRY/$DOCKER_IMAGE_PATH:$CI_COMMIT_REF_NAME"
   rules:
@@ -138,7 +140,9 @@ build and push (tags):
 .helm_base:
   stage: deploy
   image:
-    name: alpine/helm:latest
+    # Auf einen konkreten Helm-3-Tag gepinnt (reproduzierbares Packaging);
+    # `latest` würde bei jedem Lauf variieren.
+    name: alpine/helm:3.21.2
     entrypoint: [""]
   before_script:
     - helm version
@@ -166,4 +170,8 @@ build and push helm chart:
       variables:
         CHART_VERSION: "$CI_COMMIT_REF_NAME"
         APP_VERSION: "$CI_COMMIT_REF_NAME"
-    - if: "$CI_COMMIT_BRANCH && $HELM_REGISTRY"
+    # Nur main/develop: für andere Branches baut die Pipeline KEIN Image
+    # (siehe build-Jobs), ein Chart mit appVersion=<branch> würde sonst auf
+    # ein nie gepushtes Image zeigen (ImagePullBackOff).
+    - if: "$CI_COMMIT_BRANCH == 'main' && $HELM_REGISTRY"
+    - if: "$CI_COMMIT_BRANCH == 'develop' && $HELM_REGISTRY"

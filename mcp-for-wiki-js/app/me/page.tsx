@@ -12,9 +12,9 @@ export const dynamic = 'force-dynamic';
  * login against Wiki.js — no separate account, nothing to configure per user.
  */
 
-function baseUrlFromHeaders(): string {
+async function baseUrlFromHeaders(): Promise<string> {
   if (process.env.PUBLIC_BASE_URL) return new URL(process.env.PUBLIC_BASE_URL).origin;
-  const h = headers();
+  const h = await headers();
   const proto = h.get('x-forwarded-proto') ?? 'https';
   const host = h.get('x-forwarded-host') ?? h.get('host') ?? 'localhost:3030';
   return `${proto}://${host}`;
@@ -24,9 +24,10 @@ function fmt(ts: number): string {
   return new Date(ts).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-export default async function MePage({ searchParams }: { searchParams: Record<string, string | string[] | undefined> }) {
-  const base = baseUrlFromHeaders();
+export default async function MePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const base = await baseUrlFromHeaders();
   const mcpUrl = `${base}/mcp`;
+  const sp = await searchParams;
 
   if (!oauthEnabled()) {
     return (
@@ -39,8 +40,8 @@ export default async function MePage({ searchParams }: { searchParams: Record<st
     );
   }
 
-  const me = await identityFromCookies(cookies());
-  const rawError = searchParams.login_error;
+  const me = await identityFromCookies(await cookies());
+  const rawError = sp.login_error;
   const loginError = (Array.isArray(rawError) ? rawError[0] : rawError)?.slice(0, 200);
 
   if (!me) {

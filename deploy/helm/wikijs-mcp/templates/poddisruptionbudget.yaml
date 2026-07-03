@@ -5,7 +5,9 @@ metadata:
   name: {{ include "wikijs-mcp.fullname" . }}
   labels: {{ include "wikijs-mcp.labels" . | nindent 4 }}
 spec:
-  minAvailable: 1
+  # maxUnavailable statt minAvailable: bei replicaCount 1 würde minAvailable:1
+  # jede freiwillige Disruption (Node-Drain) blockieren statt den Pod zu schützen.
+  maxUnavailable: 1
   selector:
     matchLabels: {{ include "wikijs-mcp.selectorLabels" . | nindent 6 }}
 {{- end }}

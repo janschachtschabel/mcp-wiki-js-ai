@@ -1,5 +1,11 @@
 # Rechtesteuerung (Permission Policy)
 
+> ⚠️ **Nur Legacy-Betrieb.** Diese Policy-Engine (Kategorien × `allow`/`confirm`/
+> `block`, Presets, Per-User-Overlays) steuert den Handle-/BYOK-Betrieb **ohne
+> OAuth**. Im OAuth-Betrieb erzwingt **Wiki.js** die Rechte pro Person; der
+> MCP-Server nutzt davon nur die `confirm`-Gates (Rolle `wiki`). Siehe
+> [oauth.md](./oauth.md) und [Konzept](./konzept-ki-zugang.md).
+
 Jedes Tool gehört zu einer **Kategorie**. Die Policy bildet jede Kategorie (und optional jedes einzelne Tool) auf einen **Modus** ab:
 
 | Modus | Verhalten |

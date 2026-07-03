@@ -55,7 +55,7 @@ function Frame({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default async function AuthorizePage({ searchParams }: { searchParams: Search }) {
+export default async function AuthorizePage({ searchParams }: { searchParams: Promise<Search> }) {
   if (!oauthEnabled()) {
     return (
       <Frame>
@@ -66,8 +66,9 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Se
     );
   }
 
-  const p = paramsFrom(searchParams);
-  const responseType = first(searchParams, 'response_type') || 'code';
+  const sp = await searchParams;
+  const p = paramsFrom(sp);
+  const responseType = first(sp, 'response_type') || 'code';
   let clientName: string;
   try {
     if (responseType !== 'code') throw new OAuthError('invalid_request', 'Only response_type=code is supported.');
@@ -85,10 +86,10 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Se
     );
   }
 
-  const tfa = first(searchParams, 'tfa'); // encrypted continuation token (2FA second step)
-  const loginError = first(searchParams, 'login_error').slice(0, 200);
-  const forceLogin = first(searchParams, 'force_login') === '1';
-  const sso = tfa || forceLogin ? undefined : await identityFromCookies(cookies());
+  const tfa = first(sp, 'tfa'); // encrypted continuation token (2FA second step)
+  const loginError = first(sp, 'login_error').slice(0, 200);
+  const forceLogin = first(sp, 'force_login') === '1';
+  const sso = tfa || forceLogin ? undefined : await identityFromCookies(await cookies());
 
   return (
     <Frame>
@@ -119,7 +120,7 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Se
             </button>
           </form>
           <p style={{ ...muted, fontSize: 13, marginBottom: 0 }}>
-            Nicht du? <a href={`?${new URLSearchParams({ ...flatten(searchParams), force_login: '1' })}`} style={{ color: '#7ab3ff' }}>Mit anderem Wiki-Konto anmelden</a>
+            Nicht du? <a href={`?${new URLSearchParams({ ...flatten(sp), force_login: '1' })}`} style={{ color: '#7ab3ff' }}>Mit anderem Wiki-Konto anmelden</a>
           </p>
         </div>
       ) : tfa ? (

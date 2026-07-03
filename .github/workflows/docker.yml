@@ -23,7 +23,15 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
+  # Test-Gate: der Build (und damit jeder Image-Push, auch bei Release-Tags)
+  # läuft nur, wenn Typecheck + Tests + Build durch sind.
+  test:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -83,6 +91,9 @@ jobs:
           # Für arm64 zusätzlich: platforms: linux/amd64,linux/arm64
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
+          # Bei PRs nicht pushen, aber ins lokale Docker laden, damit der
+          # Smoke-Test unten das echte Image starten kann.
+          load: ${{ github.event_name == 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -91,17 +102,21 @@ jobs:
           provenance: true
           sbom: true
 
-      - name: Smoke-Test (nur lokal)
+      - name: Smoke-Test — Container startet & /api/health antwortet
         if: github.event_name == 'pull_request'
         run: |
-          # Bei PRs gibt's keinen Push — wir laden das gebaute Image
-          # via load und starten es kurz, um sicherzugehen, dass die API
-          # antwortet. Reicht als Sanity-Check.
-          docker load < /dev/null 2>/dev/null || true
-          # build-push-action mit push=false setzt das Image lokal nicht
-          # automatisch — daher hier nur Image-ID-Check
-          echo "Build digest: ${{ steps.build.outputs.digest }}"
-          echo "Smoke-Test im Job-Lauf übersprungen (PR baut nur)."
+          set -euo pipefail
+          # /api/health hat KEINE Upstream-Abhängigkeit (kein Wiki nötig), also
+          # muss der frisch gebaute Container die Route ohne weiteres bedienen.
+          tag=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          docker run -d --name smoke -p 3000:3000 -e MCP_SESSION_SECRET=ci-smoke-secret-0123456789 "$tag"
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/api/health | grep -q '"ok":true'; then
+              echo "health OK after ${i}s"; docker rm -f smoke; exit 0
+            fi
+            sleep 1
+          done
+          echo "health endpoint did not come up"; docker logs smoke; docker rm -f smoke; exit 1
 
       - name: Image-Summary
         if: github.event_name != 'pull_request'

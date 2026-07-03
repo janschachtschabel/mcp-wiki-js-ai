@@ -1,0 +1,14 @@
+# Normalize line endings to LF in the repo. This code is built and run in Linux
+# containers (Dockerfile, compose, shell in YAML, bootstrap.mjs), so CRLF from
+# Windows editors must not leak in — otherwise shell scripts and the Next build
+# can break. Setting this on a fresh repo normalizes on first `git add`.
+* text=auto eol=lf
+
+# Lockfile: text, but never show it in diffs (generated, large).
+package-lock.json linguist-generated=true
+
+# Binary types git must not touch.
+*.png binary
+*.jpg binary
+*.svg text
+*.ico binary

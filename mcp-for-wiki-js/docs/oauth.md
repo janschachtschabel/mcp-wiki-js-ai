@@ -61,6 +61,12 @@ läuft die Session aus — der Client startet die Ein-Klick-Freigabe erneut.
   port-agnostisch (RFC 8252) — nötig für Claude/Codex-CLI-Callbacks.
 - Passwörter werden **nie gespeichert**, nur an Wiki.js' `login`-Mutation
   durchgereicht (deren eingebautes Rate-Limit 5/min greift).
+- **Transport-Routing:** Bei aktivem OAuth entscheidet `shouldUseOAuth` pro
+  Request. Nur eine *explizit* mitgeschickte Legacy-Credential (BYOK-Bearer
+  oder `X-Wikijs-Token`-Handle) nimmt den Legacy-Pfad; alles andere geht in
+  den OAuth-Flow (401 → Discovery). Ein evtl. gesetztes Single-Tenant-Env-Token
+  (`WIKIJS_TOKEN`) beeinflusst diese Entscheidung **nicht** und kann `/mcp`
+  daher nie unauthentifiziert bedienen — es gilt nur, wenn OAuth ganz aus ist.
 
 ## Rechte & Guardrails
 
@@ -98,7 +104,7 @@ das hebelt dort ALLE Page-Rules aus.
   Login-Formular.
 - `/me`-Login per Formular unterstützt kein 2FA (der OAuth-Authorize-Flow
   schon) — 2FA-Nutzer melden sich fürs `/me` einfach im Wiki an (SSO-Pfad).
-- Legt keine Wiki-Seiten unter den Pfaden `me`, `oauth`, `mcp`, `sse`, `api`
+- Legt keine Wiki-Seiten unter den Pfaden `me`, `oauth`, `mcp`, `api`
   an — diese Pfade gehören dem MCP-Server (Reverse-Proxy-Routing).
 - Die `confirm`-Gates der Rolle `wiki` gelten für **OAuth-Sessions**. Wer statt
   dessen eine eigene Wiki-Credential direkt per Header mitschickt (Legacy/BYOK),
