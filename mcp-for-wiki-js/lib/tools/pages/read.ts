@@ -1,13 +1,18 @@
 import { z } from 'zod';
-import { ok, truncateContent } from '../../wikijs/format';
+import { ok, fail, truncateContent } from '../../wikijs/format';
 import type { ToolDef } from '../types';
 import {
   assertPageIdNotBlocked,
   assertTagsNotBlocked,
   blockedPageSets,
+  blockedPathKey,
   filterBlockedPages,
 } from '../../guardrails';
 import { DEFAULT_MAX_CONTENT, singleSelection } from './shared';
+
+/** Upper bounds for caller-chosen page sizes (audit R-46). */
+const MAX_LIST_LIMIT = 1000;
+const MAX_HISTORY_PAGE = 500;
 
 export const pageReadTools: ToolDef[] = [
   {
@@ -29,7 +34,7 @@ export const pageReadTools: ToolDef[] = [
       const blocked = await blockedPageSets(ctx);
       if (blocked.ids.size > 0) {
         const results = (data.pages.search.results as { id: number | string; path?: string }[]).filter(
-          (r) => !blocked.ids.has(Number(r.id)) && !blocked.paths.has((r.path ?? '').toLowerCase()),
+          (r) => !blocked.ids.has(Number(r.id)) && !blocked.paths.has(blockedPathKey(r.path ?? '')),
         );
         const hidden = data.pages.search.results.length - results.length;
         return ok({ ...data.pages.search, results, ...(hidden > 0 ? { hiddenByTagGuardrail: hidden } : {}) });
@@ -62,18 +67,18 @@ export const pageReadTools: ToolDef[] = [
           `query($id:Int!){ pages { single(id:$id){ ${selection} } } }`,
           { id: a.id },
         );
-        if (data.pages.single) assertTagsNotBlocked(data.pages.single.tags, `Page ${a.id}`);
-        return ok(truncateContent(data.pages.single, limit) ?? { error: `No page with id ${a.id}` });
+        if (!data.pages.single) return fail(`No page with id ${a.id}`);
+        assertTagsNotBlocked(data.pages.single.tags, `Page ${a.id}`);
+        return ok(truncateContent(data.pages.single, limit));
       }
       if (a.path) {
         const data = await ctx.client.request(
           `query($path:String!,$locale:String!){ pages { singleByPath(path:$path,locale:$locale){ ${selection} } } }`,
           { path: a.path, locale: a.locale ?? 'en' },
         );
-        if (data.pages.singleByPath) assertTagsNotBlocked(data.pages.singleByPath.tags, `Page ${a.path}`);
-        return ok(
-          truncateContent(data.pages.singleByPath, limit) ?? { error: `No page at ${a.path} (${a.locale ?? 'en'})` },
-        );
+        if (!data.pages.singleByPath) return fail(`No page at ${a.path} (${a.locale ?? 'en'})`);
+        assertTagsNotBlocked(data.pages.singleByPath.tags, `Page ${a.path}`);
+        return ok(truncateContent(data.pages.singleByPath, limit));
       }
       throw new Error('Provide either "id" or "path".');
     },
@@ -83,7 +88,7 @@ export const pageReadTools: ToolDef[] = [
     description: 'List pages with optional filtering by locale/tags and ordering.',
     category: 'read',
     inputSchema: {
-      limit: z.number().int().positive().optional().describe('Max number of pages.'),
+      limit: z.number().int().positive().max(MAX_LIST_LIMIT).optional().describe(`Max number of pages (up to ${MAX_LIST_LIMIT}).`),
       locale: z.string().optional(),
       tags: z.array(z.string()).optional().describe('Only pages carrying all of these tags.'),
       orderBy: z.enum(['CREATED', 'ID', 'PATH', 'TITLE', 'UPDATED']).default('TITLE'),
@@ -135,7 +140,14 @@ export const pageReadTools: ToolDef[] = [
           includeAncestors: !!a.includeAncestors,
         },
       );
-      return ok(data.pages.tree);
+      // Tree items carry no tags: hide page entries on the blocked id/path set (folders stay).
+      const blocked = await blockedPageSets(ctx);
+      const items = data.pages.tree as { pageId?: number | null; path: string }[];
+      const visible = items.filter(
+        (i) => i.pageId == null || !(blocked.ids.has(Number(i.pageId)) || blocked.paths.has(blockedPathKey(i.path))),
+      );
+      const hidden = items.length - visible.length;
+      return ok(hidden > 0 ? { tree: visible, hiddenByTagGuardrail: hidden } : visible);
     },
   },
   {
@@ -145,7 +157,7 @@ export const pageReadTools: ToolDef[] = [
     inputSchema: {
       id: z.number().int().describe('Page id.'),
       offsetPage: z.number().int().default(0),
-      offsetSize: z.number().int().default(100),
+      offsetSize: z.number().int().positive().max(MAX_HISTORY_PAGE).default(100),
     },
     handler: async (a, ctx) => {
       await assertPageIdNotBlocked(ctx, a.id, `Page ${a.id}`);
@@ -163,6 +175,12 @@ export const pageReadTools: ToolDef[] = [
     inputSchema: {
       pageId: z.number().int(),
       versionId: z.number().int(),
+      maxContentChars: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(`Truncate content above this many chars (default ${DEFAULT_MAX_CONTENT}; 0 = unlimited).`),
     },
     handler: async (a, ctx) => {
       // Guard against BOTH the current tags and the historical version's tags.
@@ -172,7 +190,7 @@ export const pageReadTools: ToolDef[] = [
         { pageId: a.pageId, versionId: a.versionId },
       );
       if (data.pages.version) assertTagsNotBlocked(data.pages.version.tags, `Page ${a.pageId}`);
-      return ok(data.pages.version);
+      return ok(truncateContent(data.pages.version, a.maxContentChars ?? DEFAULT_MAX_CONTENT));
     },
   },
   {
@@ -185,7 +203,14 @@ export const pageReadTools: ToolDef[] = [
         `query($locale:String!){ pages { links(locale:$locale){ id path title links } } }`,
         { locale: a.locale ?? 'en' },
       );
-      return ok(data.pages.links);
+      // Entries are "<locale>/<path>"; drop blocked pages and every link pointing at one.
+      const blocked = await blockedPageSets(ctx);
+      const isBlockedRef = (ref: string) => blocked.paths.has(blockedPathKey(ref.slice(ref.indexOf('/') + 1)));
+      const all = data.pages.links as { id: number; path: string; links: string[] }[];
+      const visible = all
+        .filter((p) => !blocked.ids.has(Number(p.id)) && !isBlockedRef(p.path))
+        .map((p) => ({ ...p, links: (p.links ?? []).filter((l) => !isBlockedRef(l)) }));
+      return ok(visible);
     },
   },
   {

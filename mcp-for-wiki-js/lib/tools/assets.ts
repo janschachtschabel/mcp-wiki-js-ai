@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ok, fail, assertOk } from '../wikijs/format';
 import { AssetTooLargeError } from '../wikijs/client';
+import { MCP_BODY_LIMIT } from '../body-limit';
 import { DEFAULT_RESPONSE, type ToolDef } from './types';
 
 /**
@@ -152,12 +153,22 @@ export const assetTools: ToolDef[] = [
     category: 'write',
     inputSchema: {
       filename: z.string().min(1).describe('Target filename (Wiki.js sanitizes it).'),
-      contentBase64: z.string().min(1).describe('File content, base64-encoded.'),
+      contentBase64: z
+        .string()
+        .min(1)
+        .max(MCP_BODY_LIMIT)
+        .describe('File content, base64-encoded (standard alphabet; max ~3 MB decoded — the /mcp request limit is 4 MB).'),
       folderId: z.number().int().default(0).describe('Target asset folder id (0 = root).'),
       mime: z.string().optional().describe('MIME type, e.g. "image/png". Defaults to octet-stream.'),
     },
     handler: async (a, ctx) => {
-      const data = Buffer.from(a.contentBase64, 'base64');
+      // Buffer.from(…, 'base64') silently skips invalid characters — validate strictly
+      // so a mangled payload is refused instead of uploaded as garbage (audit R-46).
+      const b64 = String(a.contentBase64).replace(/\s+/g, '');
+      if (b64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) {
+        return fail('contentBase64 is not valid base64 (standard alphabet A–Z a–z 0–9 + /, "=" padding).');
+      }
+      const data = Buffer.from(b64, 'base64');
       if (data.length === 0) return fail('contentBase64 decoded to 0 bytes — provide valid base64 file content.');
       const r = await ctx.client.upload({ filename: a.filename, data, mime: a.mime, folderId: a.folderId ?? 0 });
       if (!r.succeeded) return fail(`Upload failed: ${r.message ?? 'unknown error'}`);

@@ -9,8 +9,10 @@
  *
  * Defense-in-depth, not a substitute: for hard guarantees against ANY API
  * consumer, additionally put sensitive content under a path with a Wiki.js
- * deny page-rule. Structure listings (tree/links) and comments are not
- * tag-filtered — documented limitation.
+ * deny page-rule. Structure listings (tree/links) are filtered by the blocked
+ * id/path set. Comments are checked where the page is known (list by path,
+ * create by pageId); a comment addressed only by its own id cannot be mapped
+ * to its page via GraphQL — documented limitation.
  *
  * Opt-in: without WIKIJS_BLOCKED_TAGS the guardrail is off and adds zero
  * upstream queries.
@@ -47,10 +49,12 @@ export function tagsBlocked(tags: unknown, blocked: Set<string> = blockedTags())
 export class GuardrailError extends Error {}
 
 /** Throw the uniform refusal for a blocked page (read AND write paths). */
+function blockedPageError(what: string): GuardrailError {
+  return new GuardrailError(`${what} is not available to AI agents (carries a blocked tag — see WIKIJS_BLOCKED_TAGS).`);
+}
+
 export function assertTagsNotBlocked(tags: unknown, what: string): void {
-  if (tagsBlocked(tags)) {
-    throw new GuardrailError(`${what} is not available to AI agents (carries a blocked tag — see WIKIJS_BLOCKED_TAGS).`);
-  }
+  if (tagsBlocked(tags)) throw blockedPageError(what);
 }
 
 /** Filter a page list; report how many were hidden so truncation is never silent. */
@@ -72,10 +76,25 @@ const CACHE_TTL_MS = 60_000;
 
 export interface BlockedPageSets {
   ids: Set<number>;
-  /** Lowercased page paths. Search indexes can serve STALE entries (e.g. after
+  /** Page paths as {@link blockedPathKey}. Search indexes can serve STALE entries (e.g. after
    *  a locale migration Wiki.js does not reindex), so id-only filtering would
    *  leak title/path of a blocked page under an outdated id — paths close that. */
   paths: Set<string>;
+}
+
+/**
+ * Comparison key for blocked paths. Wiki.js looks pages up by path in the DB, and
+ * MySQL/MariaDB/MSSQL collations ignore case, accents and trailing spaces — so
+ * "intern/gehéim " finds "intern/geheim" there. Folding the same way on BOTH sides
+ * can only over-block, never leak (review 2026-10-21 #4).
+ */
+export function blockedPathKey(path: string): string {
+  return path
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .trim()
+    .replace(/^\/+|\/+$/g, '');
 }
 
 const cache = new Map<string, { at: number; sets: BlockedPageSets }>();
@@ -84,12 +103,16 @@ function cacheKey(ctx: WikiContext): string {
   return `${ctx.baseUrl}|${ctx.credentialKey ?? 'anon'}`;
 }
 
-export async function blockedPageSets(ctx: WikiContext): Promise<BlockedPageSets> {
+/**
+ * `fresh: true` bypasses (and refreshes) the cache — for destructive callers,
+ * where a page tagged within the last TTL must still be protected (audit R-27).
+ */
+export async function blockedPageSets(ctx: WikiContext, opts: { fresh?: boolean } = {}): Promise<BlockedPageSets> {
   const blocked = blockedTags();
   if (blocked.size === 0) return { ids: new Set(), paths: new Set() };
   const key = cacheKey(ctx);
   const cached = cache.get(key);
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.sets;
+  if (!opts.fresh && cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.sets;
 
   const sets: BlockedPageSets = { ids: new Set(), paths: new Set() };
   for (const tag of blocked) {
@@ -99,7 +122,7 @@ export async function blockedPageSets(ctx: WikiContext): Promise<BlockedPageSets
     );
     for (const p of data.pages.list) {
       sets.ids.add(p.id);
-      sets.paths.add(p.path.toLowerCase());
+      sets.paths.add(blockedPathKey(p.path));
     }
   }
   // Bounded: entries expire after TTL; drop stale ones so many credentials can't grow the map.
@@ -111,8 +134,8 @@ export async function blockedPageSets(ctx: WikiContext): Promise<BlockedPageSets
 }
 
 /** Convenience for callers that only act on real DB rows (deletes). */
-export async function blockedPageIds(ctx: WikiContext): Promise<Set<number>> {
-  return (await blockedPageSets(ctx)).ids;
+export async function blockedPageIds(ctx: WikiContext, opts: { fresh?: boolean } = {}): Promise<Set<number>> {
+  return (await blockedPageSets(ctx, opts)).ids;
 }
 
 /**
@@ -141,6 +164,19 @@ export async function assertPageIdNotBlocked(ctx: WikiContext, id: number, what:
     { id },
   );
   assertTagsNotBlocked(data.pages.single?.tags, what || `Page ${id}`);
+}
+
+/**
+ * Check a page against the blocked id/path set. Only needs read:pages (via
+ * pages.list), unlike pages.single/singleByPath which require manage:pages —
+ * so it also works for readers/commenters.
+ */
+export async function assertNotInBlockedSet(ctx: WikiContext, page: { id?: number; path?: string }, what: string): Promise<void> {
+  if (blockedTags().size === 0) return;
+  const sets = await blockedPageSets(ctx);
+  if ((page.id != null && sets.ids.has(page.id)) || (page.path != null && sets.paths.has(blockedPathKey(page.path)))) {
+    throw blockedPageError(what);
+  }
 }
 
 /** Test hook. */

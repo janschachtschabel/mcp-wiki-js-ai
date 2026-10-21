@@ -16,6 +16,7 @@
  * sustained ceiling. For a hard global cap across instances, back the gate with Redis.
  */
 
+import { Kind, parse } from 'graphql';
 import { exceedsByteLimit } from './format';
 
 export interface GraphQLErrorEntry {
@@ -23,12 +24,127 @@ export interface GraphQLErrorEntry {
   extensions?: Record<string, unknown>;
 }
 
-const DEFAULT_TIMEOUT_MS = Number(process.env.WIKIJS_TIMEOUT_MS) || 30_000;
-const MAX_CONCURRENCY = Math.max(1, Number(process.env.WIKIJS_MAX_CONCURRENCY) || 8);
-const MAX_RETRIES = Math.max(0, Number(process.env.WIKIJS_RETRIES) || 2);
+/**
+ * Integer env setting: `def` when unset/unparseable or outside [min, max]. Unlike
+ * `Number(x) || def`, a valid 0 survives (WIKIJS_RETRIES=0 disables retries)
+ * and a negative timeout can't turn into an immediate abort (audit R-36).
+ */
+export function envInt(raw: string | undefined, def: number, min: number, max = Number.MAX_SAFE_INTEGER): number {
+  if (raw === undefined || raw.trim() === '') return def;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= min && n <= max ? n : def;
+}
 
-/** Thrown when a request never reached Wiki.js (DNS/TCP/TLS). Safe to retry — even mutations, since nothing ran. */
-export class WikiConnectionError extends Error {}
+/** Above 2^31-1 ms Node fires a timer after 1 ms, so every request would "time out" (review #9). */
+const MAX_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_TIMEOUT_MS = envInt(process.env.WIKIJS_TIMEOUT_MS, 30_000, 1, MAX_TIMEOUT_MS);
+const MAX_CONCURRENCY = envInt(process.env.WIKIJS_MAX_CONCURRENCY, 8, 1);
+const MAX_RETRIES = envInt(process.env.WIKIJS_RETRIES, 2, 0);
+/** Cap on a buffered GraphQL response body (audit R-45). */
+const MAX_RESPONSE_BYTES = envInt(process.env.WIKIJS_MAX_RESPONSE_BYTES, 16 * 1024 * 1024, 1024);
+
+/**
+ * Node fetch failure codes (`err.cause.code`) raised BEFORE any request byte is
+ * written (no address / no connection). Anything else — ECONNRESET,
+ * UND_ERR_SOCKET, … — can happen after the request was sent, so a mutation must
+ * not be repeated on it (audit R-32).
+ */
+const NOTHING_SENT_CODES = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+
+/** Thrown when fetch failed at the network level. `nothingSent` = safe to retry even a mutation. */
+export class WikiConnectionError extends Error {
+  constructor(
+    message: string,
+    readonly nothingSent = false,
+  ) {
+    super(message);
+  }
+}
+
+/** Wiki.js answered with a redirect: a configuration problem — never retried. */
+export class WikiRedirectError extends WikiConnectionError {}
+
+/** Whether a GraphQL document can change state (any mutation/subscription operation).
+ *  Parsed, not pattern-matched (audit R-04); throws on a syntax error. */
+export function isWriteDocument(query: string): boolean {
+  return parse(query).definitions.some((d) => d.kind === Kind.OPERATION_DEFINITION && d.operation !== 'query');
+}
+
+/** For the retry decision: an unparseable document counts as a write (fail safe). */
+function isReadOnlyDocument(query: string): boolean {
+  try {
+    return !isWriteDocument(query);
+  } catch {
+    return false;
+  }
+}
+
+function causeCode(err: unknown): string | undefined {
+  const cause = err instanceof Error ? (err as Error & { cause?: { code?: unknown } }).cause : undefined;
+  return typeof cause?.code === 'string' ? cause.code : undefined;
+}
+
+/**
+ * Map a fetch() rejection. undici reports everything as TypeError("fetch failed")
+ * and puts the reason in `cause`: a refused redirect (`redirect: 'error'`) gets its
+ * own, non-retried error; anything else becomes a WikiConnectionError that carries
+ * the cause text (review 2026-10-21 #5).
+ */
+function fetchFailure(err: unknown, url: string): Error {
+  const message = err instanceof Error ? err.message : String(err);
+  const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined;
+  const causeMessage = cause instanceof Error ? cause.message : undefined;
+  if (causeMessage === 'unexpected redirect') {
+    return new WikiRedirectError(
+      `Wiki.js answered ${url} with a redirect — check WIKIJS_URL / proxy (it must point at Wiki.js itself, ` +
+        'with the right scheme and no login gateway in front).',
+    );
+  }
+  const code = causeCode(err);
+  const detail = causeMessage ? `: ${causeMessage}` : '';
+  const codeNote = code && !detail.includes(code) ? ` (${code})` : '';
+  return new WikiConnectionError(
+    `Could not reach Wiki.js at ${url}: ${message}${detail}${codeNote}`,
+    code !== undefined && NOTHING_SENT_CODES.has(code),
+  );
+}
+
+/**
+ * Read a response body as text, refusing more than `maxBytes` (declared or
+ * actual) instead of buffering it — a huge upstream answer must not tie up
+ * memory and the concurrency slot (audit R-45).
+ */
+async function readCapped(res: Response, maxBytes: number): Promise<string> {
+  const tooLarge = () =>
+    new Error(`Wiki.js response too large (over ${maxBytes} bytes; see WIKIJS_MAX_RESPONSE_BYTES).`);
+  if (exceedsByteLimit(res.headers.get('content-length'), maxBytes)) {
+    await res.body?.cancel().catch(() => {});
+    throw tooLarge();
+  }
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let text = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
 
 /** Thrown by download() when the asset's Content-Length exceeds the caller's byte cap. */
 export class AssetTooLargeError extends Error {}
@@ -111,6 +227,14 @@ export interface WikiClientOptions {
    * Used by the OAuth layer to keep stored sessions fresh; irrelevant for API keys.
    */
   onNewJwt?: (jwt: string) => void;
+  /** Retries after a connection failure (default WIKIJS_RETRIES). */
+  retries?: number;
+  /**
+   * Runs before every upstream request with the base URL and rejects to refuse
+   * it. Set only for a caller-chosen URL in pure BYOK mode (lib/credentials.ts →
+   * assertPublicTarget); operator-configured targets never pass one.
+   */
+  assertTarget?: (baseUrl: string) => Promise<void>;
 }
 
 export class WikiClient {
@@ -118,12 +242,16 @@ export class WikiClient {
   private readonly token?: string;
   private readonly timeoutMs: number;
   private readonly onNewJwt?: (jwt: string) => void;
+  private readonly retries: number;
+  private readonly assertTarget?: (baseUrl: string) => Promise<void>;
 
   constructor(baseUrl: string, token?: string, timeoutMs: number = DEFAULT_TIMEOUT_MS, opts: WikiClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.token = token;
     this.timeoutMs = timeoutMs;
     this.onNewJwt = opts.onNewJwt;
+    this.retries = opts.retries ?? MAX_RETRIES;
+    this.assertTarget = opts.assertTarget;
   }
 
   /** Forward a renewed user JWT (if any) to the session layer. Never throws. */
@@ -143,19 +271,21 @@ export class WikiClient {
     return `${this.baseUrl}/graphql`;
   }
 
-  /** Run a GraphQL request through the concurrency gate, with retry on connection failures. */
+  /**
+   * Run a GraphQL request with retry on connection failures. Every attempt takes
+   * its own concurrency slot, so a backoff never blocks other callers (R-47).
+   * Reads retry on any connection failure; writes only when nothing was sent (R-32).
+   * Never retried: timeouts, redirects, GraphQL errors, HTTP status.
+   */
   async request<T = any>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
-    return upstreamGate.run(() => this.sendWithRetry<T>(query, variables), this.timeoutMs);
-  }
-
-  private async sendWithRetry<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+    const readOnly = isReadOnlyDocument(query);
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.send<T>(query, variables);
+        return await upstreamGate.run(() => this.send<T>(query, variables), this.timeoutMs);
       } catch (err) {
-        // Retry ONLY on connection-level failures (request never reached the server → safe even
-        // for mutations). Never on timeouts / GraphQL errors / HTTP status.
-        if (attempt < MAX_RETRIES && err instanceof WikiConnectionError) {
+        const retryable =
+          err instanceof WikiConnectionError && !(err instanceof WikiRedirectError) && (readOnly || err.nothingSent);
+        if (attempt < this.retries && retryable) {
           await sleep(backoffMs(attempt));
           continue;
         }
@@ -165,34 +295,42 @@ export class WikiClient {
   }
 
   private async send<T = any>(query: string, variables: Record<string, unknown>): Promise<T> {
-    // Abort after timeoutMs so a hung Wiki.js never ties up a serverless invocation.
+    await this.assertTarget?.(this.baseUrl);
+    // Abort after timeoutMs — covering headers AND body — so a hung Wiki.js never
+    // ties up a serverless invocation or a concurrency slot (R-45).
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     let res: Response;
+    let raw: string;
     try {
-      res = await fetch(this.endpoint, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json',
-          ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
-        },
-        body: JSON.stringify({ query, variables }),
-        signal: controller.signal,
-      });
+      try {
+        res = await fetch(this.endpoint, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json',
+            ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
+          },
+          body: JSON.stringify({ query, variables }),
+          signal: controller.signal,
+          // GraphQL is answered directly; a redirect (e.g. to /login) is never legitimate (R-27).
+          redirect: 'error',
+        });
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') throw err;
+        throw fetchFailure(err, this.endpoint);
+      }
+      this.captureRenewedJwt(res);
+      raw = await readCapped(res, MAX_RESPONSE_BYTES);
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
         throw new Error(`Wiki.js request timed out after ${this.timeoutMs} ms (${this.endpoint}).`);
       }
-      throw new WikiConnectionError(
-        `Could not reach Wiki.js at ${this.endpoint}: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      throw err;
     } finally {
       clearTimeout(timer);
     }
 
-    this.captureRenewedJwt(res);
-    const raw = await res.text();
     let body: { data?: T; errors?: GraphQLErrorEntry[] };
     try {
       body = JSON.parse(raw);
@@ -226,6 +364,7 @@ export class WikiClient {
    */
   async download(path: string, maxBytes = Infinity): Promise<{ data: Uint8Array; mime: string }> {
     return upstreamGate.run(async () => {
+      await this.assertTarget?.(this.baseUrl);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       try {
@@ -235,6 +374,8 @@ export class WikiClient {
           signal: controller.signal,
           // Assets are served directly; a redirect (e.g. to /login) leaves the asset space.
           redirect: 'error',
+        }).catch((err) => {
+          throw err instanceof Error && err.name === 'AbortError' ? err : fetchFailure(err, url);
         });
         this.captureRenewedJwt(res);
         if (!res.ok) throw new Error(`Asset download failed: HTTP ${res.status} for ${path}`);
@@ -267,6 +408,7 @@ export class WikiClient {
     folderId?: number;
   }): Promise<{ succeeded: boolean; message?: string }> {
     return upstreamGate.run(async () => {
+      await this.assertTarget?.(this.baseUrl);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       try {
@@ -282,6 +424,7 @@ export class WikiClient {
           headers: { ...(this.token ? { authorization: `Bearer ${this.token}` } : {}) },
           body: form,
           signal: controller.signal,
+          redirect: 'error',
         });
         this.captureRenewedJwt(res);
         const text = (await res.text()).trim();
@@ -296,9 +439,7 @@ export class WikiClient {
         if (err instanceof Error && err.name === 'AbortError') {
           throw new Error(`Wiki.js upload timed out after ${this.timeoutMs} ms.`);
         }
-        throw new WikiConnectionError(
-          `Could not reach Wiki.js at ${this.baseUrl}/u: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        throw fetchFailure(err, `${this.baseUrl}/u`);
       } finally {
         clearTimeout(timer);
       }

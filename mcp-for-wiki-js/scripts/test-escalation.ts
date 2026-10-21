@@ -13,6 +13,7 @@ import type { WikiContext } from '../lib/context';
 import type { ToolDef } from '../lib/tools/types';
 import { ROLES, basePolicyFromEnv, roleConfig } from '../lib/permissions';
 import { WikiClient } from '../lib/wikijs/client';
+import { GuardrailError } from '../lib/guardrails';
 
 let pass = 0;
 let failed = 0;
@@ -42,6 +43,18 @@ function stubCtx(role: string, opts: { mime?: string } = {}): { ctx: WikiContext
         calls.requests.push(q);
         if (q.includes('users { create')) return { users: { create: { responseResult: { succeeded: true }, user: { id: 7 } } } };
         if (q.includes('users { update')) return { users: { update: { responseResult: { succeeded: true } } } };
+        if (q.includes('pages { create')) return { pages: { create: { responseResult: { succeeded: true }, page: { id: 1 } } } };
+        if (q.includes('pages { update')) return { pages: { update: { responseResult: { succeeded: true }, page: { id: 1 } } } };
+        if (q.includes('single(id:$id)')) {
+          return {
+            pages: {
+              single: {
+                path: 'a', locale: 'en', title: 'A', description: '', editor: 'markdown', isPublished: true,
+                isPrivate: false, content: 'x', tags: [], scriptCss: 'old-css', scriptJs: 'old-js',
+              },
+            },
+          };
+        }
         return { ok: true };
       },
       download: async (path: string) => {
@@ -55,6 +68,15 @@ function stubCtx(role: string, opts: { mime?: string } = {}): { ctx: WikiContext
     credentialKey: 'test',
   } as unknown as WikiContext;
   return { ctx, calls };
+}
+
+/** A handler outcome; a thrown refusal counts as isError (register.ts turns it into fail()). */
+async function settle(p: Promise<{ isError?: boolean }>): Promise<{ isError: boolean; guardrail: boolean }> {
+  try {
+    return { isError: (await p).isError === true, guardrail: false };
+  } catch (e) {
+    return { isError: true, guardrail: e instanceof GuardrailError };
+  }
 }
 
 async function main(): Promise<void> {
@@ -138,15 +160,16 @@ async function main(): Promise<void> {
 
   // moderator: manage_users=confirm, manage_groups=block
   let s = stubCtx('moderator');
-  const createAdmin = await create.handler({ ...userArgs, groups: [1], confirm: true }, s.ctx);
+  const createAdmin = await settle(create.handler({ ...userArgs, groups: [1], confirm: true }, s.ctx));
   check('R-12: moderator create with groups -> refused', createAdmin.isError === true && s.calls.requests.length === 0);
+  check('#2: the refusal is a GuardrailError (audited "blocked")', createAdmin.guardrail);
   s = stubCtx('moderator');
   check('R-12: moderator create without groups -> runs', !(await create.handler({ ...userArgs, groups: [], confirm: true }, s.ctx)).isError && s.calls.requests.length > 0);
   s = stubCtx('moderator');
-  const updAdmin = await update.handler({ id: 2, groups: [1], confirm: true }, s.ctx);
+  const updAdmin = await settle(update.handler({ id: 2, groups: [1], confirm: true }, s.ctx));
   check('R-12: moderator update with groups -> refused', updAdmin.isError === true && s.calls.requests.length === 0);
   s = stubCtx('moderator');
-  const strip = await update.handler({ id: 2, groups: [], confirm: true }, s.ctx);
+  const strip = await settle(update.handler({ id: 2, groups: [], confirm: true }, s.ctx));
   check('R-12: moderator update with groups: [] (strips memberships) -> refused', strip.isError === true && s.calls.requests.length === 0);
   s = stubCtx('moderator');
   check('R-12: moderator update without groups -> runs', !(await update.handler({ id: 2, name: 'x', confirm: true }, s.ctx)).isError && s.calls.requests.length > 0);
@@ -155,10 +178,46 @@ async function main(): Promise<void> {
   s = stubCtx('admin');
   const preview = await update.handler({ id: 2, groups: [1] }, s.ctx);
   check('R-12: admin update with groups, no confirm -> preview, nothing sent', !preview.isError && s.calls.requests.length === 0);
+  check('#2: the parameter dry run is marked _meta.dryRun', (preview._meta as { dryRun?: boolean } | undefined)?.dryRun === true);
   s = stubCtx('admin');
   check('R-12: admin update with groups + confirm -> runs', !(await update.handler({ id: 2, groups: [1], confirm: true }, s.ctx)).isError && s.calls.requests.length > 0);
   s = stubCtx('systemadmin');
   check('R-12: systemadmin create with groups -> runs', !(await create.handler({ ...userArgs, groups: [1] }, s.ctx)).isError && s.calls.requests.length > 0);
+
+  // ---- R-18: page scripts need manage_system -----------------------------------
+  const pCreate = tool('wiki_page_create');
+  const pUpdate = tool('wiki_page_update');
+  const pageArgs = { path: 'docs/x', title: 'X', content: 'body', description: '', editor: 'markdown', locale: 'en', tags: [], isPublished: true, isPrivate: false };
+  const mutated = (c: Calls) => c.requests.some((q) => q.startsWith('mutation'));
+
+  // autor: write=allow, manage_system=block
+  s = stubCtx('autor');
+  const xss = await settle(pCreate.handler({ ...pageArgs, scriptJs: 'alert(1)', confirm: true }, s.ctx));
+  check('R-18: autor create with scriptJs -> refused, nothing sent', xss.isError === true && s.calls.requests.length === 0);
+  check('#2: the script refusal is a GuardrailError (audited "blocked")', xss.guardrail);
+  s = stubCtx('autor');
+  const css = await settle(pUpdate.handler({ id: 1, scriptCss: 'body{}', confirm: true }, s.ctx));
+  check('R-18: autor update with scriptCss -> refused, nothing written', css.isError === true && !mutated(s.calls));
+  s = stubCtx('autor');
+  check('R-18: autor create without scripts -> runs', !(await pCreate.handler(pageArgs, s.ctx)).isError && mutated(s.calls));
+  s = stubCtx('autor');
+  check('R-18: autor content update (scripts carried over, not set) -> runs', !(await pUpdate.handler({ id: 1, content: 'new' }, s.ctx)).isError && mutated(s.calls));
+  // betreuer: manage_system=confirm
+  s = stubCtx('betreuer');
+  const scriptPreview = await pCreate.handler({ ...pageArgs, scriptJs: 'x()' }, s.ctx);
+  check('R-18: betreuer create with scriptJs, no confirm -> preview, nothing sent', !scriptPreview.isError && JSON.stringify(scriptPreview.content).includes('DRY RUN') && s.calls.requests.length === 0);
+  s = stubCtx('betreuer');
+  check('R-18: betreuer create with scriptJs + confirm -> runs', !(await pCreate.handler({ ...pageArgs, scriptJs: 'x()', confirm: true }, s.ctx)).isError && mutated(s.calls));
+  s = stubCtx('systemadmin');
+  check('R-18: systemadmin create with scriptJs -> runs', !(await pCreate.handler({ ...pageArgs, scriptJs: 'x()' }, s.ctx)).isError && mutated(s.calls));
+
+  // ---- R-19: no password echo ---------------------------------------------------
+  s = stubCtx('systemadmin');
+  const reset = await tool('wiki_user_reset_password').handler({ id: 2, newPassword: 'Very-Secret-123' }, s.ctx);
+  check('R-19: reset_password does not echo a caller-supplied password', !reset.isError && !JSON.stringify(reset).includes('Very-Secret-123'));
+  s = stubCtx('systemadmin');
+  const created = await create.handler({ ...userArgs, groups: [], passwordRaw: 'Init-Secret-456' }, s.ctx);
+  check('R-19: user_create does not echo passwordRaw', !created.isError && !JSON.stringify(created).includes('Init-Secret-456'));
 
   if (failed === 0) {
     console.log(`\n${pass} escalation assertions passed.`);

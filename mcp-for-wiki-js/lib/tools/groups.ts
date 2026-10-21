@@ -22,6 +22,7 @@ export const groupTools: ToolDef[] = [
     name: 'wiki_groups_list',
     description: 'List user groups.',
     category: 'manage_groups',
+    readOnly: true,
     inputSchema: { filter: z.string().optional(), orderBy: z.string().optional() },
     handler: async (a, ctx) => {
       const data = await ctx.client.request(
@@ -35,6 +36,7 @@ export const groupTools: ToolDef[] = [
     name: 'wiki_group_get',
     description: 'Get a single group including permissions, page rules and members.',
     category: 'manage_groups',
+    readOnly: true,
     inputSchema: { id: z.number().int() },
     handler: async (a, ctx) => {
       const data = await ctx.client.request(
@@ -107,6 +109,7 @@ export const groupTools: ToolDef[] = [
     name: 'wiki_group_delete',
     description: 'Delete a group by id.',
     category: 'manage_groups',
+    annotations: { destructiveHint: true },
     inputSchema: { id: z.number().int() },
     handler: async (a, ctx) => {
       const data = await ctx.client.request(

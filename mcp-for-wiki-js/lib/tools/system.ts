@@ -1,17 +1,7 @@
 import { z } from 'zod';
-import { Kind, parse } from 'graphql';
-import { ok, fail, assertOk } from '../wikijs/format';
+import { ok, fail, assertOk, dryRun, redactSecrets } from '../wikijs/format';
+import { isWriteDocument } from '../wikijs/client';
 import { DEFAULT_RESPONSE, type ToolDef } from './types';
-
-/**
- * Whether a GraphQL document can change state: any mutation/subscription
- * operation. Parsed, not pattern-matched — commas and comments are ignored
- * tokens, so a regex misses e.g. ",mutation{…}" (audit R-04). Throws on a
- * syntax error; the caller refuses to forward such a document.
- */
-function isWriteDocument(query: string): boolean {
-  return parse(query).definitions.some((d) => d.kind === Kind.OPERATION_DEFINITION && d.operation !== 'query');
-}
 
 export const systemTools: ToolDef[] = [
   // ------------------------------------------------------------- DIAGNOSTIC ---
@@ -52,6 +42,7 @@ export const systemTools: ToolDef[] = [
     name: 'wiki_site_config',
     description: 'Get the full site configuration.',
     category: 'manage_system',
+    readOnly: true,
     inputSchema: {},
     handler: async (_a, ctx) => {
       const data = await ctx.client.request(
@@ -64,6 +55,7 @@ export const systemTools: ToolDef[] = [
     name: 'wiki_system_info',
     description: 'Get system/runtime information (versions, host, database).',
     category: 'manage_system',
+    readOnly: true,
     inputSchema: {},
     handler: async (_a, ctx) => {
       const data = await ctx.client.request(
@@ -76,6 +68,7 @@ export const systemTools: ToolDef[] = [
     name: 'wiki_system_flags',
     description: 'List system feature flags.',
     category: 'manage_system',
+    readOnly: true,
     inputSchema: {},
     handler: async (_a, ctx) => {
       const data = await ctx.client.request(`query{ system { flags { key value } } }`);
@@ -88,6 +81,7 @@ export const systemTools: ToolDef[] = [
     name: 'wiki_apikeys_list',
     description: 'List Wiki.js API keys (metadata only — never the secret).',
     category: 'manage_auth',
+    readOnly: true,
     inputSchema: {},
     handler: async (_a, ctx) => {
       const data = await ctx.client.request(
@@ -136,6 +130,7 @@ export const systemTools: ToolDef[] = [
     name: 'wiki_auth_strategies',
     description: 'List active authentication strategies.',
     category: 'manage_auth',
+    readOnly: true,
     inputSchema: {},
     handler: async (_a, ctx) => {
       const data = await ctx.client.request(
@@ -183,8 +178,8 @@ export const systemTools: ToolDef[] = [
         return fail(`Invalid GraphQL document — nothing sent. ${e instanceof Error ? e.message : String(e)}`);
       }
       if (isMutation && a.confirm !== true) {
-        return ok(
-          { dryRun: true, operation: 'mutation', query: a.query, variables: a.variables ?? {} },
+        return dryRun(
+          { dryRun: true, operation: 'mutation', query: a.query, variables: redactSecrets(a.variables ?? {}) },
           '⚠️ Raw GraphQL MUTATION — DRY RUN, nothing executed. Review it, then call again with "confirm": true to run it.',
         );
       }

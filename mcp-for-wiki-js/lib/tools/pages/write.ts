@@ -1,8 +1,31 @@
 import { z } from 'zod';
-import { ok, assertOk } from '../../wikijs/format';
+import type { CallToolResult } from '@modelcontextprotocol/server';
+import type { WikiContext } from '../../context';
+import { ok, assertOk, assertNotTruncated } from '../../wikijs/format';
 import { DEFAULT_RESPONSE, type ToolDef } from '../types';
+import { parameterGate } from '../gate';
 import { assertPageIdNotBlocked, assertTagIdNotBlocked, assertTagsNotBlocked } from '../../guardrails';
 import { requirePageId } from './shared';
+
+/**
+ * Page JS/CSS runs for every visitor of the page (stored XSS in the wiki origin),
+ * so setting it needs the manage_system mode — policy key "wiki_page_scripts" —
+ * on top of the write category (audit R-18). Carrying existing scripts over on
+ * an update is not "setting" them.
+ */
+function scriptGate(a: { scriptJs?: string; scriptCss?: string; confirm?: unknown }, ctx: WikiContext): CallToolResult | undefined {
+  if (a.scriptJs === undefined && a.scriptCss === undefined) return undefined;
+  return parameterGate(ctx, {
+    policyKey: 'wiki_page_scripts',
+    category: 'manage_system',
+    what: '"scriptJs"/"scriptCss"',
+    confirm: a.confirm,
+    dryRun: { scriptJs: a.scriptJs, scriptCss: a.scriptCss },
+  });
+}
+
+const scriptField = (what: string) =>
+  z.string().optional().describe(`Page ${what}. Setting it needs the manage_system policy mode (it runs for every visitor).`);
 
 export const pageWriteTools: ToolDef[] = [
   {
@@ -19,10 +42,13 @@ export const pageWriteTools: ToolDef[] = [
       tags: z.array(z.string()).default([]),
       isPublished: z.boolean().default(true),
       isPrivate: z.boolean().default(false),
-      scriptCss: z.string().optional(),
-      scriptJs: z.string().optional(),
+      scriptCss: scriptField('CSS'),
+      scriptJs: scriptField('JavaScript'),
     },
     handler: async (a, ctx) => {
+      const gated = scriptGate(a, ctx);
+      if (gated) return gated;
+      assertNotTruncated(a.content);
       const data = await ctx.client.request(
         `mutation($content:String!,$description:String!,$editor:String!,$isPublished:Boolean!,$isPrivate:Boolean!,$locale:String!,$path:String!,$tags:[String]!,$title:String!,$scriptCss:String,$scriptJs:String){ pages { create(content:$content,description:$description,editor:$editor,isPublished:$isPublished,isPrivate:$isPrivate,locale:$locale,path:$path,tags:$tags,title:$title,scriptCss:$scriptCss,scriptJs:$scriptJs){ ${DEFAULT_RESPONSE} page { id path title } } } }`,
         {
@@ -63,13 +89,16 @@ export const pageWriteTools: ToolDef[] = [
       path: z.string().optional().describe('New path (renames the page).'),
       isPublished: z.boolean().optional(),
       isPrivate: z.boolean().optional(),
-      scriptCss: z.string().optional(),
-      scriptJs: z.string().optional(),
+      scriptCss: scriptField('CSS'),
+      scriptJs: scriptField('JavaScript'),
     },
     handler: async (a, ctx) => {
       if (a.content != null && a.edits && a.edits.length > 0) {
         throw new Error('Provide either "content" or "edits", not both.');
       }
+      const gated = scriptGate(a, ctx);
+      if (gated) return gated;
+      assertNotTruncated(a.content);
       // Fetch the current page so omitted fields are preserved. Wiki.js' update
       // mutation otherwise clears unspecified required fields (content, tags, ...).
       type Cur = {
@@ -135,17 +164,28 @@ export const pageWriteTools: ToolDef[] = [
       path: z.string().optional().describe('Current page path (alternative to id).'),
       locale: z.string().default('en').describe('Current locale (for path lookup).'),
       destinationPath: z.string().min(1),
-      destinationLocale: z.string().default('en'),
+      destinationLocale: z.string().optional().describe('Target locale. Default: the page keeps its current locale.'),
     },
     handler: async (a, ctx) => {
       const id = await requirePageId(ctx, a);
       await assertPageIdNotBlocked(ctx, id, `Page ${id}`);
+      // Without an explicit target the page stays in its own locale (audit R-29).
+      let destinationLocale: string | undefined = a.destinationLocale;
+      if (!destinationLocale && a.id == null) destinationLocale = a.locale ?? 'en';
+      if (!destinationLocale) {
+        const cur = await ctx.client.request<{ pages: { single: { locale: string } | null } }>(
+          `query($id:Int!){ pages { single(id:$id){ locale } } }`,
+          { id },
+        );
+        if (!cur.pages.single) throw new Error(`No page with id ${id}`);
+        destinationLocale = cur.pages.single.locale;
+      }
       const data = await ctx.client.request(
         `mutation($id:Int!,$destinationPath:String!,$destinationLocale:String!){ pages { move(id:$id,destinationPath:$destinationPath,destinationLocale:$destinationLocale){ ${DEFAULT_RESPONSE} } } }`,
-        { id, destinationPath: a.destinationPath, destinationLocale: a.destinationLocale ?? 'en' },
+        { id, destinationPath: a.destinationPath, destinationLocale },
       );
       assertOk(data.pages.move.responseResult, 'Move page');
-      return ok({ id, destinationPath: a.destinationPath }, '✅ Page moved.');
+      return ok({ id, destinationPath: a.destinationPath, destinationLocale }, '✅ Page moved.');
     },
   },
   {
@@ -154,6 +194,7 @@ export const pageWriteTools: ToolDef[] = [
     category: 'write',
     inputSchema: { id: z.number().int() },
     handler: async (a, ctx) => {
+      await assertPageIdNotBlocked(ctx, a.id, `Page ${a.id}`);
       const data = await ctx.client.request(
         `mutation($id:Int!){ pages { render(id:$id){ ${DEFAULT_RESPONSE} } } }`,
         { id: a.id },
@@ -166,6 +207,7 @@ export const pageWriteTools: ToolDef[] = [
     name: 'wiki_page_restore',
     description: 'Restore a page to a previous version.',
     category: 'write',
+    annotations: { destructiveHint: true },
     inputSchema: { pageId: z.number().int(), versionId: z.number().int() },
     handler: async (a, ctx) => {
       await assertPageIdNotBlocked(ctx, a.pageId, `Page ${a.pageId}`);

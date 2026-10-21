@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { ok, assertOk } from '../wikijs/format';
 import { DEFAULT_RESPONSE, type ToolDef } from './types';
+import { assertNotInBlockedSet } from '../guardrails';
+
+// Tag guardrail (audit R-27): list (by path) and create (by pageId) are checked.
+// CommentPost exposes no pageId, so single/update/delete by comment id cannot be
+// mapped to their page via GraphQL — documented limitation.
 
 // authorEmail is deliberately excluded: it is PII (incl. guest emails) that an
 // agent listing comments rarely needs, and it would flow into the model context
@@ -14,6 +19,7 @@ export const commentTools: ToolDef[] = [
     category: 'read',
     inputSchema: { path: z.string().min(1), locale: z.string().default('en') },
     handler: async (a, ctx) => {
+      await assertNotInBlockedSet(ctx, { path: a.path }, `Comments of page ${a.path}`);
       const data = await ctx.client.request(
         `query($locale:String!,$path:String!){ comments { list(locale:$locale,path:$path){ ${COMMENT_FIELDS} } } }`,
         { locale: a.locale ?? 'en', path: a.path },
@@ -46,6 +52,7 @@ export const commentTools: ToolDef[] = [
       guestEmail: z.string().email().optional(),
     },
     handler: async (a, ctx) => {
+      await assertNotInBlockedSet(ctx, { id: a.pageId }, `Page ${a.pageId}`);
       const data = await ctx.client.request(
         `mutation($pageId:Int!,$replyTo:Int,$content:String!,$guestName:String,$guestEmail:String){ comments { create(pageId:$pageId,replyTo:$replyTo,content:$content,guestName:$guestName,guestEmail:$guestEmail){ ${DEFAULT_RESPONSE} id } } }`,
         { pageId: a.pageId, replyTo: a.replyTo, content: a.content, guestName: a.guestName, guestEmail: a.guestEmail },

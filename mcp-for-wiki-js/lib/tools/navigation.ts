@@ -49,6 +49,7 @@ export const navigationTools: ToolDef[] = [
       'DELETES that navigation. The current tree is always returned as a rollback payload; a change ' +
       'that would remove or empty existing navigation is REFUSED unless you pass force=true.',
     category: 'manage_system',
+    annotations: { destructiveHint: true },
     inputSchema: {
       tree: z
         .array(

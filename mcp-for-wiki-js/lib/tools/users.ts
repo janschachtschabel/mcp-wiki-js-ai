@@ -1,8 +1,9 @@
 import { randomBytes } from 'crypto';
 import { z } from 'zod';
 import type { CallToolResult } from '@modelcontextprotocol/server';
-import { ok, fail, assertOk } from '../wikijs/format';
+import { ok, assertOk } from '../wikijs/format';
 import { DEFAULT_RESPONSE, type ToolDef } from './types';
+import { parameterGate } from './gate';
 import type { WikiContext } from '../context';
 
 /**
@@ -13,17 +14,13 @@ import type { WikiContext } from '../context';
  */
 function groupAssignmentGate(groups: number[] | undefined, confirm: unknown, ctx: WikiContext): CallToolResult | undefined {
   if (groups === undefined) return undefined;
-  const mode = ctx.policy.resolve('wiki_group_assign_user', 'manage_groups');
-  if (mode === 'block') {
-    return fail('Setting "groups" is blocked by the active permission policy (category: manage_groups). Omit "groups".');
-  }
-  if (mode === 'confirm' && confirm !== true) {
-    return ok(
-      { dryRun: true, groups },
-      '⚠️ Confirmation required — setting "groups" is gated by policy (category: manage_groups). DRY RUN, nothing changed. Call again with "confirm": true.',
-    );
-  }
-  return undefined;
+  return parameterGate(ctx, {
+    policyKey: 'wiki_group_assign_user',
+    category: 'manage_groups',
+    what: '"groups"',
+    confirm,
+    dryRun: { groups },
+  });
 }
 
 /** Strong random password: base64url entropy + one char of each class (password-policy compliance). */
@@ -41,11 +38,12 @@ const USER_MINIMAL = 'id name email providerKey isSystem isActive createdAt last
 const USER_SEARCH_FIELDS = 'id name email providerKey createdAt';
 
 /** Simple id-only mutations that return a DefaultResponse. */
-function userIdMutation(name: string, field: string, label: string, verb: string): ToolDef {
+function userIdMutation(name: string, field: string, label: string, verb: string, annotations?: ToolDef['annotations']): ToolDef {
   return {
     name,
     description: `${label} a user by id.`,
     category: 'manage_users',
+    ...(annotations ? { annotations } : {}),
     inputSchema: { id: z.number().int() },
     handler: async (a, ctx: WikiContext) => {
       const data = await ctx.client.request(
@@ -65,6 +63,7 @@ export const userTools: ToolDef[] = [
     name: 'wiki_users_list',
     description: 'List users.',
     category: 'manage_users',
+    readOnly: true,
     inputSchema: {
       filter: z.string().optional(),
       orderBy: z.string().optional(),
@@ -81,6 +80,7 @@ export const userTools: ToolDef[] = [
     name: 'wiki_users_search',
     description: 'Search users by name or email.',
     category: 'manage_users',
+    readOnly: true,
     inputSchema: { query: z.string().min(1) },
     handler: async (a, ctx) => {
       const data = await ctx.client.request(
@@ -94,6 +94,7 @@ export const userTools: ToolDef[] = [
     name: 'wiki_user_get',
     description: 'Get a single user with full profile and group memberships.',
     category: 'manage_users',
+    readOnly: true,
     inputSchema: { id: z.number().int() },
     handler: async (a, ctx) => {
       const data = await ctx.client.request(
@@ -119,6 +120,7 @@ export const userTools: ToolDef[] = [
     name: 'wiki_users_last_logins',
     description: 'List the most recent user logins.',
     category: 'manage_users',
+    readOnly: true,
     inputSchema: {},
     handler: async (_a, ctx) => {
       const data = await ctx.client.request(`query{ users { lastLogins { id name lastLoginAt } } }`);
@@ -210,6 +212,7 @@ export const userTools: ToolDef[] = [
     name: 'wiki_user_delete',
     description: 'Delete a user. Content owned by the user is reassigned to replaceId.',
     category: 'manage_users',
+    annotations: { destructiveHint: true },
     inputSchema: {
       id: z.number().int(),
       replaceId: z.number().int().describe('User id that inherits the deleted user\'s content.'),
@@ -248,13 +251,15 @@ export const userTools: ToolDef[] = [
         { id: a.id, newPassword },
       );
       assertOk(data.users.update.responseResult, 'Reset password');
-      return ok(
-        { id: a.id, newPassword, generated },
-        generated
-          ? '✅ Password reset to a generated value (shown once above — share it securely; the user should change it).'
-          : '✅ Password reset.',
-      );
+      // A caller-supplied password is never echoed (audit R-19). A generated one is
+      // returned once — like an API key on creation — since nobody else knows it.
+      return generated
+        ? ok(
+            { id: a.id, newPassword, generated },
+            '✅ Password reset to a generated value (shown once above — share it securely; the user should change it).',
+          )
+        : ok({ id: a.id, generated }, '✅ Password reset.');
     },
   },
-  userIdMutation('wiki_user_disable_tfa', 'disableTFA', 'Disable 2FA for', '2FA disabled'),
+  userIdMutation('wiki_user_disable_tfa', 'disableTFA', 'Disable 2FA for', '2FA disabled', { destructiveHint: true }),
 ];

@@ -48,7 +48,16 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ? { pages: { single: { tags: [{ tag: 'kein-ki' }] } } }
       : body.includes('pages { tags { id tag } }')
         ? { pages: { tags: [{ id: 3, tag: 'kein-ki' }] } } // tag id 3 is the guardrail tag
-        : {};
+        : body.includes('list(locale:$locale)')
+          ? {
+              pages: {
+                list: [
+                  { id: 11, path: 'drafts/a', locale: 'en', title: 'A' },
+                  { id: 12, path: 'drafts/sub/b', locale: 'en', title: 'B' },
+                ],
+              },
+            }
+          : {};
     return new Response(JSON.stringify({ data }), { status: 200, headers: { 'content-type': 'application/json' } });
   }
   return realFetch(input, init);
@@ -80,15 +89,16 @@ async function rpcResult(res: Response): Promise<{ isError?: boolean; content?: 
   return (JSON.parse(json) as { result?: Record<string, any> }).result ?? {};
 }
 
-/** One representative tool per category (simple args, no guardrail pre-fetch). */
+/** One representative tool per category (simple args, no guardrail pre-fetch). The manage_*
+ *  probes are state-changing tools: read-only manage_* tools are not audited (R-56, tested below). */
 const PROBES: Record<Category, { tool: string; args: Record<string, unknown> }> = {
   read: { tool: 'wiki_site_info', args: {} },
   write: { tool: 'wiki_asset_create_folder', args: { slug: 'gate-test' } },
   delete: { tool: 'wiki_asset_delete', args: { id: 1 } },
-  manage_users: { tool: 'wiki_users_list', args: {} },
-  manage_groups: { tool: 'wiki_groups_list', args: {} },
-  manage_system: { tool: 'wiki_system_info', args: {} },
-  manage_auth: { tool: 'wiki_apikeys_list', args: {} },
+  manage_users: { tool: 'wiki_user_activate', args: { id: 1 } },
+  manage_groups: { tool: 'wiki_group_create', args: { name: 'gate-test' } },
+  manage_system: { tool: 'wiki_pages_flush_cache', args: {} },
+  manage_auth: { tool: 'wiki_apikey_revoke', args: { id: 1 } },
 };
 
 type Mode = 'allow' | 'confirm' | 'block';
@@ -170,6 +180,90 @@ async function main(): Promise<void> {
   check('guardrail: deleting the guardrail tag itself is refused', t.result.isError === true && /protected AI-guardrail tag/.test(t.text));
   check('guardrail: tag-delete refusal is audited as "blocked"', t.audit.some((a) => a.tool === 'wiki_tag_delete' && a.outcome === 'blocked'));
   delete process.env.WIKIJS_BLOCKED_TAGS;
+
+  // ---- R-34: a read tool in "confirm" mode can be confirmed ---------------------
+  const readConfirm = { 'x-wikijs-policy': JSON.stringify({ categories: { read: 'confirm' } }) };
+  const rc = await run('wiki_site_info', {}, readConfirm);
+  check('R-34: read=confirm -> preview first', /Confirmation required/.test(rc.text) && rc.upstream === 0);
+  const rcOk = await run('wiki_site_info', { confirm: true }, readConfirm);
+  check('R-34: read=confirm + confirm=true -> executes', rcOk.upstream > 0 && !/Confirmation required/.test(rcOk.text));
+
+  // ---- R-56: read-only manage_* tools: same policy mode, but not audited --------
+  const ro = await run('wiki_users_list', {}, {});
+  check('R-56: users_list (allow) executes without an audit line', ro.upstream > 0 && ro.audit.length === 0);
+  const roConfirm = await run('wiki_users_list', {}, { 'x-wikijs-preset': 'wiki' });
+  check('R-56: users_list keeps manage_users=confirm (policy not loosened)', /Confirmation required/.test(roConfirm.text) && roConfirm.upstream === 0);
+  const roConfirmed = await run('wiki_system_info', { confirm: true }, { 'x-wikijs-preset': 'wiki' });
+  check('R-56: confirmed system_info executes without an audit line', roConfirmed.upstream > 0 && roConfirmed.audit.length === 0);
+  const roBlocked = await run('wiki_groups_list', {}, { 'x-wikijs-preset': 'safe' });
+  check('R-56: groups_list keeps manage_groups=block', roBlocked.result.isError === true && roBlocked.upstream === 0);
+
+  // ---- R-19: secrets are redacted in confirm previews ---------------------------
+  const pw = await run('wiki_user_create', { email: 'a@example.org', name: 'A', passwordRaw: 'Init-Secret-456' }, { 'x-wikijs-preset': 'wiki' });
+  check('R-19: preview hides passwordRaw', /Confirmation required/.test(pw.text) && !pw.text.includes('Init-Secret-456') && /redacted/.test(pw.text));
+  const npw = await run('wiki_user_update', { id: 2, newPassword: 'New-Secret-789' }, { 'x-wikijs-preset': 'wiki' });
+  check('R-19: preview hides newPassword', /Confirmation required/.test(npw.text) && !npw.text.includes('New-Secret-789'));
+  const blob = 'QUJD'.repeat(2000);
+  const up = await run('wiki_asset_upload', { filename: 'a.bin', contentBase64: blob }, { 'x-wikijs-preset': 'safe' });
+  check('R-19: preview shortens contentBase64', /Confirmation required/.test(up.text) && !up.text.includes(blob) && up.text.includes('8000'));
+
+  // ---- R-06: confirm preview shows the pages a bulk delete would hit ------------
+  upstreamBodies.length = 0;
+  const pv = await run('wiki_pages_delete_batch', { pathPattern: 'drafts/*' }, { 'x-wikijs-preset': 'wiki' });
+  check(
+    'R-06: batch-delete preview lists the resolved targets',
+    /Confirmation required/.test(pv.text) && pv.text.includes('en/drafts/a') && !pv.text.includes('drafts/sub/b') && /"count": 1/.test(pv.text),
+  );
+  check('R-06: the preview deletes nothing', !upstreamBodies.some((b) => b.includes('delete(id:$id)')) && pv.audit.length === 0);
+
+  // ---- Review 2026-10-21 #2: parameter gates audit like the tool gate ----------
+  const groupsBlocked = { 'x-wikijs-policy': JSON.stringify({ categories: { manage_groups: 'block' } }) };
+  const gb = await run('wiki_user_update', { id: 2, groups: [1] }, groupsBlocked);
+  check('#2: blocked "groups" parameter -> refused, nothing sent', gb.result.isError === true && /blocked by the active permission policy/.test(gb.text) && gb.upstream === 0);
+  check('#2: blocked parameter is audited as "blocked" (not "error")', gb.audit.length === 1 && gb.audit[0].outcome === 'blocked');
+  const groupsConfirm = { 'x-wikijs-policy': JSON.stringify({ categories: { manage_groups: 'confirm' } }) };
+  const gc = await run('wiki_user_update', { id: 2, groups: [1] }, groupsConfirm);
+  check('#2: confirm-gated parameter -> dry run, nothing sent', /DRY RUN/.test(gc.text) && gc.upstream === 0);
+  check('#2: parameter dry run is not audited as an execution', gc.audit.length === 0);
+  const gcOk = await run('wiki_user_update', { id: 2, groups: [1], confirm: true }, groupsConfirm);
+  check('#2: confirmed parameter executes and is audited', gcOk.upstream > 0 && gcOk.audit.length === 1 && gcOk.audit[0].outcome !== 'blocked');
+  const gqlDry = await run('wiki_graphql', { query: 'mutation { pages { delete(id: 1) { responseResult { succeeded } } } }' }, {});
+  check('#2: wiki_graphql mutation dry run -> nothing sent, not audited', /DRY RUN/.test(gqlDry.text) && gqlDry.upstream === 0 && gqlDry.audit.length === 0);
+
+  // ---- Review 2026-10-21 #6: nested secrets are redacted in previews ------------
+  const nested = {
+    query: 'mutation($i: UserInput) { users { create(input: $i) { responseResult { succeeded } } } }',
+    variables: { passwordRaw: 'Top-Secret-111', input: { email: 'x@example.org', passwordRaw: 'Nested-Secret-222' }, list: [{ newPassword: 'Array-Secret-333' }] },
+  };
+  const secrets = ['Top-Secret-111', 'Nested-Secret-222', 'Array-Secret-333'];
+  const np = await run('wiki_graphql', nested, { 'x-wikijs-policy': JSON.stringify({ categories: { manage_system: 'confirm' } }) });
+  check('#6: confirm preview redacts nested secrets', /Confirmation required/.test(np.text) && secrets.every((x) => !np.text.includes(x)) && np.text.includes('x@example.org'));
+  const nd = await run('wiki_graphql', nested, {});
+  check('#6: wiki_graphql own dry run redacts secrets in variables', /DRY RUN/.test(nd.text) && secrets.every((x) => !nd.text.includes(x)) && nd.text.includes('x@example.org'));
+
+  // ---- R-38 / R-56 / R-34: advertised tool metadata -----------------------------
+  const listRes = await POST(
+    new Request('http://mcp.test/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+    }),
+  );
+  const listed = ((await rpcResult(listRes)) as { tools?: Array<{ name: string; annotations?: Record<string, unknown>; inputSchema?: { properties?: Record<string, unknown> } }> }).tools ?? [];
+  const meta = (name: string) => listed.find((t) => t.name === name);
+  for (const name of ['wiki_user_delete', 'wiki_group_delete', 'wiki_user_disable_tfa', 'wiki_page_restore', 'wiki_navigation_update_tree']) {
+    check(`R-38: ${name} carries destructiveHint`, meta(name)?.annotations?.destructiveHint === true);
+  }
+  for (const name of ['wiki_users_list', 'wiki_system_info', 'wiki_apikeys_list', 'wiki_group_get']) {
+    const a = meta(name)?.annotations ?? {};
+    check(`R-56: ${name} is readOnlyHint, not destructive`, a.readOnlyHint === true && a.destructiveHint !== true);
+  }
+  check('R-56: wiki_graphql (can mutate) is not marked read-only', meta('wiki_graphql')?.annotations?.readOnlyHint !== true);
+  check('R-34: read tools advertise the confirm field', !!meta('wiki_site_info')?.inputSchema?.properties?.confirm);
+
+  // ---- R-20: server instructions mark wiki content as data ----------------------
+  const { INSTRUCTIONS } = await import('../lib/meta');
+  check('R-20: INSTRUCTIONS say wiki content is data, not instructions', /untrusted/i.test(INSTRUCTIONS) && /not (as )?instructions/i.test(INSTRUCTIONS));
 
   globalThis.fetch = realFetch;
   console.log = realLog;
