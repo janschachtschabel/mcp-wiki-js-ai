@@ -35,7 +35,7 @@ function throws(fn: () => unknown): boolean {
 }
 
 async function main(): Promise<void> {
-  const { resolveContext } = await import('../lib/context');
+  const { resolveContext, toolExtraFromServerContext } = await import('../lib/context');
   const h = (headers: Record<string, string>) => resolveContext({ requestInfo: { headers } });
 
   // 1. Profile handle (via X-Wikijs-Token) -> label exposed, secret NEVER echoed, role applied
@@ -98,6 +98,18 @@ async function main(): Promise<void> {
   const d = h({ 'x-wikijs-token': 'secret-handle-B', 'x-wikijs-preset': 'readonly' });
   check('request preset "readonly" tightens redakteur: write -> block', d.policy.resolve('wiki_page_create', 'write') === 'block');
   check('request preset "readonly": read stays allow', d.policy.resolve('wiki_pages_list', 'read') === 'allow');
+
+  // 5. MCP SDK v2 handler context (ctx.http.req / ctx.http.authInfo) → ToolExtra.
+  const v2 = toolExtraFromServerContext({
+    http: {
+      req: new Request('https://mcp.example/mcp', { headers: { 'X-Wikijs-Token': 'secret-handle-A' } }),
+      authInfo: { token: 'jwt', extra: { oauth: true } },
+    },
+  });
+  check('sdk v2 ctx: headers lower-cased into requestInfo', v2.requestInfo?.headers?.['x-wikijs-token'] === 'secret-handle-A');
+  check('sdk v2 ctx: authInfo passed through', v2.authInfo?.token === 'jwt');
+  check('sdk v2 ctx: profile resolves via adapted headers', resolveContext({ requestInfo: v2.requestInfo }).profile === 'Alice');
+  check('sdk v2 ctx: no http (stdio) → empty extra', toolExtraFromServerContext({}).requestInfo === undefined);
 
   if (failed === 0) {
     console.log(`\n${pass} context-resolution assertions passed.`);

@@ -158,7 +158,7 @@ export const systemTools: ToolDef[] = [
     category: 'manage_system',
     inputSchema: {
       query: z.string().min(1).describe('GraphQL query or mutation document.'),
-      variables: z.record(z.any()).optional().describe('Variables object for the query.'),
+      variables: z.record(z.string(), z.any()).optional().describe('Variables object for the query.'),
     },
     handler: async (a, ctx) => {
       // The escape hatch can run ANY mutation (delete pages, wipe navigation, revoke API keys, …).

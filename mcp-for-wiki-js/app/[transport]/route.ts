@@ -31,13 +31,8 @@ const mcp = createMcpHandler(
   {
     serverInfo: SERVER_INFO,
     instructions: INSTRUCTIONS,
-  },
-  {
-    // Routing lives at app/[transport]/route.ts → streamable HTTP endpoint is /mcp.
-    basePath: '',
-    // SSE needs Redis and is deprecated by the MCP spec; keep only Streamable HTTP.
-    disableSse: true,
-    maxDuration: 60,
+    // mcp-handler 2.x serves Streamable HTTP only (no SSE/Redis) and no longer
+    // routes by pathname — handler() below restricts this catch-all to /mcp.
     verboseLogs: process.env.WIKIJS_MCP_VERBOSE === 'true',
   },
 );
@@ -87,6 +82,8 @@ const QUERY_TO_HEADER: Array<[aliases: string[], header: string, guard: string[]
 
 async function handler(req: Request): Promise<Response> {
   const url = new URL(req.url);
+  // app/[transport] matches every single-segment path; only /mcp is the MCP endpoint.
+  if (url.pathname !== '/mcp') return new Response('Not Found', { status: 404 });
   const params = url.searchParams;
 
   let request = req;

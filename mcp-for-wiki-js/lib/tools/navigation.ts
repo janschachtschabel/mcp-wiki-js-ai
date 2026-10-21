@@ -54,7 +54,7 @@ export const navigationTools: ToolDef[] = [
         .array(
           z.object({
             locale: z.string(),
-            items: z.array(z.record(z.any())),
+            items: z.array(z.record(z.string(), z.any())),
           }),
         )
         .describe('Full navigation tree to set (REPLACES everything — include every locale you want to keep).'),

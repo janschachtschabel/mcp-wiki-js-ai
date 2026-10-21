@@ -358,7 +358,7 @@ scripts/           gen-profile.mjs (Handle-Generator) · show-roles.ts · smoke*
                    test-{policy,nav,semaphore,context}.ts (offline) · test-local-live.ts (live)
 ```
 
-**Stack:** Next.js (App Router) · `mcp-handler` · `@modelcontextprotocol/sdk` · `zod`. Stateless → Vercel-nativ.
+**Stack:** Next.js (App Router) · `mcp-handler` 2 · `@modelcontextprotocol/server` (MCP SDK v2) · `zod` 4. Stateless → Vercel-nativ.
 
 ---
 

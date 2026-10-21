@@ -2,7 +2,7 @@
 const nextConfig = {
   reactStrictMode: true,
   // The MCP SDK ships ESM with subpath exports; let Next transpile it cleanly.
-  transpilePackages: ['@modelcontextprotocol/sdk', 'mcp-handler'],
+  transpilePackages: ['@modelcontextprotocol/server', 'mcp-handler'],
   // Self-contained server bundle for the Docker image (node .next/standalone/server.js).
   output: 'standalone',
   // The authorize and /me pages must not be framed (clickjacking of the consent button).

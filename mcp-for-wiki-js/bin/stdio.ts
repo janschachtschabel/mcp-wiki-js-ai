@@ -8,8 +8,8 @@
  * Run with:  npm run stdio        (uses tsx)
  *        or: node --import tsx bin/stdio.ts
  */
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { McpServer } from '@modelcontextprotocol/server';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { registerAll } from '../lib/register';
 import { SERVER_INFO, INSTRUCTIONS } from '../lib/meta';
 

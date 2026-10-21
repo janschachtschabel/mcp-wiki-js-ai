@@ -35,10 +35,24 @@ export function basePolicy(): Policy {
   return BASE_POLICY;
 }
 
-/** Shape of `extra` passed to MCP tool handlers (only the bits we use). */
+/** The per-call inputs resolveContext needs: request headers + verified auth (if any). */
 export interface ToolExtra {
   requestInfo?: { headers?: Record<string, string | string[] | undefined> };
   authInfo?: { token?: string; extra?: Record<string, unknown> };
+}
+
+/**
+ * Map the MCP SDK v2 handler context (`ctx.http.req` / `ctx.http.authInfo`) onto
+ * ToolExtra. Header names are lower-cased by the Fetch `Headers` iterator.
+ */
+export function toolExtraFromServerContext(ctx: {
+  http?: { req?: { headers: Headers }; authInfo?: ToolExtra['authInfo'] };
+}): ToolExtra {
+  const req = ctx.http?.req;
+  return {
+    requestInfo: req ? { headers: Object.fromEntries(req.headers.entries()) } : undefined,
+    authInfo: ctx.http?.authInfo,
+  };
 }
 
 /**

@@ -1,5 +1,5 @@
 import type { ZodRawShape } from 'zod';
-import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/server';
 import type { Category } from '../permissions';
 import type { WikiContext } from '../context';
 

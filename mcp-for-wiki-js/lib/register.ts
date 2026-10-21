@@ -1,8 +1,7 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type { McpServer, ServerContext, CallToolResult, ToolAnnotations } from '@modelcontextprotocol/server';
 import { allTools, type ToolDef } from './tools/index';
-import { resolveContext, basePolicy, type ToolExtra } from './context';
+import { resolveContext, basePolicy, toolExtraFromServerContext } from './context';
 import { fail } from './wikijs/format';
 import type { Category } from './permissions';
 
@@ -99,16 +98,16 @@ export function registerAll(server: McpServer): void {
       {
         title: tool.title ?? tool.name,
         description: describe(tool, confirmable),
-        inputSchema: shape,
+        inputSchema: z.object(shape),
         annotations: annotationsFor(tool),
       },
-      async (args: Record<string, unknown>, extra: ToolExtra): Promise<CallToolResult> => {
+      async (args: Record<string, unknown>, serverCtx: ServerContext): Promise<CallToolResult> => {
         const startedAt = Date.now();
         let profile: string | undefined;
         let sessionId: string | undefined;
         let outcome = 'preview';
         try {
-          const ctx = resolveContext(extra);
+          const ctx = resolveContext(toolExtraFromServerContext(serverCtx));
           profile = ctx.profile;
           sessionId = ctx.sessionId;
           const mode = ctx.policy.resolve(tool.name, tool.category);
