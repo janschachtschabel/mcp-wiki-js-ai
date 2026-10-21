@@ -6,7 +6,7 @@
  * jederzeit erneut laufen.
  *
  *   1. Wiki.js finalisieren (Admin-Konto anlegen), falls noch im Setup-Modus
- *   2. Startseite anlegen, falls keine existiert
+ *   2. Startseite + Anwender-Anleitung /ki-zugang anlegen, falls nicht vorhanden
  *   3. PostgreSQL-Suchmaschine aktivieren (bessere Agenten-Suche) + Index-Rebuild
  *   4. optional --locale=de   Standardsprache umstellen + Seiten migrieren
  *   5. optional --demo        Gruppe "Team" (lesen/schreiben, kein Löschen)
@@ -16,7 +16,9 @@
  *   ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='...' \
  *     node deploy/scripts/bootstrap.mjs [--locale=de] [--demo]
  *
- * Env: WIKI_URL (Default http://localhost:8090), ADMIN_EMAIL, ADMIN_PASSWORD,
+ * Env: WIKI_URL (Default http://localhost:8090) — in Produktion die ÖFFENTLICHE
+ *      Adresse, sie steht als Connector-URL auf der Seite /ki-zugang.
+ *      ADMIN_EMAIL, ADMIN_PASSWORD,
  *      DEMO_EMAIL/DEMO_PASSWORD/DEMO_NAME (nur mit --demo, haben Defaults).
  */
 
@@ -83,10 +85,23 @@ async function adminLogin() {
   return l.jwt;
 }
 
-/** Step 1 — finalize the first-run setup unless an admin login already works. */
+/**
+ * Setup mode answers every GET with the setup page (HTML); the normal server
+ * answers /healthz with JSON. Probing /graphql instead would 404 in setup mode
+ * and crash Wiki.js' own error handler (TypeError …'sendError' in the log).
+ */
+async function isSetupMode() {
+  const r = await fetch(`${WIKI_URL}/healthz`);
+  // Status 200 too: a proxy's or Wiki.js' own HTML error page is not the setup page.
+  return r.status === 200 && (r.headers.get('content-type') ?? '').includes('text/html');
+}
+
+/** Step 1 — finalize the first-run setup, or log in to an already set-up wiki. */
 async function ensureFinalized() {
-  let jwt = await adminLogin().catch(() => null);
-  if (jwt) {
+  let jwt;
+  if (!(await isSetupMode())) {
+    jwt = await adminLogin();
+    if (!jwt) throw new Error('Wiki.js ist bereits eingerichtet, aber der Admin-Login schlägt fehl — ADMIN_EMAIL/ADMIN_PASSWORD prüfen.');
     log('Wiki.js ist bereits eingerichtet (Admin-Login funktioniert).');
     return jwt;
   }
@@ -102,34 +117,77 @@ async function ensureFinalized() {
   // Wiki.js restarts itself after finalize; wait until the login works.
   for (let i = 0; i < 40; i++) {
     await sleep(3000);
+    if (await isSetupMode().catch(() => true)) continue; // still restarting
     jwt = await adminLogin().catch(() => null);
     if (jwt) return jwt;
   }
   throw new Error('Wiki.js kam nach dem Setup nicht zurück.');
 }
 
-/** Step 2 — a home page, so the site does not greet users with the setup screen. */
-async function ensureHomePage(jwt) {
-  const found = await gql(
-    'query{ pages { list { id path locale } } }', {}, jwt,
-  );
-  if (found.pages.list.some((p) => p.path === 'home')) {
-    log('Startseite existiert.');
+/**
+ * Create a page unless one with this path exists in any locale (existing pages
+ * are never overwritten — admins may have edited them). New pages go into the
+ * wiki's CURRENT default locale, so re-runs on a German wiki stay reachable.
+ */
+async function ensurePage(jwt, { path, title, description, content }) {
+  const found = await gql('query{ pages { list { path } } }', {}, jwt);
+  if (found.pages.list.some((p) => p.path === path)) {
+    log(`Seite /${path} existiert.`);
     return;
   }
-  const content = [
-    '# Team-Wissensspeicher',
-    '',
-    'Willkommen! Dieses Wiki können Menschen **und KI-Assistenten** nutzen — jeweils mit den persönlichen Rechten.',
-    '',
-    '- KI-Zugang einrichten: siehe Seite `/ki-zugang` (bzw. `/me` für deine Verbindungen)',
-    '- Inhalte anlegen: oben rechts **Neue Seite**',
-  ].join('\n');
-  await gql(
-    `mutation($content:String!){ pages { create(content:$content,description:"Startseite",editor:"markdown",isPublished:true,isPrivate:false,locale:"en",path:"home",tags:[],title:"Team-Wissensspeicher"){ responseResult { succeeded message } } } }`,
-    { content }, jwt,
+  const loc = await gql('query{ localization { config { locale } } }', {}, jwt);
+  const d = await gql(
+    'mutation($content:String!,$description:String!,$locale:String!,$path:String!,$title:String!){ pages { create(content:$content,description:$description,editor:"markdown",isPublished:true,isPrivate:false,locale:$locale,path:$path,tags:[],title:$title){ responseResult { succeeded message } } } }',
+    { content, description, locale: loc.localization.config.locale, path, title }, jwt,
   );
-  log('Startseite angelegt.');
+  if (!d.pages.create.responseResult.succeeded) {
+    throw new Error(`Seite /${path} konnte nicht angelegt werden: ${d.pages.create.responseResult.message}`);
+  }
+  log(`Seite /${path} angelegt.`);
+}
+
+/** Step 2 — a home page (instead of the setup screen) and the user guide it links to. */
+async function ensureStartPages(jwt) {
+  await ensurePage(jwt, {
+    path: 'home',
+    title: 'Team-Wissensspeicher',
+    description: 'Startseite',
+    content: [
+      '# Team-Wissensspeicher',
+      '',
+      'Willkommen! Dieses Wiki können Menschen **und KI-Assistenten** nutzen — jeweils mit den persönlichen Rechten.',
+      '',
+      '- KI-Assistenten verbinden: siehe [KI-Zugang](/ki-zugang)',
+      '- Inhalte anlegen: oben rechts **Neue Seite**',
+    ].join('\n'),
+  });
+  // The links use WIKI_URL — run the bootstrap with the PUBLIC address (see header).
+  await ensurePage(jwt, {
+    path: 'ki-zugang',
+    title: 'KI-Zugang',
+    description: 'KI-Assistenten mit dem Wiki verbinden',
+    content: [
+      '# KI-Zugang',
+      '',
+      'Dieses Wiki lässt sich mit KI-Assistenten (Claude, ChatGPT, Cursor …) nutzen — mit **deinen** Wiki-Rechten.',
+      '',
+      '## Einrichten',
+      '',
+      `1. Im KI-Programm diese Adresse als Connector bzw. MCP-Server eintragen: \`${WIKI_URL}/mcp\``,
+      '   - **claude.ai / Claude Desktop:** Einstellungen → Connectors → *Add custom connector*',
+      `   - **Claude Code:** \`claude mcp add --transport http wiki ${WIKI_URL}/mcp\`, danach \`/mcp\` → *Authenticate*`,
+      '   - **ChatGPT / Codex / Cursor:** Connector bzw. MCP-Server mit der Adresse anlegen',
+      '2. Beim ersten Verbinden öffnet sich der Wiki-Login: mit dem normalen Wiki-Konto anmelden und **Zugriff erlauben**.',
+      '3. Fertig. Die KI sieht und ändert nur, was du selbst im Wiki darfst.',
+      '',
+      '## Gut zu wissen',
+      '',
+      // Phrased as defaults: the actual guardrails are MCP server settings this script cannot see.
+      '- Standardmäßig fragt die KI vor dem Löschen und vor Admin-Aktionen nach einer ausdrücklichen Bestätigung.',
+      '- Seiten mit dem Sperr-Tag (Standard: `kein-ki`) sind für KI-Assistenten unsichtbar und nicht änderbar — welcher Tag gilt, legt die IT fest.',
+      `- Eigene KI-Verbindungen ansehen und widerrufen: [${WIKI_URL}/me](${WIKI_URL}/me)`,
+    ].join('\n'),
+  });
 }
 
 const DICT_BY_LOCALE = { de: 'german', en: 'english', fr: 'french', es: 'spanish', it: 'italian', nl: 'dutch', pt: 'portuguese', ru: 'russian' };
@@ -203,9 +261,16 @@ async function ensureDemo(jwt) {
 }
 
 log(`Ziel: ${WIKI_URL}`);
+if (!process.env.WIKI_URL) {
+  // The address is written into the public page /ki-zugang and never corrected by re-runs.
+  console.warn(
+    '⚠ WIKI_URL ist nicht gesetzt — /ki-zugang zeigt dann http://localhost:8090 als Connector-Adresse.\n' +
+      '  Auf einem Server mit Domain abbrechen und mit WIKI_URL=https://<domain> neu starten.',
+  );
+}
 await waitForWiki();
 const jwt = await ensureFinalized();
-await ensureHomePage(jwt);
+await ensureStartPages(jwt);
 if (LOCALE) await switchLocale(jwt);
 await ensureSearchEngine(jwt);
 if (WITH_DEMO) await ensureDemo(jwt);
