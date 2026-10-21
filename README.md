@@ -20,8 +20,13 @@ Cursor, …) über das **Model Context Protocol** sicher mitbenutzen können:
 Interaktive Fassung mit Quellenverweisen je Komponente: [docs/architektur.html](mcp-for-wiki-js/docs/architektur.html)
 (lokal im Browser öffnen; Quelle zum Weiterbearbeiten mit archify: [architektur.archify.json](mcp-for-wiki-js/docs/architektur.archify.json)).
 
-> **Für die IT:** kompakte Anleitung für beide Wege (bestehendes Wiki per Helm/Kubernetes
-> oder Neuinstallation per Docker Compose): [installation-it.md](mcp-for-wiki-js/docs/installation-it.md).
+> **Für die IT:** kompakte Anleitung für alle Wege (bestehendes Wiki per Helm/Kubernetes, bestehendes
+> Wiki auf einem Server mit Docker, Neuinstallation per Docker Compose): [installation-it.md](mcp-for-wiki-js/docs/installation-it.md).
+>
+> **Ohne Repo-Checkout** (Compose-Import per URL in Docker-Panels, vServer): eigenständige Dateien unter
+> [`deploy/standalone/`](deploy/standalone/) — `docker-compose.full.yml` (Komplett-Stack, Ersteinrichtung
+> automatisch) und `docker-compose.mcp-only.yml` (nur der MCP neben einem bestehenden Wiki). Die
+> Repo-`docker-compose.yml` baut lokal und bindet Dateien aus `deploy/` ein; Panels melden dann „nicht gefunden“.
 
 ## Quick-Start (Docker Compose)
 
@@ -104,6 +109,9 @@ MCP-Pfade auf dieselbe Domain legen → in Wiki.js eine „Team"-Gruppe (ohne
 `manage:system`) anlegen.
 
 **→ Schritt-für-Schritt-Anleitung: [docs/integration-bestehendes-wiki.md](mcp-for-wiki-js/docs/integration-bestehendes-wiki.md).**
+Läuft das Wiki auf einem vServer mit eigenem Proxy: fertige Compose-Datei
+[`deploy/standalone/docker-compose.mcp-only.yml`](deploy/standalone/docker-compose.mcp-only.yml) plus
+nginx-/Caddy-Beispiele in der [IT-Anleitung, Option B](mcp-for-wiki-js/docs/installation-it.md#option-b-bestehendes-wikijs-auf-einem-server-mit-docker-vserver).
 
 | URL | Zweck |
 |---|---|
@@ -131,6 +139,7 @@ Wiki.js läuft aus dem offiziellen Image und bleibt unabhängig updatebar.
 | [`mcp-for-wiki-js/`](mcp-for-wiki-js/) | Der MCP-Server (Next.js/TypeScript): 70 Tools über die Wiki.js-GraphQL-API, OAuth-Layer, Rechte-Engine, Tests. Details: [README](mcp-for-wiki-js/README.md) · [Konzept & Rechtemodell (deutsch)](mcp-for-wiki-js/docs/konzept-ki-zugang.md) · [OAuth-Doku](mcp-for-wiki-js/docs/oauth.md) |
 | [`Dockerfile`](Dockerfile) | Production-Image des MCP-Servers (Next.js standalone, Node 24) |
 | [`docker-compose.yml`](docker-compose.yml) | Komplett-Stack: Postgres + Wiki.js + MCP + Caddy (Auto-HTTPS) |
+| [`deploy/standalone/`](deploy/standalone/) | Eigenständige Compose-Dateien ohne Repo-Checkout: Komplett-Stack bzw. nur MCP neben bestehendem Wiki |
 | [`deploy/caddy/`](deploy/caddy/) | Reverse-Proxy-Routing (eine Domain für Wiki & MCP → Ein-Klick-SSO) |
 | [`deploy/helm/wikijs-mcp/`](deploy/helm/wikijs-mcp/) | Helm-Chart für Kubernetes (MCP-Server; Wiki.js läuft separat) |
 | [`.github/workflows/`](.github/workflows/) | GitHub-CI: Typecheck/Tests/Build + Image → ghcr.io |

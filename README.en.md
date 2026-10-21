@@ -22,9 +22,14 @@ Cursor, …) can use safely through the **Model Context Protocol**:
 Interactive version with per-component source links (German labels): [docs/architektur.html](mcp-for-wiki-js/docs/architektur.html)
 (open locally in a browser; editable archify source: [architektur.archify.json](mcp-for-wiki-js/docs/architektur.archify.json)).
 
-> **For IT:** compact guide covering both paths (existing wiki via Helm/Kubernetes, or fresh
-> install via Docker Compose, plus end-user usage; German):
+> **For IT:** compact guide covering all paths (existing wiki via Helm/Kubernetes, existing wiki on a
+> server with Docker, or fresh install via Docker Compose, plus end-user usage; German):
 > [installation-it.md](mcp-for-wiki-js/docs/installation-it.md).
+>
+> **Without a repo checkout** (compose import by URL in Docker panels, vServers): self-contained files in
+> [`deploy/standalone/`](deploy/standalone/) — `docker-compose.full.yml` (full stack, first-run setup runs
+> automatically) and `docker-compose.mcp-only.yml` (MCP only, next to an existing wiki). The repo's
+> `docker-compose.yml` builds locally and mounts files from `deploy/`; panels then report "not found".
 
 ## Quick start (Docker Compose)
 
@@ -114,7 +119,9 @@ Then route the MCP paths on the **same host** in your existing reverse proxy
 (`/mcp`, `/oauth`, `/me`, `/.well-known/oauth-*`,
 `/.well-known/mcp.json`, `/_next`, `/api/health` → `wikijs-mcp:3000`,
 everything else to the wiki) — template:
-[deploy/caddy/Caddyfile](deploy/caddy/Caddyfile). The shared domain matters:
+[deploy/caddy/Caddyfile](deploy/caddy/Caddyfile); ready-made compose file
+[`deploy/standalone/docker-compose.mcp-only.yml`](deploy/standalone/docker-compose.mcp-only.yml) and tested
+nginx/Caddy snippets: [IT guide, option B](mcp-for-wiki-js/docs/installation-it.md#option-b-bestehendes-wikijs-auf-einem-server-mit-docker-vserver). The shared domain matters:
 it turns the OAuth consent into one click via the existing wiki session.
 Also recommended: raise the wiki DB pool (10 → 20, see
 [deploy/wiki/config.yml](deploy/wiki/config.yml)) and enable the PostgreSQL
@@ -127,6 +134,7 @@ search engine.
 | [`mcp-for-wiki-js/`](mcp-for-wiki-js/) | The MCP server (Next.js/TypeScript): 70 tools over the Wiki.js GraphQL API, OAuth layer, permission engine, tests. Details: [README (EN)](mcp-for-wiki-js/README.en.md) · [concept & permission model (EN)](mcp-for-wiki-js/docs/concept-ai-access.en.md) |
 | [`Dockerfile`](Dockerfile) | Production image of the MCP server (Next.js standalone, Node 24) |
 | [`docker-compose.yml`](docker-compose.yml) | Full stack: Postgres + Wiki.js + MCP + Caddy (auto-HTTPS) + daily DB backup |
+| [`deploy/standalone/`](deploy/standalone/) | Self-contained compose files, no repo checkout needed: full stack, or MCP only next to an existing wiki |
 | [`deploy/caddy/`](deploy/caddy/) | Reverse-proxy routing (one domain for wiki & MCP → one-click SSO) |
 | [`deploy/scripts/bootstrap.mjs`](deploy/scripts/bootstrap.mjs) | Idempotent first-run setup |
 | [`deploy/helm/wikijs-mcp/`](deploy/helm/wikijs-mcp/) | Helm chart for Kubernetes (MCP server; Wiki.js runs separately) |

@@ -3,7 +3,8 @@
 Kurzanleitung, um den MCP-Server neben eine **laufende** Wiki.js-2.x-Installation
 (Container) zu hängen — **ohne das Wiki zu verändern** (kein Fork, keine
 Migration). Für einen kompletten Neuaufbau siehe stattdessen den Compose-Stack
-im [Root-README](../../README.md).
+im [Root-README](../../README.md). Statt `docker run` (Schritt 3) geht auch die fertige Compose-Datei
+[`deploy/standalone/docker-compose.mcp-only.yml`](../../deploy/standalone/docker-compose.mcp-only.yml).
 
 ## Voraussetzungen
 - Laufender **Wiki.js 2.x** (Container) mit Postgres.
@@ -58,7 +59,8 @@ weiter zum Wiki:
 /.well-known/oauth-protected-resource
 /.well-known/mcp.json
 ```
-Vorlage (Caddy): [deploy/caddy/Caddyfile](../../deploy/caddy/Caddyfile).
+Vorlage (Caddy): [deploy/caddy/Caddyfile](../../deploy/caddy/Caddyfile); getestete nginx-/Caddy-Snippets
+für einen Proxy auf dem Host: [IT-Anleitung, Option B](./installation-it.md#option-b-bestehendes-wikijs-auf-einem-server-mit-docker-vserver).
 Der Proxy muss `X-Forwarded-For` **anhängen** (nginx: `$proxy_add_x_forwarded_for`):
 die Login-Limits des MCP-Servers zählen pro rechtestem Eintrag. Fehlt er oder
 steht ein weiterer Proxy davor, teilen sich alle Nutzer einen IP-Topf.
