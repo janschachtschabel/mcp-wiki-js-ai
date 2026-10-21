@@ -122,10 +122,15 @@ Lokal ohne Domain/TLS testen: `docker compose -f docker-compose.yml -f docker-co
 |---|---|---|
 | `WIKIJS_URL` | interne Adresse des Wiki.js (ohne `/graphql`) | – (Pflicht) |
 | `PUBLIC_BASE_URL` | öffentliche URL (OAuth-Issuer), muss zur Domain passen | – (Pflicht) |
-| `MCP_SESSION_SECRET` | schaltet OAuth ein, verschlüsselt den Session-Store in `/data` | – (Pflicht) |
+| `MCP_SESSION_SECRET` | schaltet OAuth ein, verschlüsselt den Session-Store in `/data` (mind. 16 Zeichen) | – (Pflicht) |
 | `WIKIJS_PERMISSION_PRESET` | Rechte-Ceiling; bei OAuth `full` lassen | `full` |
 | `WIKIJS_BLOCKED_TAGS` | Seiten mit diesen Tags sind für KI unsichtbar (leer = aus) | `kein-ki` |
 | `WIKIJS_AUDIT` | Audit-Log an/aus | `true` |
+| `WIKIJS_ALLOW_LEGACY` | zusätzlich alten Zugang per API-Key/Handle erlauben (nur für Altbestand) | `false` |
+
+Der Server prüft die Konfiguration beim Start und **startet bei Fehlern nicht** (z. B. Secret unter
+16 Zeichen, unbekannter Rollenname, ungültiges JSON in einer Variable). Die Ursache steht im Log
+(`docker compose logs mcp` bzw. `kubectl logs`) mit dem Präfix `[wikijs-mcp]`.
 
 ## Nutzung durch die Anwender
 
@@ -165,6 +170,8 @@ https://<domain>/mcp
 | OAuth-Fehler / falsche Redirects | `PUBLIC_BASE_URL` passt nicht zur öffentlichen Domain |
 | `/mcp` liefert die Wiki-Seite | Ingress-/Proxy-Pfade fehlen oder sind zu spät in der Regelreihenfolge |
 | Sessions nach Neustart weg | `/data` ist kein persistentes Volume |
+| MCP-Container/Pod startet nicht (Exit 1) | Konfigurationsfehler – Log-Zeile `[wikijs-mcp] …` lesen (siehe oben) |
+| `413 Payload Too Large` | Anfrage an `/mcp` über 4 MB (z. B. großer Datei-Upload per KI) – Datei direkt im Wiki hochladen |
 
 Vertiefung: [Integration in bestehendes Wiki](./integration-bestehendes-wiki.md) ·
 [Konzept & Rechtemodell](./konzept-ki-zugang.md) · [OAuth](./oauth.md)

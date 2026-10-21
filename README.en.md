@@ -165,4 +165,4 @@ git commit` at the root — or migrate the history via `git subtree` /
 
 ## License
 
-MIT — see [mcp-for-wiki-js/LICENSE](mcp-for-wiki-js/LICENSE).
+Apache License 2.0 — see [LICENSE](LICENSE).

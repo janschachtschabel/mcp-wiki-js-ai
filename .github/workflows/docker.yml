@@ -78,7 +78,7 @@ jobs:
             org.opencontainers.image.title=wikijs-mcp
             org.opencontainers.image.description=MCP-Server für Wiki.js — OAuth mit Wiki.js-Login, per-User-Rechte, Tag-Guardrail
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.licenses=Apache-2.0
 
       - name: Build & push
         id: build

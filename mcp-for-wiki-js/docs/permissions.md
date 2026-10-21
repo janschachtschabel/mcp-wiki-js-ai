@@ -52,7 +52,8 @@ Rollen sind in [`config/roles.json`](../config/roles.json) definiert — editier
 - **Vercel:** Datei ändern → **Redeploy** (beim Build gebündelt). Ohne Rebuild: Env `WIKIJS_ROLES` (gleiches JSON).
 
 ## Zuweisung & Obergrenze
-- **Pro Person:** `"role": "<name>"` im `WIKIJS_PROFILES`-Eintrag.
+- **Pro Person:** `"role": "<name>"` im `WIKIJS_PROFILES`-Eintrag. Ohne `role` gilt `defaultRole` (`safe`) — ebenso für `WIKIJS_KEY_MAP`-Aliase. Ein **unbekannter** Rollenname (Profil, `WIKIJS_OAUTH_ROLE`, `WIKIJS_PERMISSION_PRESET`) oder kaputtes JSON in `WIKIJS_PROFILES`/`WIKIJS_ROLES` verhindert den Serverstart.
+- **`wiki_graphql`** (rohes GraphQL, umgeht Kategorien und Tag-Sperre) ist per Tool-Override in **allen Rollen außer `systemadmin`/`full`** gesperrt. Freischalten nur über eine eigene Rolle mit `"tools":{"wiki_graphql":"confirm"}`.
 - **Globale Obergrenze** (`WIKIJS_PERMISSION_PRESET`): das **Maximum** + der **sichtbare** Tool-Satz. Auf die **höchste** verwendete Rolle setzen — Rollen wirken nur **innerhalb** davon.
 - **Deploy-weit feinjustieren** (`WIKIJS_POLICY`): `{"categories":{"delete":"allow"},"tools":{"wiki_graphql":"block"}}`.
 - **Pro Request verschärfen:** Header `X-Wikijs-Preset`/`X-Wikijs-Policy` bzw. URL `&preset=`/`&policy=` — nur **strenger**.

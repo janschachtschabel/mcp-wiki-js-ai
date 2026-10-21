@@ -75,7 +75,7 @@ see the repo-root [README.en.md](../README.en.md) and `docker-compose.yml`.
 | Variable | Purpose |
 |---|---|
 | `WIKIJS_URL` | Base URL of the Wiki.js instance |
-| `MCP_SESSION_SECRET` | Enables OAuth mode (≥ 16 chars; sessions encrypted with it) |
+| `MCP_SESSION_SECRET` | Enables OAuth mode (≥ 16 chars — a shorter value aborts startup; sessions encrypted with it) |
 | `PUBLIC_BASE_URL` | Public origin (OAuth issuer) — required behind a proxy |
 | `WIKIJS_OAUTH_ROLE` | Safety overlay for OAuth sessions (default `wiki`: delete/admin → confirm) |
 | `WIKIJS_PERMISSION_PRESET` | Global tool-visibility ceiling — keep `full` in OAuth mode |
@@ -97,4 +97,4 @@ build on every push.
 
 ## License
 
-MIT
+Apache License 2.0 — see [LICENSE](LICENSE).

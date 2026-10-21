@@ -382,7 +382,7 @@ scripts/           gen-profile.mjs (Handle-Generator) · show-roles.ts · smoke*
 
 ```bash
 npm run typecheck                  # TypeScript ohne Build
-npm test                           # Offline-Suite: policy/nav/semaphore/context/oauth/guardrails/routing/format (123 Assertions)
+npm test                           # Offline-Suite: 14 Suiten (policy/config/nav/semaphore/context/oauth/guardrails/routing/format/pages/route/limits/escalation/gate), 324 Assertions
 npm run build                      # Production-Build (Next-standalone)
 
 # Live-Integrationstest: ALLE Tool-Handler gegen ein WEGWERF-/leeres Wiki.js
@@ -399,7 +399,7 @@ node scripts/smoke-urlauth.mjs  <url>   # URL-Parameter-Auth (?url=&token=&prese
 node scripts/probe-deploy.mjs   <url>   # Deploy ohne Creds prüfen (Env-Status)
 ```
 
-Vollständiges Per-Tool-Live-Ergebnis (alle 70 Tools): **[docs/TESTPROTOKOLL.md](./docs/TESTPROTOKOLL.md)**. Wegwerf-Wiki dafür: `docker compose -f docker-compose.test.yml up -d` (Setup-Automatisierung siehe Protokoll). Offline-Suite (123 Assertions) + OAuth-E2E (36) laufen in der CI: `.github/workflows/ci.yml`.
+Vollständiges Per-Tool-Live-Ergebnis (alle 70 Tools): **[docs/TESTPROTOKOLL.md](./docs/TESTPROTOKOLL.md)**. Wegwerf-Wiki dafür: `docker compose -f docker-compose.test.yml up -d` (Setup-Automatisierung siehe Protokoll). Offline-Suite (324 Assertions) + OAuth-E2E (36) laufen in der CI: `.github/workflows/ci.yml`.
 
 ---
 
@@ -418,4 +418,4 @@ Vollständiges Per-Tool-Live-Ergebnis (alle 70 Tools): **[docs/TESTPROTOKOLL.md]
 - **Test & Betrieb:** [docs/TESTPROTOKOLL.md](./docs/TESTPROTOKOLL.md) (vollständiges Protokoll, alle 70 Tools) · [docs/pgbouncer.md](./docs/pgbouncer.md) (Prod-Hardening für Vercel/Serverless-Betrieb — im Container-Setup nicht nötig)
 
 ## Lizenz
-MIT
+Apache License 2.0 — siehe [LICENSE](LICENSE).

@@ -53,7 +53,17 @@ läuft die Session aus — der Client startet die Ein-Klick-Freigabe erneut.
   `/mcp`-Requests bekommen den spec-konformen `401` + `WWW-Authenticate`.
 - **Session-Store:** sqlite via `node:sqlite` (keine neue Dependency) unter
   `MCP_DATA_DIR`. Tokens werden nur als SHA-256-Hash gespeichert; der Wiki-JWT
-  AES-256-GCM-verschlüsselt (Schlüssel via HKDF aus `MCP_SESSION_SECRET`).
+  AES-256-GCM-verschlüsselt (Schlüssel via HKDF aus `MCP_SESSION_SECRET`, je
+  Zweck ein eigener: DB-JWT, `mcp_me`-Cookie, 2FA-Zwischenschritt — eine
+  DB-Kopie ergibt kein gültiges Cookie). Das `mcp_me`-Cookie trägt `iat` und
+  läuft serverseitig nach 30 min ab.
+- **Startprüfung:** `MCP_SESSION_SECRET` kürzer als 16 Zeichen, unbekannte
+  Rollennamen (`WIKIJS_OAUTH_ROLE`, `WIKIJS_PERMISSION_PRESET`, Profil-`role`)
+  oder kaputtes JSON in `WIKIJS_PROFILES`/`WIKIJS_ROLES`/`WIKIJS_KEY_MAP`/
+  `WIKIJS_POLICY` → der Server startet nicht (statt still offen zu laufen).
+- **Limits:** Formular-/Token-/Register-Bodies max. 64 KB, `/mcp` max. 4 MB
+  (sonst `413`); `redirect_uris` max. 2048 Zeichen; registrierte Clients ohne
+  Session werden nach 24 h entfernt.
 - **Refresh-Rotation mit Reuse-Detection:** jeder Refresh tauscht Access- UND
   Refresh-Token; taucht ein bereits rotiertes Refresh-Token erneut auf
   (Diebstahl-Signal), wird die gesamte Session sofort widerrufen.
@@ -83,8 +93,8 @@ für die Suche). Die Tag-Sperre ist die bequeme Redaktions-Ergänzung — sie
 schließt Wiki.js' Tag-Rule-Leak (list/single prüfen Tags nicht) auf MCP-Ebene
 für: search, get, list, history, version, update, move, convert, restore,
 delete (einzeln/batch/tree). **Nicht** tag-gefiltert: tree/links (nur Pfade/
-Titel), Kommentar-Tools, `wiki_graphql` (Escape-Hatch; für OAuth-Sessions per
-`confirm` gegated). KI-Zugänge sollten nie `manage:system` in Wiki.js haben —
+Titel), Kommentar-Tools, `wiki_graphql` (Escape-Hatch; in der OAuth-Rolle `wiki`
+und allen anderen Rollen außer `systemadmin`/`full` gesperrt). KI-Zugänge sollten nie `manage:system` in Wiki.js haben —
 das hebelt dort ALLE Page-Rules aus.
 
 ## Endpunkte

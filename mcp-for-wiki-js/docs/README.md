@@ -17,6 +17,7 @@ frühere Vercel/Handle-Betrieb funktioniert weiter, ist aber eingefroren
 | [**Installation – Kurzanleitung für die IT**](./installation-it.md) | Beide Wege kompakt: bestehendes Wiki (Kubernetes/Helm) oder Neuinstallation (Docker Compose) |
 | [**Integration in bestehendes Wiki.js**](./integration-bestehendes-wiki.md) | MCP neben eine laufende Wiki.js-Installation hängen — Schritt für Schritt |
 | [Root-README](../../README.md) (🇬🇧 [EN](../../README.en.md)) | Deployment (Compose/Helm), Ersteinrichtung (Bootstrap), Client verbinden |
+| [Audit 2026-10-21](./audits/2026-10-21-audit.md) · [Re-Audit](./audits/2026-10-21-reaudit.md) | Sicherheits- und Code-Audits mit Befunden, Umsetzungsstand und Roadmap |
 
 **Kurzfassung Verbinden:** MCP-URL `https://<host>/mcp` im Client eintragen
 (claude.ai/Claude Code/ChatGPT/Cursor), einmalig über den Wiki-Login freigeben

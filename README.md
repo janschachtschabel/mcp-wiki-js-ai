@@ -183,4 +183,4 @@ Kopf der `.gitlab-ci.yml`.
 
 ## Lizenz
 
-MIT — siehe [mcp-for-wiki-js/LICENSE](mcp-for-wiki-js/LICENSE).
+Apache License 2.0 — siehe [LICENSE](LICENSE).

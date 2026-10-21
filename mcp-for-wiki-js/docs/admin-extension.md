@@ -32,7 +32,7 @@ Dieser MCP-Server hat für die **häufig genutzten** Bereiche fertige, benannte 
 
 ## So nutzt du diese Funktionen **schon heute** (via `wiki_graphql`)
 
-`wiki_graphql` gehört zur Kategorie `manage_system` und ist daher in den Presets `readonly`/`safe`/`editor` **geblockt**. Zum Nutzen: Deploy mit `WIKIJS_PERMISSION_PRESET=maintainer` (oder `full`), **oder** gezielt freischalten:
+`wiki_graphql` gehört zur Kategorie `manage_system` und ist daher in den Presets `readonly`/`safe`/`editor` **geblockt**. Bei Rollen-Zuweisung (Profile, OAuth-Sessions) ist es zusätzlich in **allen Rollen außer `systemadmin`/`full`** per Tool gesperrt — `WIKIJS_POLICY` kann das nicht lockern; dafür eine eigene Rolle mit `"tools":{"wiki_graphql":"confirm"}` anlegen. Ohne Rolle (stdio, Env-Token) zum Nutzen: Deploy mit `WIKIJS_PERMISSION_PRESET=maintainer` (oder `full`), **oder** gezielt freischalten:
 ```bash
 WIKIJS_POLICY={"tools":{"wiki_graphql":"confirm"}}
 ```

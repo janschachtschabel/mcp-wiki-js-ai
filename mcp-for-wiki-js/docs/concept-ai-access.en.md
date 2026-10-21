@@ -238,7 +238,8 @@ legacy handle access (`WIKIJS_PROFILES`).
   does this automatically); otherwise the login form appears.
 - `tree`/`links`, comment tools and `wiki_graphql` are exempt from the
   **tag** guardrail (use path rules for hard blocking); `wiki_graphql` is
-  confirm-gated for OAuth sessions.
+  blocked in every role except `systemadmin`/`full` (including the OAuth role
+  `wiki`).
 - Do not create wiki pages under `me/`, `oauth/`, `mcp`, `api/` —
   those paths belong to the MCP server (reverse-proxy routing).
 - Wiki.js cannot serve assets whose extension is a page extension

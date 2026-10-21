@@ -272,7 +272,8 @@ nur noch für Legacy-Handle-Zugänge (`WIKIJS_PROFILES`).
   macht das automatisch); sonst erscheint das Login-Formular.
 - `tree`/`links`, Kommentar-Tools und `wiki_graphql` sind von der
   **Tag**-Sperre ausgenommen (für harte Sperren Pfad-Rules nutzen);
-  `wiki_graphql` ist für OAuth-Sessions `confirm`-gegated.
+  `wiki_graphql` ist in allen Rollen außer `systemadmin`/`full` gesperrt
+  (auch in der OAuth-Rolle `wiki`).
 - Im Wiki keine Seiten unter `me/`, `oauth/`, `mcp`, `api/` anlegen
   (Pfade gehören dem MCP-Server, siehe Caddy-/Ingress-Routing).
 - claude.ai/ChatGPT (Web) erreichen kein `localhost` — Web-Clients erst nach
