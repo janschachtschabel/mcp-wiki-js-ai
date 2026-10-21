@@ -109,8 +109,9 @@ top for ad-hoc cases.
 cp .env.example .env    # DOMAIN, POSTGRES_PASSWORD, MCP_SESSION_SECRET
 docker compose up -d    # Caddy obtains TLS automatically
 
-# First-run setup (admin account, home page, Postgres search, optional de + demo):
-ADMIN_EMAIL=... ADMIN_PASSWORD=... node deploy/scripts/bootstrap.mjs --locale=de
+# First-run setup (admin account, home page, /ki-zugang guide, Postgres search,
+# optional de + demo). WIKI_URL = public address (connector URL on /ki-zugang):
+WIKI_URL=https://<DOMAIN> ADMIN_EMAIL=... ADMIN_PASSWORD=... node deploy/scripts/bootstrap.mjs --locale=de
 ```
 
 DB note: the Wiki.js connection pool is raised to **20** (mounted

@@ -52,10 +52,10 @@ fehlt). Das Bootstrap-Skript erledigt alles in einem Rutsch — **idempotent**,
 kann jederzeit erneut laufen (Node ≥ 18 auf dem Host):
 
 ```bash
-ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='sicheres-passwort' \
+WIKI_URL=https://wiki.example.org ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='sicheres-passwort' \
   node deploy/scripts/bootstrap.mjs --locale=de
 # Windows PowerShell:
-#   $env:ADMIN_EMAIL='admin@example.org'; $env:ADMIN_PASSWORD='...'
+#   $env:WIKI_URL='https://wiki.example.org'; $env:ADMIN_EMAIL='admin@example.org'; $env:ADMIN_PASSWORD='...'
 #   node deploy\scripts\bootstrap.mjs --locale=de
 ```
 
@@ -64,11 +64,14 @@ dann `DEMO_PASSWORD`** (kein Default, sonst entstünde ein Konto mit öffentlich
 bekanntem Passwort). Nur für Test-Instanzen, nicht auf Produktiv-Wikis:
 `… ADMIN_PASSWORD='…' DEMO_PASSWORD='…' node deploy/scripts/bootstrap.mjs --demo`.
 
-Das legt an: Admin-Konto, Startseite, **PostgreSQL-Suchmaschine** (Wörterbuch
+Das legt an: Admin-Konto, Startseite, die Anwender-Anleitung **`/ki-zugang`**
+(Connector-Adresse + Einrichtung pro KI-Programm), **PostgreSQL-Suchmaschine** (Wörterbuch
 passend zur Sprache — deutlich bessere Agenten-Suche als der Default), mit
 `--locale=de` die deutsche Oberfläche und mit `--demo` eine Gruppe „Team"
-(lesen/schreiben, kein Löschen) samt Testnutzer. Bei laufendem Stack auf
-anderer URL: `WIKI_URL=https://wiki.example.org` voranstellen.
+(lesen/schreiben, kein Löschen) samt Testnutzer. Auf einem Server mit Domain
+**`WIKI_URL=https://wiki.example.org` voranstellen** — ohne gilt
+`http://localhost:8090` (nur der lokale Test-Stack), und die Adresse erscheint
+auch als Connector-URL auf `/ki-zugang`.
 
 Manuell ginge es auch (Browser: „Create Home Page"-Wizard, dann Administration
 → Search Engine / Locale / Groups) — Hinweis dabei: Hält der Wiki-Login im

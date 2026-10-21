@@ -24,31 +24,39 @@ Voraussetzungen: Wiki.js 2.x läuft im Cluster, ein Ingress (nginx) mit TLS für
 Zugriff auf eine Container-Registry.
 
 ### 1. Image bereitstellen
-Im Repo-Root bauen und pushen (oder das von der CI gebaute Image aus GHCR/GitLab nutzen):
+Im Repo-Root bauen und pushen (oder das von der CI gebaute Image aus GHCR/GitLab nutzen).
+`<registry>`, `<pfad/wikijs-mcp>` und `<vX.Y.Z>` müssen später in Schritt 3 identisch eingetragen werden:
 ```bash
-docker build -t <registry>/wikijs-mcp:1 .
-docker push <registry>/wikijs-mcp:1
+docker build -t <registry>/<pfad/wikijs-mcp>:<vX.Y.Z> .
+docker push <registry>/<pfad/wikijs-mcp>:<vX.Y.Z>
 ```
 
-### 2. Secret erzeugen
+### 2. Secret als Kubernetes-Secret anlegen
 ```bash
-openssl rand -base64 32      # → MCP_SESSION_SECRET
+kubectl -n <namespace> create secret generic wikijs-mcp-secret \
+  --from-literal=MCP_SESSION_SECRET="$(openssl rand -base64 32)"
 ```
+So steht das Secret weder in einer Values-Datei noch in der Helm-Historie.
 
 ### 3. Mit Helm deployen
-Chart: [`deploy/helm/wikijs-mcp`](../../deploy/helm/wikijs-mcp/README.md). Eigene `values-prod.yaml`:
+Chart: [`deploy/helm/wikijs-mcp`](../../deploy/helm/wikijs-mcp/README.md). Vorlage kopieren und
+die Platzhalter `<...>` ersetzen:
+```bash
+cp deploy/helm/wikijs-mcp/values-prod.example.yaml values-prod.yaml
+```
+Die wichtigsten Werte darin:
 ```yaml
 global:
   image:
-    registry: <registry>
-    repository: wikijs-mcp
+    registry: <registry>                              # z. B. ghcr.io
+    repository: <pfad/wikijs-mcp>                     # z. B. janschachtschabel/mcp-wiki-js-ai
 image:
-  tag: "1"
+  tag: "<vX.Y.Z>"
 config:
+  existingSecret: wikijs-mcp-secret                   # aus Schritt 2
   wikijs:
     url: http://<wiki-service>.<namespace>.svc:3000   # interner Service, ohne /graphql
   oauth:
-    sessionSecret: "<secret aus Schritt 2>"
     publicBaseUrl: https://wiki.example.org           # öffentliche Wiki-Domain
 ingress:
   hosts: [wiki.example.org]                           # GLEICHE Domain wie das Wiki
@@ -97,10 +105,12 @@ MCP_SESSION_SECRET=<openssl rand -base64 32>
 Starten und einrichten:
 ```bash
 docker compose up -d
-ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='…' node deploy/scripts/bootstrap.mjs --locale=de
+WIKI_URL=https://wiki.example.org ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='…' \
+  node deploy/scripts/bootstrap.mjs --locale=de
 ```
-Das Bootstrap-Skript (idempotent) legt Admin-Konto, Startseite, PostgreSQL-Suche und deutsche
-Oberfläche an. Danach Gruppe „Team" wie in Option A, Schritt 4 anlegen.
+`WIKI_URL` ist die öffentliche Adresse (Pflicht auf dem Server). Das Bootstrap-Skript (idempotent)
+legt Admin-Konto, Startseite, die Anwender-Anleitung `/ki-zugang` (mit der Connector-Adresse),
+PostgreSQL-Suche und deutsche Oberfläche an. Danach Gruppe „Team" wie in Option A, Schritt 4 anlegen.
 
 Lokal ohne Domain/TLS testen: `docker compose -f docker-compose.yml -f docker-compose.local.yml up -d`
 (erreichbar unter `http://localhost:8090`).

@@ -54,14 +54,17 @@ A fresh Wiki.js starts in setup mode. The bootstrap script does everything in
 one go — **idempotent**, safe to re-run (Node ≥ 18 on the host):
 
 ```bash
-ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='secure-password' \
+WIKI_URL=https://wiki.example.org ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='secure-password' \
   node deploy/scripts/bootstrap.mjs --locale=de
 ```
 
-This creates: the admin account, a home page, the **PostgreSQL search
+This creates: the admin account, a home page, the user guide **`/ki-zugang`**
+(connector URL + per-client setup), the **PostgreSQL search
 engine** (dictionary matching the locale — much better agent search than the
-default), and with `--locale=de` the German UI. For a stack on another URL
-prefix set `WIKI_URL=https://wiki.example.org`.
+default), and with `--locale=de` the German UI. On a server with a domain,
+**prefix `WIKI_URL=https://wiki.example.org`** — the default
+`http://localhost:8090` only fits the local test stack, and the URL is also
+shown as the connector URL on `/ki-zugang`.
 
 `--demo` additionally creates a "Team" group (read/write, no delete) plus a
 test user and then **requires `DEMO_PASSWORD`** (no default — a committed one

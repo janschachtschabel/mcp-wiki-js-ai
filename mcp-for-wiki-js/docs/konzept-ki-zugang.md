@@ -110,8 +110,9 @@ für spontane Einzelfälle nutzen.
 cp .env.example .env    # DOMAIN, POSTGRES_PASSWORD, MCP_SESSION_SECRET
 docker compose up -d    # Caddy besorgt TLS automatisch
 
-# Ersteinrichtung (Admin-Konto, Startseite, Postgres-Suche, optional de + Demo):
-ADMIN_EMAIL=... ADMIN_PASSWORD=... node deploy/scripts/bootstrap.mjs --locale=de
+# Ersteinrichtung (Admin-Konto, Startseite, Anleitung /ki-zugang, Postgres-Suche,
+# optional de + Demo). WIKI_URL = öffentliche Adresse (Connector-URL auf /ki-zugang):
+WIKI_URL=https://<DOMAIN> ADMIN_EMAIL=... ADMIN_PASSWORD=... node deploy/scripts/bootstrap.mjs --locale=de
 ```
 
 Lokaler Test ohne Domain: zusätzlich `-f docker-compose.local.yml`
