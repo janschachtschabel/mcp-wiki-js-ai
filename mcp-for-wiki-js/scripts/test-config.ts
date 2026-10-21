@@ -93,6 +93,60 @@ check(
   'plain single-tenant (no PUBLIC_BASE_URL) → no OAuth warning',
   !checkConfig({ WIKIJS_TOKEN: 'svc' }).warnings.some((w) => /OAuth is OFF/.test(w)),
 );
+// 5c. Audit R-15: with profiles / a key map the env token is no anonymous fallback.
+check(
+  'R-15: PUBLIC_BASE_URL + WIKIJS_TOKEN + WIKIJS_PROFILES → no "serves unauthenticated callers" claim',
+  !checkConfig({ PUBLIC_BASE_URL: 'https://wiki.example.org', WIKIJS_TOKEN: 'svc', WIKIJS_PROFILES: '{"h":{"token":"t"}}' }).warnings.some(
+    (w) => /unauthenticated callers/.test(w),
+  ),
+);
+check(
+  'R-15: WIKIJS_TOKEN + WIKIJS_KEY_MAP → warning that the env token is not an anonymous fallback',
+  checkConfig({ WIKIJS_TOKEN: 'svc', WIKIJS_KEY_MAP: '{"h":"t"}' }).warnings.some((w) => /WIKIJS_TOKEN/.test(w) && /anonymous/.test(w)),
+);
+
+// 5d. Audit R-14a: a KEY_MAP server key is only ever sent to WIKIJS_URL.
+check(
+  'R-14a: WIKIJS_KEY_MAP without WIKIJS_URL → warning',
+  checkConfig({ WIKIJS_KEY_MAP: '{"h":"t"}' }).warnings.some((w) => /WIKIJS_KEY_MAP/.test(w) && /WIKIJS_URL/.test(w)),
+);
+check(
+  'R-14a: WIKIJS_KEY_MAP with WIKIJS_URL → no such warning',
+  !checkConfig({ WIKIJS_KEY_MAP: '{"h":"t"}', WIKIJS_URL: 'https://wiki.example.org' }).warnings.some((w) => /WIKIJS_KEY_MAP/.test(w)),
+);
+
+// 5e. Review 2026-10-21 #1: pure BYOK lets callers pick the target wiki — say so at startup.
+{
+  const byok = (env: Record<string, string | undefined>) => checkConfig(env).warnings.some((w) => /reines BYOK/.test(w));
+  const w = checkConfig({}).warnings.find((x) => /reines BYOK/.test(x)) ?? '';
+  check(
+    'pure BYOK (no WIKIJS_URL, no allow-list, no OAuth) → warning naming DNS rebinding and the fix',
+    /DNS-Rebinding/.test(w) && /WIKIJS_URL/.test(w) && /WIKIJS_ALLOWED_URLS/.test(w),
+  );
+  check('pure BYOK warning: not with WIKIJS_URL', !byok({ WIKIJS_URL: 'https://wiki.example.org' }));
+  check('pure BYOK warning: not with WIKIJS_BASE_URL', !byok({ WIKIJS_BASE_URL: 'https://wiki.example.org' }));
+  check('pure BYOK warning: not with WIKIJS_ALLOWED_URLS', !byok({ WIKIJS_ALLOWED_URLS: 'https://a.example' }));
+  check('pure BYOK warning: not with OAuth on', !byok({ MCP_SESSION_SECRET: SECRET }));
+  check('pure BYOK warning: an allow-list of blanks still counts as none', byok({ WIKIJS_ALLOWED_URLS: ' , ' }));
+  check('pure BYOK warning: not in stdio', !checkConfig({}, { stdio: true }).warnings.some((x) => /reines BYOK/.test(x)));
+}
+
+// 5c. stdio never runs OAuth: OAuth/HTTP-only settings from a shared .env must neither
+// abort it nor produce misleading warnings — but checks that apply to stdio still do.
+{
+  const shared = {
+    MCP_SESSION_SECRET: 'too-short', PUBLIC_BASE_URL: 'https://wiki.example.org',
+    WIKIJS_OAUTH_ROLE: 'Wikki', WIKIJS_TOKEN: 'svc', WIKIJS_PROFILES: '{}',
+  };
+  const r = checkConfig(shared, { stdio: true });
+  check('stdio: short MCP_SESSION_SECRET / unknown OAuth role do not abort', r.errors.length === 0);
+  check('stdio: no OAuth/HTTP warnings', r.warnings.length === 0);
+  check(
+    'stdio: unknown WIKIJS_PERMISSION_PRESET is still an error',
+    checkConfig({ WIKIJS_PERMISSION_PRESET: 'nope' }, { stdio: true }).errors.length === 1,
+  );
+  check('HTTP (default): the same shared .env still aborts', checkConfig(shared).errors.length > 0);
+}
 
 // 6. assertConfig aborts with ALL errors in one message.
 check(

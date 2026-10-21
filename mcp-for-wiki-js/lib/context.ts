@@ -1,6 +1,10 @@
 import { WikiClient } from './wikijs/client';
-import { Policy, basePolicyFromEnv, parsePolicyConfig, roleConfig, type PolicyConfig } from './permissions';
-import { oauthEnabled, sha256hex } from './oauth/crypto';
+import { Policy, basePolicyFromEnv, parsePolicyConfig, roleConfig } from './permissions';
+import { sha256hex } from './oauth/crypto';
+import { header, resolveCredential, type HeaderMap } from './credentials';
+import { assertPublicTarget } from './caller-url';
+
+export { enableStdioMode } from './credentials';
 
 /**
  * Per-request execution context: which Wiki.js instance + key to talk to, and the
@@ -56,199 +60,75 @@ export function toolExtraFromServerContext(ctx: {
 }
 
 /**
- * A named credential profile (entry of the WIKIJS_PROFILES env map):
- * the real Wiki.js key + instance + optional per-handle policy. The CLIENT only ever
- * sends the alias (the map key) — the real token never leaves the server.
+ * Untrusted per-request overlays (X-Wikijs-Policy, X-Wikijs-Preset) — can only tighten.
+ * Two separate overlays: inside ONE overlay, tools/categories shadow the preset, so a
+ * merged object would let the policy header mask the preset (audit R-33).
  */
-interface Profile {
-  /** Non-secret human label for audit/logs (the map KEY is the secret handle token). */
-  label?: string;
-  /** Optional per-profile instance URL (defaults to the global WIKIJS_URL — usually one wiki for all). */
-  url?: string;
-  token: string;
-  /** Assigned rights role (name from config/roles.json). */
-  role?: string;
-  /** Legacy alias for `role`. */
-  preset?: string;
-  /** Optional inline fine-tuning on top of the role. */
-  policy?: { categories?: unknown; tools?: unknown };
-}
-
-function header(
-  headers: Record<string, string | string[] | undefined> | undefined,
-  name: string,
-): string | undefined {
-  if (!headers) return undefined;
-  const v = headers[name] ?? headers[name.toLowerCase()];
-  const s = Array.isArray(v) ? v[0] : v;
-  return typeof s === 'string' && s.length > 0 ? s : undefined;
-}
-
-function originOf(url: string): string | undefined {
-  try {
-    return new URL(url).origin;
-  } catch {
-    return undefined;
-  }
+function withRequestOverlays(policy: Policy, headers: HeaderMap): Policy {
+  const preset = header(headers, 'x-wikijs-preset');
+  return policy
+    .withOverlay(parsePolicyConfig(header(headers, 'x-wikijs-policy')))
+    .withOverlay(preset ? { preset } : undefined);
 }
 
 /**
- * A caller-supplied wiki URL (X-Wikijs-Url / ?url=) is honoured only if its origin
- * is allow-listed (WIKIJS_ALLOWED_URLS) or equals WIKIJS_URL — otherwise anonymous
- * callers could make this server fetch arbitrary internal addresses (SSRF).
- * With neither configured, the deployment is pure multi-tenant BYOK and any URL
- * is accepted (legacy behaviour).
+ * OAuth session (authInfo.extra.oauth) — the token IS a Wiki.js USER JWT.
+ * Wiki.js enforces that user's real groups/page-rules; this server only adds
+ * the agent-safety overlay (confirm gates) via WIKIJS_OAUTH_ROLE.
+ * Returns undefined when the request is not an OAuth session.
  */
-function checkCallerUrl(url: string, env: Record<string, string | undefined>): string {
-  const configured = (env.WIKIJS_URL || env.WIKIJS_BASE_URL || '').trim();
-  const allowed = (env.WIKIJS_ALLOWED_URLS || '')
-    .split(',')
-    .map((u) => u.trim())
-    .filter(Boolean);
-  if (!configured && allowed.length === 0) return url;
-  const origin = originOf(url);
-  const permitted = [configured, ...allowed].filter(Boolean).map(originOf);
-  if (origin === undefined || !permitted.includes(origin)) {
-    throw new Error('X-Wikijs-Url is not allowed on this server (see WIKIJS_ALLOWED_URLS).');
-  }
-  return url;
-}
-
-/** Look up a named profile by alias in WIKIJS_PROFILES (JSON: { "<alias>": { url, token, preset, policy } }). */
-function resolveProfile(alias: string | undefined, env: Record<string, string | undefined>): Profile | undefined {
-  if (!alias || !env.WIKIJS_PROFILES) return undefined;
-  try {
-    const map = JSON.parse(env.WIKIJS_PROFILES) as Record<string, Profile>;
-    const p = map?.[alias];
-    if (p && typeof p === 'object' && typeof p.token === 'string') return p;
-  } catch {
-    /* ignore malformed map */
-  }
-  return undefined;
-}
-
-/** Fallback simple alias→token map (token only; url/policy come from env). Kept for backward compat. */
-function resolveAlias(token: string | undefined, env: Record<string, string | undefined>): string | undefined {
-  if (!token || !env.WIKIJS_KEY_MAP) return token;
-  try {
-    const map = JSON.parse(env.WIKIJS_KEY_MAP) as Record<string, string>;
-    if (map && typeof map === 'object' && typeof map[token] === 'string') return map[token];
-  } catch {
-    /* ignore malformed map */
-  }
-  return token;
-}
-
-/**
- * Build the context for a tool invocation.
- *
- * Credential resolution order for the incoming "token" (which may be an alias):
- *   1. WIKIJS_PROFILES[alias]  → authoritative {url, token, preset} (real key stays server-side)
- *   2. WIKIJS_KEY_MAP[alias]   → real token (url/policy from env/headers)
- *   3. used verbatim as a raw Wiki.js key (direct BYOK)
- */
-export function resolveContext(extra?: ToolExtra): WikiContext {
-  const env = process.env;
+function oauthContext(extra: ToolExtra | undefined, env: Record<string, string | undefined>): WikiContext | undefined {
   const headers = extra?.requestInfo?.headers;
-
-  // --- OAuth session (authInfo.extra.oauth) — the token IS a Wiki.js USER JWT ---
-  // Wiki.js enforces that user's real groups/page-rules; this server only adds
-  // the agent-safety overlay (confirm gates) via WIKIJS_OAUTH_ROLE.
   const authExtra = extra?.authInfo?.extra as
     | { oauth?: boolean; sessionId?: string; label?: string; email?: string }
     | undefined;
-  if (authExtra?.oauth && typeof extra?.authInfo?.token === 'string') {
-    const baseUrl = (env.WIKIJS_URL || env.WIKIJS_BASE_URL || '').trim();
-    if (!baseUrl) throw new Error('WIKIJS_URL must be configured on the server for OAuth sessions.');
-    const sessionId = typeof authExtra.sessionId === 'string' ? authExtra.sessionId : undefined;
-    const onNewJwt = sessionId
-      ? (jwt: string) => {
-          // Persist Wiki.js' rolling JWT renewal (fire-and-forget; lazy import
-          // keeps node:sqlite out of stdio/serverless runtimes).
-          import('./oauth/service')
-            .then((m) => m.persistRenewedJwt(sessionId, jwt))
-            .catch((e) => console.error('Failed to persist renewed wiki JWT:', e));
-        }
-      : undefined;
-    const requestOverlayOauth = parsePolicyConfig(header(headers, 'x-wikijs-policy'));
-    const oauthRole = roleConfig(env.WIKIJS_OAUTH_ROLE || 'wiki');
-    return {
-      client: new WikiClient(baseUrl, extra.authInfo.token, undefined, { onNewJwt }),
-      policy: BASE_POLICY.withOverlay(oauthRole).withOverlay(requestOverlayOauth),
-      baseUrl,
-      hasToken: true,
-      profile: authExtra.label ?? authExtra.email ?? 'oauth-user',
-      sessionId,
-      credentialKey: fingerprint(extra.authInfo.token),
-    };
-  }
-
-  // --- incoming token / alias: X-Wikijs-Token > Authorization Bearer > authInfo > env ---
-  let token = header(headers, 'x-wikijs-token');
-  if (!token) {
-    const auth = header(headers, 'authorization');
-    if (auth && /^bearer\s+/i.test(auth)) token = auth.replace(/^bearer\s+/i, '').trim();
-  }
-  if (!token && typeof extra?.authInfo?.token === 'string') token = extra.authInfo.token;
-  // Single-tenant env fallback only without OAuth — with OAuth on, an empty or
-  // missing per-request credential must never borrow the service key.
-  if (!token && !oauthEnabled(env)) token = env.WIKIJS_TOKEN || env.WIKIJS_API_KEY || undefined;
-
-  // --- untrusted per-request overlay (client) — can only tighten ---
-  let requestOverlay: PolicyConfig | undefined = parsePolicyConfig(header(headers, 'x-wikijs-policy'));
-  const reqPreset = header(headers, 'x-wikijs-preset');
-  if (reqPreset) requestOverlay = { preset: reqPreset, ...(requestOverlay ?? {}) };
-
-  let baseUrl: string;
-  let realToken: string | undefined;
-  let roleOverlay: PolicyConfig | undefined;
-  let inlineOverlay: PolicyConfig | undefined;
-  let profileName: string | undefined;
-
-  const profile = resolveProfile(token, env);
-  if (profile) {
-    // Named profile is authoritative: the client supplied only the (secret) alias.
-    // Expose only the non-secret label — never echo the secret alias back anywhere.
-    profileName = profile.label ?? '(unlabeled)';
-    realToken = profile.token;
-    // URL is usually global (one wiki for all); profile.url is an optional override.
-    baseUrl = (profile.url || env.WIKIJS_URL || env.WIKIJS_BASE_URL || '').trim();
-    // Assigned role (from config/roles.json) + optional inline fine-tuning.
-    roleOverlay = roleConfig(profile.role ?? profile.preset);
-    if (profile.policy) {
-      inlineOverlay = parsePolicyConfig({ categories: profile.policy.categories, tools: profile.policy.tools });
-    }
-  } else {
-    realToken = resolveAlias(token, env);
-    // A KEY_MAP alias unlocks a SERVER key but carries no role → defaultRole,
-    // like a profile without one (R-03). Raw BYOK keys keep the ceiling: there
-    // Wiki.js enforces the caller's own key.
-    if (realToken !== token) roleOverlay = roleConfig(undefined);
-    const callerUrl = header(headers, 'x-wikijs-url');
-    baseUrl = (
-      (callerUrl ? checkCallerUrl(callerUrl, env) : undefined) ||
-      (typeof extra?.authInfo?.extra?.baseUrl === 'string' ? (extra.authInfo.extra.baseUrl as string) : undefined) ||
-      env.WIKIJS_URL ||
-      env.WIKIJS_BASE_URL ||
-      ''
-    ).trim();
-  }
-
-  if (!baseUrl) {
-    throw new Error(
-      'No Wiki.js URL configured. Use a WIKIJS_PROFILES alias, send the "X-Wikijs-Url" header, or set WIKIJS_URL.',
-    );
-  }
-
-  // Layer overlays (all tighten): assigned role → inline fine-tuning → per-request.
-  const policy = BASE_POLICY.withOverlay(roleOverlay).withOverlay(inlineOverlay).withOverlay(requestOverlay);
-
+  if (!authExtra?.oauth || typeof extra?.authInfo?.token !== 'string') return undefined;
+  const baseUrl = (env.WIKIJS_URL || env.WIKIJS_BASE_URL || '').trim();
+  if (!baseUrl) throw new Error('WIKIJS_URL must be configured on the server for OAuth sessions.');
+  const sessionId = typeof authExtra.sessionId === 'string' ? authExtra.sessionId : undefined;
+  const onNewJwt = sessionId
+    ? (jwt: string) => {
+        // Persist Wiki.js' rolling JWT renewal (fire-and-forget; lazy import
+        // keeps node:sqlite out of stdio/serverless runtimes).
+        import('./oauth/service')
+          .then((m) => m.persistRenewedJwt(sessionId, jwt))
+          .catch((e) => console.error('Failed to persist renewed wiki JWT:', e));
+      }
+    : undefined;
+  const oauthRole = roleConfig(env.WIKIJS_OAUTH_ROLE || 'wiki');
   return {
-    client: new WikiClient(baseUrl, realToken),
-    policy,
+    client: new WikiClient(baseUrl, extra.authInfo.token, undefined, { onNewJwt }),
+    policy: withRequestOverlays(BASE_POLICY.withOverlay(oauthRole), headers),
     baseUrl,
-    hasToken: Boolean(realToken),
-    profile: profileName,
-    credentialKey: fingerprint(realToken),
+    hasToken: true,
+    profile: authExtra.label ?? authExtra.email ?? 'oauth-user',
+    sessionId,
+    credentialKey: fingerprint(extra.authInfo.token),
+  };
+}
+
+/**
+ * Build the context for a tool invocation: an OAuth session, or else the legacy
+ * credential (profile handle / KEY_MAP alias / raw BYOK key / env key — see
+ * lib/credentials.ts) with its role overlays.
+ */
+export function resolveContext(extra?: ToolExtra): WikiContext {
+  const env = process.env;
+  const oauth = oauthContext(extra, env);
+  if (oauth) return oauth;
+
+  const cred = resolveCredential(extra?.requestInfo?.headers, extra?.authInfo, env);
+  // Layer overlays (all tighten): assigned role → inline fine-tuning → per-request.
+  const policy = withRequestOverlays(
+    BASE_POLICY.withOverlay(cred.roleOverlay).withOverlay(cred.inlineOverlay),
+    extra?.requestInfo?.headers,
+  );
+  return {
+    client: new WikiClient(cred.baseUrl, cred.token, undefined, cred.callerTarget ? { assertTarget: assertPublicTarget } : {}),
+    policy,
+    baseUrl: cred.baseUrl,
+    hasToken: Boolean(cred.token),
+    profile: cred.profile,
+    credentialKey: fingerprint(cred.token),
   };
 }
