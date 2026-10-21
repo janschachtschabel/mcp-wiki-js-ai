@@ -147,7 +147,7 @@ async function main() {
   await mcp('notifications/initialized', {}, tokens.access_token).catch(() => {});
 
   const profile = await call('wiki_user_profile', {}, tokens.access_token);
-  check('tool call runs as the REAL wiki user (profile = admin)', !profile.isError && profile.text.includes('admin@example.com'), profile.text.slice(0, 200));
+  check('tool call runs as the REAL wiki user (profile = admin)', !profile.isError && profile.text.includes(ADMIN.user), profile.text.slice(0, 200));
 
   const created = await call('wiki_page_create', {
     path: 'geheim/ki-sperre-test', title: 'Geheime Seite', content: 'Streng intern.',
