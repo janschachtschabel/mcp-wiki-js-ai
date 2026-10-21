@@ -1,14 +1,12 @@
 import { SERVER_INFO } from '../../../lib/meta';
 import { oauthEnabled } from '../../../lib/oauth/store';
+import { resolveIssuer } from '../../../lib/oauth/metadata';
 
 export const dynamic = 'force-dynamic';
 
 /** Lightweight discovery document advertising the Streamable HTTP endpoint. */
 const handler = async (request: Request) => {
-  const url = new URL(request.url);
-  const proto = request.headers.get('x-forwarded-proto') || url.protocol.replace(':', '');
-  const host = request.headers.get('x-forwarded-host') || url.host;
-  const baseUrl = process.env.PUBLIC_BASE_URL || `${proto}://${host}`;
+  const baseUrl = resolveIssuer(request);
 
   return Response.json({
     name: SERVER_INFO.name,

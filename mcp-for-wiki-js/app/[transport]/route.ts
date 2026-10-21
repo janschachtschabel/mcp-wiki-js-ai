@@ -4,6 +4,9 @@ import { SERVER_INFO, INSTRUCTIONS } from '../../lib/meta';
 import { oauthEnabled } from '../../lib/oauth/store';
 import { MCP_BODY_LIMIT, readBody } from '../../lib/body-limit';
 import { legacyAllowed, shouldUseOAuth } from '../../lib/oauth/routing';
+import { configuredOrigin } from '../../lib/oauth/metadata';
+
+const PUBLIC_ORIGIN = configuredOrigin();
 
 export const dynamic = 'force-dynamic';
 // 60s deploys on every Vercel plan (incl. Hobby). Pro/Enterprise can raise this.
@@ -68,9 +71,11 @@ const mcpWithOauth = withMcpAuth(
   {
     required: true,
     resourceMetadataPath: '/.well-known/oauth-protected-resource',
+    // The challenge names the scope to request (R-48); our tokens always carry it.
+    requiredScopes: ['wiki'],
     // Behind the reverse proxy the public origin comes from PUBLIC_BASE_URL;
     // without it, withMcpAuth falls back to X-Forwarded-* headers.
-    ...(process.env.PUBLIC_BASE_URL ? { resourceUrl: new URL(process.env.PUBLIC_BASE_URL).origin } : {}),
+    ...(PUBLIC_ORIGIN ? { resourceUrl: PUBLIC_ORIGIN } : {}),
   },
 );
 

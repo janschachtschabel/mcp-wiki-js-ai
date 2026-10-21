@@ -37,6 +37,7 @@ async function main(): Promise<void> {
   const web = await import('../lib/oauth/web');
 
   store.openTestStore();
+  const ISSUER = 'https://mcp.example.org';
 
   // ---- crypto -------------------------------------------------------------
   const secretText = 'wiki-jwt-payload-äöü-🔑';
@@ -73,6 +74,26 @@ async function main(): Promise<void> {
     'invalid_redirect_uri',
   );
 
+  // ---- R-16: optional allowlist of redirect hosts --------------------------
+  process.env.MCP_ALLOWED_REDIRECT_HOSTS = 'claude.ai, ChatGPT.com';
+  expectOAuthError(
+    'R-16: allowlist set → DCR rejects a redirect host outside it',
+    () => service.registerClient({ redirect_uris: ['https://evil.example/cb'] }),
+    'invalid_redirect_uri',
+  );
+  check('R-16: allowlisted host registers (case-insensitive)', service.registerClient({ redirect_uris: ['https://chatgpt.com/cb'] }).client_id.startsWith('mcp_client_'));
+  check('R-16: loopback stays allowed (local clients)', service.registerClient({ redirect_uris: ['http://127.0.0.1:5000/cb'] }).client_id.startsWith('mcp_client_'));
+  delete process.env.MCP_ALLOWED_REDIRECT_HOSTS;
+  const evil = service.registerClient({ client_name: 'Claude', redirect_uris: ['https://evil.example/cb'] });
+  process.env.MCP_ALLOWED_REDIRECT_HOSTS = 'claude.ai';
+  expectOAuthError(
+    'R-16: clients registered before the allowlist are refused at authorize',
+    () => service.validateAuthorizeRequest({ clientId: evil.client_id, redirectUri: 'https://evil.example/cb', codeChallenge: 'A'.repeat(43), codeChallengeMethod: 'S256' }),
+    'invalid_redirect_uri',
+  );
+  delete process.env.MCP_ALLOWED_REDIRECT_HOSTS;
+  check('R-16: without the env every https host stays allowed (default off)', service.registerClient({ redirect_uris: ['https://evil.example/cb'] }).client_id.startsWith('mcp_client_'));
+
   // ---- redirect matching --------------------------------------------------
   check(
     'loopback matching is port-agnostic',
@@ -107,10 +128,18 @@ async function main(): Promise<void> {
     'invalid_request',
   );
 
-  const identity = { name: 'Alice', email: 'alice@example.org' };
-  const issued = service.issueAuthorizationCode(params, identity, 'WIKI_JWT_1');
+  const identity = { id: 7, name: 'Alice', email: 'alice@example.org' };
+  const issued = service.issueAuthorizationCode(params, identity, 'WIKI_JWT_1', ISSUER);
   check('code redirect goes to the client', issued.redirect.startsWith('https://claude.ai/api/mcp/auth_callback?'));
   check('code redirect carries state', new URL(issued.redirect).searchParams.get('state') === 'xyz');
+  check('R-48: code redirect carries iss (RFC 9207)', new URL(issued.redirect).searchParams.get('iss') === ISSUER);
+
+  // R-48: RFC 8707 resource indicator — absent or this server's /mcp only.
+  check('R-48: no resource parameter is accepted', (() => { try { service.validateResource(undefined, ISSUER); return true; } catch { return false; } })());
+  check('R-48: own resource URL is accepted', (() => { try { service.validateResource(`${ISSUER}/mcp`, ISSUER); return true; } catch { return false; } })());
+  check('R-48: own resource URL with trailing slash is accepted', (() => { try { service.validateResource(`${ISSUER}/mcp/`, ISSUER); return true; } catch { return false; } })());
+  expectOAuthError('R-48: foreign resource → invalid_target', () => service.validateResource('https://other.example/mcp', ISSUER), 'invalid_target');
+  expectOAuthError('R-48: unparsable resource → invalid_target', () => service.validateResource('not a url', ISSUER), 'invalid_target');
 
   const tokens = service.exchangeAuthorizationCode({
     code: issued.code,
@@ -121,19 +150,20 @@ async function main(): Promise<void> {
   check('token exchange returns bearer', tokens.token_type === 'Bearer' && tokens.access_token.startsWith('mcp_at_'));
   check('token exchange returns refresh token', tokens.refresh_token.startsWith('mcp_rt_'));
 
-  expectOAuthError(
-    'auth code is single-use',
-    () =>
-      service.exchangeAuthorizationCode({
-        code: issued.code,
-        clientId: reg.client_id,
-        redirectUri: params.redirectUri,
-        codeVerifier: verifier,
-      }),
-    'invalid_grant',
-  );
+  // Own code: since R-25 a second redemption also revokes the first one's
+  // session, and the session from `issued` is used further down.
+  const issuedOnce = service.issueAuthorizationCode(params, identity, 'WIKI_JWT_ONCE', ISSUER);
+  const redeemOnce = () =>
+    service.exchangeAuthorizationCode({
+      code: issuedOnce.code,
+      clientId: reg.client_id,
+      redirectUri: params.redirectUri,
+      codeVerifier: verifier,
+    });
+  redeemOnce();
+  expectOAuthError('auth code is single-use', redeemOnce, 'invalid_grant');
 
-  const issued2 = service.issueAuthorizationCode(params, identity, 'WIKI_JWT_2');
+  const issued2 = service.issueAuthorizationCode(params, identity, 'WIKI_JWT_2', ISSUER);
   expectOAuthError(
     'token exchange rejects wrong PKCE verifier',
     () =>
@@ -195,11 +225,19 @@ async function main(): Promise<void> {
   check('rotated access token verifies (session still alive)', live !== undefined);
 
   // ---- reuse detection + revoke -------------------------------------------
-  // Replaying the ALREADY-ROTATED refresh token is the OAuth 2.1 theft signal:
-  // it must fail AND take the whole session down with it.
+  // R-40: a replay right after the rotation is a lost response or a parallel
+  // refresh of the same client, not theft — rejected, but the session lives.
+  expectOAuthError(
+    'R-40: replay within the grace window is rejected',
+    () => service.refreshAccessToken({ refreshToken: tokens.refresh_token, clientId: reg.client_id }),
+    'invalid_grant',
+  );
+  check('R-40: replay within the grace window does NOT revoke the session', service.verifyAccessToken(refreshed.access_token) !== undefined);
+  // Replaying the ALREADY-ROTATED refresh token later is the OAuth 2.1 theft
+  // signal: it must fail AND take the whole session down with it.
   expectOAuthError(
     'replayed old refresh token is rejected',
-    () => service.refreshAccessToken({ refreshToken: tokens.refresh_token, clientId: reg.client_id }),
+    () => service.refreshAccessToken({ refreshToken: tokens.refresh_token, clientId: reg.client_id }, Date.now() + 61_000),
     'invalid_grant',
   );
   check('reuse detection revoked the session', service.verifyAccessToken(refreshed.access_token) === undefined);
@@ -210,16 +248,18 @@ async function main(): Promise<void> {
   );
 
   // ---- /me listing --------------------------------------------------------
-  const issued3 = service.issueAuthorizationCode(params, identity, 'WIKI_JWT_3');
+  const issued3 = service.issueAuthorizationCode(params, identity, 'WIKI_JWT_3', ISSUER);
   service.exchangeAuthorizationCode({
     code: issued3.code,
     clientId: reg.client_id,
     redirectUri: params.redirectUri,
     codeVerifier: verifier,
   });
-  const mine = store.listSessionsByEmail('alice@example.org');
-  check('listSessionsByEmail sees all sessions', mine.length === 2);
-  check('listSessionsByEmail scopes by email', store.listSessionsByEmail('bob@example.org').length === 0);
+  const mine = store.listSessionsForUser(7, 'alice@example.org');
+  check('listSessionsForUser sees all sessions (main, single-use, /me fixture)', mine.length === 3);
+  check('R-41: sessions carry the wiki user id from the login', mine.every((s) => s.userId === 7));
+  check('listSessionsForUser scopes by user', store.listSessionsForUser(8, 'bob@example.org').length === 0);
+  check('R-41: same email, other wiki account (e.g. other auth provider) → not listed', store.listSessionsForUser(8, 'alice@example.org').length === 0);
 
   // ---- admin listing + session hygiene --------------------------------------
   const activeNow = store.listActiveSessions();
@@ -228,14 +268,14 @@ async function main(): Promise<void> {
   const old = Date.now() - 40 * 24 * 60 * 60 * 1000; // 40 days ago — beyond every retention window
   store.insertSession({
     id: 'stale-session', accessHash: 'x1', refreshHash: 'x2', clientId: 'c', clientName: 'Old client',
-    userLabel: 'Old', userEmail: 'old@example.org', encJwt: 'enc', accessExpiresAt: old,
+    userLabel: 'Old', userEmail: 'old@example.org', userId: null, encJwt: 'enc', accessExpiresAt: old,
     createdAt: old, lastUsedAt: old, revokedAt: null,
   });
   // insertSession prunes AFTER its insert (see store.ts) — an already-stale row goes at once
   // (a failed insert would have thrown above).
   check('session insert purges idle-expired sessions', store.getSessionById('stale-session') === undefined);
   store.cleanupSessions();
-  check('cleanup keeps live sessions', store.listSessionsByEmail('alice@example.org').length === 2);
+  check('cleanup keeps live sessions', store.listSessionsForUser(7, 'alice@example.org').length === 3);
 
   // R-10: open DCR must not grow forever — clients without any session/code are purged after 24h.
   const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
@@ -244,7 +284,7 @@ async function main(): Promise<void> {
   store.insertClient({ id: 'mcp_client_used_old', name: 'used', redirectUris: ['https://x.example/cb'], createdAt: twoDaysAgo });
   store.insertSession({
     id: 'live-on-old-client', accessHash: 'y1', refreshHash: 'y2', clientId: 'mcp_client_used_old', clientName: 'used',
-    userLabel: 'U', userEmail: 'u@example.org', encJwt: 'enc', accessExpiresAt: Date.now() + 3600_000,
+    userLabel: 'U', userEmail: 'u@example.org', userId: 9, encJwt: 'enc', accessExpiresAt: Date.now() + 3600_000,
     createdAt: Date.now(), lastUsedAt: Date.now(), revokedAt: null,
   });
   store.cleanupSessions();
@@ -254,7 +294,7 @@ async function main(): Promise<void> {
   check('cleanup keeps the active test client', store.getClient(reg.client_id) !== undefined);
   // Token exchange consumes the code BEFORE the session row exists — an old client must survive that.
   store.insertClient({ id: 'mcp_client_reauth', name: 'returning', redirectUris: [params.redirectUri], createdAt: twoDaysAgo });
-  const reauth = service.issueAuthorizationCode({ ...params, clientId: 'mcp_client_reauth' }, identity, 'WIKI_JWT_RA');
+  const reauth = service.issueAuthorizationCode({ ...params, clientId: 'mcp_client_reauth' }, identity, 'WIKI_JWT_RA', ISSUER);
   service.exchangeAuthorizationCode({ code: reauth.code, clientId: 'mcp_client_reauth', redirectUri: params.redirectUri, codeVerifier: verifier });
   check('old client survives its own code→token exchange', store.getClient('mcp_client_reauth') !== undefined);
 
@@ -271,7 +311,7 @@ async function main(): Promise<void> {
   check('cleanup keeps recent audit rows', afterCleanup.some((a) => a.tool === 'wiki_page_update'));
 
   // A refresh grant also triggers cleanup (bounds the store without new sessions).
-  const issuedR = service.issueAuthorizationCode(params, identity, 'WIKI_JWT_R');
+  const issuedR = service.issueAuthorizationCode(params, identity, 'WIKI_JWT_R', ISSUER);
   const tokR = service.exchangeAuthorizationCode({
     code: issuedR.code, clientId: reg.client_id, redirectUri: params.redirectUri, codeVerifier: verifier,
   });
@@ -279,6 +319,55 @@ async function main(): Promise<void> {
   store.insertAudit({ ts: ancient2, sessionId: null, profile: 'Old2', tool: 'x', category: 'delete', outcome: 'ok', ms: 1 });
   service.refreshAccessToken({ refreshToken: tokR.refresh_token, clientId: reg.client_id });
   check('refresh grant triggers audit cleanup', !store.listAudit(50).some((a) => a.ts === ancient2));
+
+  // ---- R-25: authorization-code reuse revokes what the code produced --------
+  const issuedReuse = service.issueAuthorizationCode(params, identity, 'WIKI_JWT_REUSE', ISSUER);
+  const exchange = () =>
+    service.exchangeAuthorizationCode({ code: issuedReuse.code, clientId: reg.client_id, redirectUri: params.redirectUri, codeVerifier: verifier });
+  const tokReuse = exchange();
+  check('R-25: first redemption works', service.verifyAccessToken(tokReuse.access_token) !== undefined);
+  expectOAuthError('R-25: second redemption → invalid_grant', exchange, 'invalid_grant');
+  check('R-25: second redemption revoked the tokens issued from the code', service.verifyAccessToken(tokReuse.access_token) === undefined);
+  expectOAuthError(
+    'R-25: … including the refresh token',
+    () => service.refreshAccessToken({ refreshToken: tokReuse.refresh_token, clientId: reg.client_id }),
+    'invalid_grant',
+  );
+
+  // ---- R-25: absolute session lifetime ---------------------------------------
+  const issuedAbs = service.issueAuthorizationCode(params, identity, 'WIKI_JWT_ABS', ISSUER);
+  const tokAbs = service.exchangeAuthorizationCode({ code: issuedAbs.code, clientId: reg.client_id, redirectUri: params.redirectUri, codeVerifier: verifier });
+  const absSession = service.verifyAccessToken(tokAbs.access_token)!;
+  const beyondMax = Date.now() + service.SESSION_ABSOLUTE_MAX_MS + 1000;
+  // Keep the session "in use" so only the absolute cap (not idleness) can end it.
+  store.touchSession(absSession.sessionId, beyondMax - 1000);
+  expectOAuthError(
+    'R-25: refresh after the absolute maximum lifetime → invalid_grant',
+    () => service.refreshAccessToken({ refreshToken: tokAbs.refresh_token, clientId: reg.client_id }, beyondMax),
+    'invalid_grant',
+  );
+  check('R-25: … and the session is revoked', store.getSessionById(absSession.sessionId)?.revokedAt != null);
+
+  // ---- R-44: "active" means usable, not merely "not revoked" -----------------
+  const base = store.getSessionById(absSession.sessionId)!;
+  const fresh = { ...base, revokedAt: null, createdAt: Date.now(), lastUsedAt: Date.now() };
+  check('R-44: fresh session is active', service.isSessionActive(fresh));
+  check('R-44: revoked session is not active', !service.isSessionActive({ ...fresh, revokedAt: Date.now() }));
+  check('R-44: idle-expired session is not active', !service.isSessionActive({ ...fresh, lastUsedAt: Date.now() - 15 * 24 * 3600_000 }));
+  check('R-44: session past the absolute maximum is not active', !service.isSessionActive({ ...fresh, createdAt: Date.now() - service.SESSION_ABSOLUTE_MAX_MS - 1000 }));
+
+  // ---- R-48: token revocation (RFC 7009) --------------------------------------
+  const issuedRev = service.issueAuthorizationCode(params, identity, 'WIKI_JWT_REV', ISSUER);
+  const tokRev = service.exchangeAuthorizationCode({ code: issuedRev.code, clientId: reg.client_id, redirectUri: params.redirectUri, codeVerifier: verifier });
+  service.revokeToken({ token: tokRev.access_token, clientId: 'mcp_client_other' });
+  check('R-48: revocation by a different client is ignored', service.verifyAccessToken(tokRev.access_token) !== undefined);
+  service.revokeToken({ token: 'mcp_rt_unknown', clientId: reg.client_id }); // unknown token: no error (RFC 7009 §2.2)
+  service.revokeToken({ token: tokRev.refresh_token, clientId: reg.client_id });
+  check('R-48: revoking the refresh token ends the session (access token dead too)', service.verifyAccessToken(tokRev.access_token) === undefined);
+  const issuedRev2 = service.issueAuthorizationCode(params, identity, 'WIKI_JWT_REV2', ISSUER);
+  const tokRev2 = service.exchangeAuthorizationCode({ code: issuedRev2.code, clientId: reg.client_id, redirectUri: params.redirectUri, codeVerifier: verifier });
+  service.revokeToken({ token: tokRev2.access_token, clientId: reg.client_id });
+  check('R-48: revoking the access token ends the session', service.verifyAccessToken(tokRev2.access_token) === undefined);
 
   if (failed === 0) {
     console.log(`\n${pass} oauth assertions passed.`);

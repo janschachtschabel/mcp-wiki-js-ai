@@ -24,16 +24,17 @@ const TAG_BYTES = 16;
 
 /**
  * Every ciphertext is bound to ONE purpose via its own HKDF key (audit R-02):
- * the encrypted wiki JWT in the DB, the browser's mcp_me cookie and the 2FA
- * continuation blob are not interchangeable — a sqlite copy yields no cookie.
+ * the encrypted wiki JWT in the DB, the browser's mcp_me cookie, the 2FA
+ * continuation blob and the consent nonce cookie are not interchangeable — a sqlite copy yields no cookie.
  * 'db-jwt' keeps the original derivation so existing sessions survive upgrades.
  */
-export type Purpose = 'db-jwt' | 'cookie' | 'tfa';
+export type Purpose = 'db-jwt' | 'cookie' | 'tfa' | 'csrf';
 
 const KEY_INFO: Record<Purpose, string> = {
   'db-jwt': 'wikijs-mcp/session-encryption/v1',
   cookie: 'wikijs-mcp/me-cookie/v1',
   tfa: 'wikijs-mcp/tfa-continuation/v1',
+  csrf: 'wikijs-mcp/consent-nonce/v1',
 };
 
 let cachedKeys: Partial<Record<Purpose, Buffer>> = {};
@@ -105,7 +106,7 @@ export function sha256hex(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
-/** Constant-time string equality (for hash comparisons). */
+/** Constant-time string equality (hash and nonce comparisons). */
 export function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a, 'utf8');
   const bb = Buffer.from(b, 'utf8');
@@ -114,7 +115,7 @@ export function safeEqual(a: string, b: string): boolean {
 }
 
 /** PKCE S256: base64url(SHA-256(verifier)) must equal the stored challenge. */
-export function pkceChallengeFromVerifier(verifier: string): string {
+function pkceChallengeFromVerifier(verifier: string): string {
   return createHash('sha256').update(verifier, 'ascii').digest('base64url');
 }
 

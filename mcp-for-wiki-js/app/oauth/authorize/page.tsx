@@ -1,10 +1,14 @@
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { oauthEnabled } from '../../../lib/oauth/store';
-import { OAuthError, validateAuthorizeRequest, type AuthorizeParams } from '../../../lib/oauth/service';
-import { identityFromCookies } from '../../../lib/oauth/web';
-import { card, input, label, muted, primaryBtn, secondaryBtn } from '../../theme';
+import { resolveIssuer } from '../../../lib/oauth/metadata';
+import { authorizeErrorText, loginErrorText } from '../../../lib/oauth/messages';
+import { OAuthError, validateAuthorizeRequest, validateResource, type AuthorizeParams } from '../../../lib/oauth/service';
+import { CONSENT_NONCE_HEADER, identityFromCookies, isSecureHeaders } from '../../../lib/oauth/web';
+import { card, emphasis, input, label, link, muted, primaryBtn, secondaryBtn, warningBox } from '../../theme';
+import { ErrorBox } from '../../ui';
 
 export const dynamic = 'force-dynamic';
+export const metadata = { title: 'Wiki-Zugriff freigeben' };
 
 /**
  * OAuth authorize page. The "login" here IS the Wiki.js login:
@@ -12,7 +16,8 @@ export const dynamic = 'force-dynamic';
  *    deployment) → one-click consent, no typing.
  *  - Otherwise a username/password form, validated against Wiki.js' own
  *    login mutation (+ a second 2FA step when the account requires it).
- * All decisions POST to /oauth/authorize/decision (same-origin enforced).
+ * All decisions POST to /oauth/authorize/decision (same-origin enforced) and
+ * carry the CSRF nonce that proxy.ts minted for this render (cookie + field).
  */
 
 type Search = Record<string, string | string[] | undefined>;
@@ -29,19 +34,21 @@ function paramsFrom(sp: Search): AuthorizeParams {
     codeChallenge: first(sp, 'code_challenge'),
     codeChallengeMethod: first(sp, 'code_challenge_method'),
     state: first(sp, 'state') || undefined,
+    resource: first(sp, 'resource') || undefined,
   };
 }
 
-function HiddenParams({ p, mode, tfa }: { p: AuthorizeParams; mode: string; tfa?: string }) {
+function HiddenParams({ p, mode, nonce }: { p: AuthorizeParams; mode: string; nonce: string }) {
   return (
     <>
+      <input type="hidden" name="csrf" value={nonce} />
       <input type="hidden" name="client_id" value={p.clientId} />
       <input type="hidden" name="redirect_uri" value={p.redirectUri} />
       <input type="hidden" name="code_challenge" value={p.codeChallenge} />
       <input type="hidden" name="code_challenge_method" value={p.codeChallengeMethod} />
       {p.state ? <input type="hidden" name="state" value={p.state} /> : null}
+      {p.resource ? <input type="hidden" name="resource" value={p.resource} /> : null}
       <input type="hidden" name="mode" value={mode} />
-      {tfa ? <input type="hidden" name="tfa" value={tfa} /> : null}
     </>
   );
 }
@@ -66,6 +73,7 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
     );
   }
 
+  const h = await headers();
   const sp = await searchParams;
   const p = paramsFrom(sp);
   const responseType = first(sp, 'response_type') || 'code';
@@ -73,41 +81,41 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
   try {
     if (responseType !== 'code') throw new OAuthError('invalid_request', 'Only response_type=code is supported.');
     clientName = validateAuthorizeRequest(p).name;
+    validateResource(p.resource, resolveIssuer({ headers: h }));
   } catch (e) {
     // NEVER redirect to an unvalidated redirect_uri — render the error instead.
-    const msg = e instanceof OAuthError ? e.message : 'Ungültige Autorisierungs-Anfrage.';
     return (
       <Frame>
         <div style={card}>
           <h2 style={{ fontSize: 17 }}>Anfrage abgelehnt</h2>
-          <p style={muted}>{msg}</p>
+          <p role="alert" style={muted}>{authorizeErrorText(e)}</p>
         </div>
       </Frame>
     );
   }
 
-  const tfa = first(sp, 'tfa'); // encrypted continuation token (2FA second step)
-  const loginError = first(sp, 'login_error').slice(0, 200);
+  const tfaStep = first(sp, 'step') === 'tfa'; // continuation is in an HttpOnly cookie (R-26)
+  const loginError = loginErrorText(first(sp, 'login_error')); // fixed codes only (R-22)
   const forceLogin = first(sp, 'force_login') === '1';
-  const sso = tfa || forceLogin ? undefined : await identityFromCookies(await cookies());
+  const sso = tfaStep || forceLogin ? undefined : await identityFromCookies(await cookies(), isSecureHeaders(h));
+  const nonce = h.get(CONSENT_NONCE_HEADER) ?? ''; // missing → the decision route refuses (fail closed)
 
   return (
     <Frame>
       <p style={muted}>
-        <strong style={{ color: '#e7ecff' }}>{clientName}</strong> möchte über den MCP-Server auf das Wiki zugreifen —
+        <strong style={emphasis}>{clientName}</strong> möchte über den MCP-Server auf das Wiki zugreifen —
         mit deinen Wiki-Rechten, in deinem Namen.
       </p>
-      <p style={{ ...muted, fontSize: 14 }}>
-        Nach der Freigabe geht es weiter zu: <strong style={{ color: '#e7ecff' }}>{redirectTarget(p.redirectUri)}</strong>
+      <div role="note" style={warningBox}>
+        <strong>Nicht verifizierte Anwendung.</strong> Den Namen „{clientName}“ hat die Anwendung bei der
+        Registrierung selbst gewählt — er beweist nicht, wer sie ist. Verlässlich ist nur das Ziel:
         <br />
-        Erlaube den Zugriff nur, wenn du die Verbindung gerade selbst gestartet hast.
-      </p>
+        Nach der Freigabe geht es weiter zu: <strong style={emphasis}>{redirectTarget(p.redirectUri)}</strong>
+        <br />
+        Erlaube den Zugriff nur, wenn du die Verbindung gerade selbst gestartet hast und das Ziel kennst.
+      </div>
 
-      {loginError ? (
-        <div style={{ ...card, border: '1px solid #7f1d1d', background: '#2a1420' }}>
-          <p style={{ color: '#fca5a5', margin: 0 }}>{loginError}</p>
-        </div>
-      ) : null}
+      {loginError ? <ErrorBox text={loginError} /> : null}
 
       {sso ? (
         <div style={card}>
@@ -116,7 +124,7 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
             <span style={muted}>({sso.identity.email})</span>
           </p>
           <form method="post" action="/oauth/authorize/decision" style={{ display: 'inline' }}>
-            <HiddenParams p={p} mode="consent" />
+            <HiddenParams p={p} mode="consent" nonce={nonce} />
             <button type="submit" name="action" value="allow" style={primaryBtn}>
               Zugriff erlauben
             </button>
@@ -125,19 +133,22 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
             </button>
           </form>
           <p style={{ ...muted, fontSize: 13, marginBottom: 0 }}>
-            Nicht du? <a href={`?${new URLSearchParams({ ...flatten(sp), force_login: '1' })}`} style={{ color: '#7ab3ff' }}>Mit anderem Wiki-Konto anmelden</a>
+            Nicht du? <a href={`?${new URLSearchParams({ ...flatten(sp), force_login: '1' })}`} style={link}>Mit anderem Wiki-Konto anmelden</a>
           </p>
         </div>
-      ) : tfa ? (
+      ) : tfaStep ? (
         <div style={card}>
           <form method="post" action="/oauth/authorize/decision">
-            <HiddenParams p={p} mode="tfa" tfa={tfa} />
+            <HiddenParams p={p} mode="tfa" nonce={nonce} />
             <label style={label} htmlFor="security_code">
               Zwei-Faktor-Code (Authenticator-App)
             </label>
             <input style={input} id="security_code" name="security_code" inputMode="numeric" autoComplete="one-time-code" required />
             <button type="submit" name="action" value="allow" style={primaryBtn}>
               Bestätigen &amp; erlauben
+            </button>
+            <button type="submit" name="action" value="deny" style={secondaryBtn} formNoValidate>
+              Ablehnen
             </button>
           </form>
         </div>
@@ -148,7 +159,7 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
             durchgereicht, nie gespeichert):
           </p>
           <form method="post" action="/oauth/authorize/decision">
-            <HiddenParams p={p} mode="credentials" />
+            <HiddenParams p={p} mode="credentials" nonce={nonce} />
             <label style={label} htmlFor="username">E-Mail / Benutzername</label>
             <input style={input} id="username" name="username" autoComplete="username" required />
             <label style={label} htmlFor="password">Passwort</label>
@@ -156,7 +167,8 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
             <button type="submit" name="action" value="allow" style={primaryBtn}>
               Anmelden &amp; erlauben
             </button>
-            <button type="submit" name="action" value="deny" style={secondaryBtn}>
+            {/* formNoValidate: refusing must not require filling in the login fields (R-49). */}
+            <button type="submit" name="action" value="deny" style={secondaryBtn} formNoValidate>
               Ablehnen
             </button>
           </form>
@@ -164,7 +176,7 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
       )}
 
       <p style={{ ...muted, fontSize: 13 }}>
-        Du kannst den Zugriff jederzeit unter <a href="/me" style={{ color: '#7ab3ff' }}>/me</a> widerrufen.
+        Du kannst den Zugriff jederzeit unter <a href="/me" style={link}>/me</a> widerrufen.
       </p>
     </Frame>
   );

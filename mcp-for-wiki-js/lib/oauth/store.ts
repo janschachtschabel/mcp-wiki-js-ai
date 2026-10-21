@@ -15,10 +15,11 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { oauthEnabled } from './crypto';
+import { prepareSchema, SCHEMA_VERSION, type SqliteDatabase } from './schema';
 
 // Re-exported: the routes import it from here; it lives in crypto.ts so callers
 // that must not load node:sqlite (lib/register.ts, stdio) can use it too.
-export { oauthEnabled };
+export { oauthEnabled, SCHEMA_VERSION };
 
 export interface ClientRow {
   id: string;
@@ -35,6 +36,8 @@ export interface CodeRow {
   encJwt: string;
   userLabel: string;
   userEmail: string;
+  /** Wiki.js user id — the stable identity (emails are unique only per auth provider, R-41). */
+  userId: number | null;
   expiresAt: number;
 }
 
@@ -46,6 +49,8 @@ export interface SessionRow {
   clientName: string;
   userLabel: string;
   userEmail: string;
+  /** null on rows written before R-41 (they fall back to email ownership until they expire). */
+  userId: number | null;
   encJwt: string;
   accessExpiresAt: number;
   createdAt: number;
@@ -62,63 +67,6 @@ export interface AuditRow {
   outcome: string;
   ms: number;
 }
-
-// node:sqlite types are not in @types/node 20 — keep the surface minimal and local.
-interface SqliteStatement {
-  run(...params: unknown[]): unknown;
-  get(...params: unknown[]): Record<string, unknown> | undefined;
-  all(...params: unknown[]): Record<string, unknown>[];
-}
-interface SqliteDatabase {
-  exec(sql: string): void;
-  prepare(sql: string): SqliteStatement;
-}
-
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS oauth_clients (
-  id            TEXT PRIMARY KEY,
-  name          TEXT NOT NULL,
-  redirect_uris TEXT NOT NULL,
-  created_at    INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS oauth_codes (
-  code_hash    TEXT PRIMARY KEY,
-  client_id    TEXT NOT NULL,
-  redirect_uri TEXT NOT NULL,
-  challenge    TEXT NOT NULL,
-  enc_jwt      TEXT NOT NULL,
-  user_label   TEXT NOT NULL,
-  user_email   TEXT NOT NULL,
-  expires_at   INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS oauth_sessions (
-  id                TEXT PRIMARY KEY,
-  access_hash       TEXT NOT NULL UNIQUE,
-  refresh_hash      TEXT NOT NULL UNIQUE,
-  prev_refresh_hash TEXT,
-  client_id         TEXT NOT NULL,
-  client_name       TEXT NOT NULL,
-  user_label        TEXT NOT NULL,
-  user_email        TEXT NOT NULL,
-  enc_jwt           TEXT NOT NULL,
-  access_expires_at INTEGER NOT NULL,
-  created_at        INTEGER NOT NULL,
-  last_used_at      INTEGER NOT NULL,
-  revoked_at        INTEGER
-);
-CREATE INDEX IF NOT EXISTS idx_sessions_email ON oauth_sessions(user_email);
-CREATE INDEX IF NOT EXISTS idx_sessions_prev_refresh ON oauth_sessions(prev_refresh_hash);
-CREATE TABLE IF NOT EXISTS audit_log (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts         INTEGER NOT NULL,
-  session_id TEXT,
-  profile    TEXT,
-  tool       TEXT NOT NULL,
-  category   TEXT NOT NULL,
-  outcome    TEXT NOT NULL,
-  ms         INTEGER NOT NULL
-);
-`;
 
 let db: SqliteDatabase | null = null;
 
@@ -139,33 +87,59 @@ function loadSqlite(): { DatabaseSync: new (path: string) => SqliteDatabase } {
   return getBuiltin.call(process, 'node:sqlite') as { DatabaseSync: new (path: string) => SqliteDatabase };
 }
 
+/** Open a DB file (or ':memory:') with the pragmas and the latest schema. */
+function openDatabase(path: string): SqliteDatabase {
+  const { DatabaseSync } = loadSqlite();
+  const d = new DatabaseSync(path);
+  try {
+    prepareSchema(d);
+  } catch (e) {
+    d.close(); // otherwise every getDb() retry leaks another handle (and Windows keeps the file locked)
+    throw e;
+  }
+  return d;
+}
+
 /** Lazy singleton — opened on first use, shared per process. */
 function getDb(): SqliteDatabase {
   if (db) return db;
   if (!oauthEnabled()) throw new Error('OAuth store unavailable: MCP_SESSION_SECRET is not set.');
-  const { DatabaseSync } = loadSqlite();
   const dir = dataDir();
   mkdirSync(dir, { recursive: true });
-  db = new DatabaseSync(join(dir, 'mcp.sqlite'));
-  db.exec('PRAGMA journal_mode = WAL;');
-  db.exec(SCHEMA);
-  migrate(db);
+  db = openDatabase(join(dir, 'mcp.sqlite'));
   return db;
 }
 
-/** Idempotent additive migrations for DBs created by earlier versions. */
-function migrate(d: SqliteDatabase): void {
-  const cols = d.prepare('PRAGMA table_info(oauth_sessions)').all();
-  if (!cols.some((c) => c.name === 'prev_refresh_hash')) {
-    d.exec('ALTER TABLE oauth_sessions ADD COLUMN prev_refresh_hash TEXT');
-  }
+/** Test hook: point the store at a throwaway DB (in-memory by default), fully migrated. */
+export function openTestStore(path = ':memory:'): void {
+  closeStore();
+  db = openDatabase(path);
 }
 
-/** Test hook: point the store at a throwaway in-memory DB. */
-export function openTestStore(): void {
-  const { DatabaseSync } = loadSqlite();
-  db = new DatabaseSync(':memory:');
-  db.exec(SCHEMA);
+/** Test hook: release the DB handle (Windows keeps an open file locked). */
+export function closeStore(): void {
+  db?.close();
+  db = null;
+}
+
+/** Test hook: one pragma value (the name is a fixed identifier, never input). */
+export function dbPragma(name: string): unknown {
+  if (!/^[a-z_]+$/.test(name)) throw new Error('invalid pragma name');
+  const row = getDb().prepare(`PRAGMA ${name}`).get();
+  return row ? Object.values(row)[0] : undefined;
+}
+
+/** Test hook: names of all indexes in the store. */
+export function indexNames(): string[] {
+  return getDb()
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
+    .all()
+    .map((r) => String(r.name));
+}
+
+/** Health probe (R-39): the store opens and answers a trivial query. */
+export function ping(): boolean {
+  return getDb().prepare('SELECT 1 AS ok').get()?.ok === 1;
 }
 
 const now = () => Date.now();
@@ -195,18 +169,27 @@ export function getClient(id: string): ClientRow | undefined {
 export function insertCode(c: CodeRow): void {
   getDb()
     .prepare(
-      'INSERT INTO oauth_codes (code_hash, client_id, redirect_uri, challenge, enc_jwt, user_label, user_email, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO oauth_codes (code_hash, client_id, redirect_uri, challenge, enc_jwt, user_label, user_email, user_id, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     )
-    .run(c.codeHash, c.clientId, c.redirectUri, c.challenge, c.encJwt, c.userLabel, c.userEmail, c.expiresAt);
+    .run(c.codeHash, c.clientId, c.redirectUri, c.challenge, c.encJwt, c.userLabel, c.userEmail, c.userId, c.expiresAt);
 }
 
-/** Fetch AND delete (single use). Returns undefined for unknown or expired codes. */
+/** Consumed codes stay as tombstones this long past their expiry, so a replay
+ *  can still be traced to the session it produced (R-25). */
+const CODE_TOMBSTONE_MS = 60 * 60 * 1000;
+
+/**
+ * Mark a code consumed and return it (single use). One UPDATE … RETURNING, so
+ * two processes cannot both redeem it (R-42). Undefined for unknown, already
+ * used or expired codes.
+ */
 export function consumeCode(codeHash: string): CodeRow | undefined {
   const d = getDb();
-  const r = d.prepare('SELECT * FROM oauth_codes WHERE code_hash = ?').get(codeHash);
-  d.prepare('DELETE FROM oauth_codes WHERE code_hash = ?').run(codeHash);
-  // Opportunistic cleanup of other expired codes (table stays tiny).
-  d.prepare('DELETE FROM oauth_codes WHERE expires_at < ?').run(now());
+  const r = d
+    .prepare('UPDATE oauth_codes SET consumed_at = ? WHERE code_hash = ? AND consumed_at IS NULL RETURNING *')
+    .get(now(), codeHash);
+  // Opportunistic cleanup of old codes and tombstones (table stays tiny).
+  d.prepare('DELETE FROM oauth_codes WHERE expires_at < ?').run(now() - CODE_TOMBSTONE_MS);
   if (!r || Number(r.expires_at) < now()) return undefined;
   return {
     codeHash: String(r.code_hash),
@@ -216,8 +199,22 @@ export function consumeCode(codeHash: string): CodeRow | undefined {
     encJwt: String(r.enc_jwt),
     userLabel: String(r.user_label),
     userEmail: String(r.user_email),
+    userId: r.user_id == null ? null : Number(r.user_id),
     expiresAt: Number(r.expires_at),
   };
+}
+
+/** Remember which session a code produced (for reuse revocation, R-25). */
+export function linkCodeToSession(codeHash: string, sessionId: string): void {
+  getDb().prepare('UPDATE oauth_codes SET session_id = ? WHERE code_hash = ?').run(sessionId, codeHash);
+}
+
+/** A code that was ALREADY consumed (reuse signal), with the session it produced. */
+export function consumedCodeSession(codeHash: string): { sessionId: string | null } | undefined {
+  const r = getDb()
+    .prepare('SELECT session_id FROM oauth_codes WHERE code_hash = ? AND consumed_at IS NOT NULL')
+    .get(codeHash);
+  return r ? { sessionId: r.session_id == null ? null : String(r.session_id) } : undefined;
 }
 
 // ----------------------------------------------------------------- sessions ---
@@ -231,6 +228,7 @@ function rowToSession(r: Record<string, unknown>): SessionRow {
     clientName: String(r.client_name),
     userLabel: String(r.user_label),
     userEmail: String(r.user_email),
+    userId: r.user_id == null ? null : Number(r.user_id),
     encJwt: String(r.enc_jwt),
     accessExpiresAt: Number(r.access_expires_at),
     createdAt: Number(r.created_at),
@@ -270,11 +268,11 @@ export function insertSession(s: SessionRow): void {
   getDb()
     .prepare(
       `INSERT INTO oauth_sessions
-       (id, access_hash, refresh_hash, client_id, client_name, user_label, user_email, enc_jwt, access_expires_at, created_at, last_used_at, revoked_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, access_hash, refresh_hash, client_id, client_name, user_label, user_email, user_id, enc_jwt, access_expires_at, created_at, last_used_at, revoked_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
-      s.id, s.accessHash, s.refreshHash, s.clientId, s.clientName, s.userLabel, s.userEmail,
+      s.id, s.accessHash, s.refreshHash, s.clientId, s.clientName, s.userLabel, s.userEmail, s.userId,
       s.encJwt, s.accessExpiresAt, s.createdAt, s.lastUsedAt, s.revokedAt,
     );
   // AFTER the insert: the code was already consumed, so before it the client
@@ -298,13 +296,22 @@ export function getSessionById(id: string): SessionRow | undefined {
 }
 
 /** Rotate access+refresh hashes on a refresh grant. The previous refresh hash is
- *  kept for ONE generation so a replay of it can be detected as token theft. */
-export function rotateSessionTokens(id: string, accessHash: string, refreshHash: string, accessExpiresAt: number): void {
-  getDb()
+ *  kept for ONE generation so a replay of it can be detected as token theft.
+ *  Compare-and-swap on the presented refresh hash: false when another request
+ *  (or process) rotated first (R-42). */
+export function rotateSessionTokens(
+  id: string,
+  expectedRefreshHash: string,
+  accessHash: string,
+  refreshHash: string,
+  accessExpiresAt: number,
+): boolean {
+  const res = getDb()
     .prepare(
-      'UPDATE oauth_sessions SET prev_refresh_hash = refresh_hash, access_hash = ?, refresh_hash = ?, access_expires_at = ? WHERE id = ?',
+      'UPDATE oauth_sessions SET prev_refresh_hash = refresh_hash, access_hash = ?, refresh_hash = ?, access_expires_at = ? WHERE id = ? AND refresh_hash = ?',
     )
-    .run(accessHash, refreshHash, accessExpiresAt, id);
+    .run(accessHash, refreshHash, accessExpiresAt, id, expectedRefreshHash);
+  return Number(res.changes) === 1;
 }
 
 /** Lookup by an ALREADY-ROTATED refresh hash (reuse = theft signal). */
@@ -326,11 +333,14 @@ export function revokeSession(id: string): void {
   getDb().prepare('UPDATE oauth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').run(now(), id);
 }
 
-/** All sessions of one wiki user (for the /me page), newest first. */
-export function listSessionsByEmail(email: string): SessionRow[] {
+/**
+ * All sessions of one wiki user (for the /me page), newest first. Owned by the
+ * wiki user id; rows from before R-41 (no id yet) fall back to the email.
+ */
+export function listSessionsForUser(userId: number, email: string): SessionRow[] {
   return getDb()
-    .prepare('SELECT * FROM oauth_sessions WHERE user_email = ? ORDER BY created_at DESC')
-    .all(email)
+    .prepare('SELECT * FROM oauth_sessions WHERE user_id = ? OR (user_id IS NULL AND user_email = ?) ORDER BY created_at DESC')
+    .all(userId, email)
     .map(rowToSession);
 }
 

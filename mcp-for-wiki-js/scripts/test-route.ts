@@ -64,6 +64,7 @@ async function main(): Promise<void> {
     'oauth on, no token → resource_metadata points at the RFC 9728 document',
     challenge.includes(`resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource"`),
   );
+  check('R-48: 401 challenge names the scope to request', challenge.includes('scope="wiki"'));
   delete process.env.MCP_SESSION_SECRET;
 
   // 3. OAuth off: legacy stateless transport answers initialize.
@@ -82,7 +83,27 @@ async function main(): Promise<void> {
   check('defaulted field stays optional (wiki_page_get.locale)', !!get?.properties?.locale && !(get.required ?? []).includes('locale'));
   check('required field stays required (wiki_page_create.path)', (create?.required ?? []).includes('path'));
   check('confirm is added to non-read tools (wiki_page_create)', !!create?.properties?.confirm);
-  check('confirm is NOT added to read tools (wiki_page_get)', !get?.properties?.confirm);
+  // R-34: a policy may set "read" to confirm too — without the field such a call could never run.
+  check('confirm is also added to read tools (wiki_page_get, audit R-34)', !!get?.properties?.confirm);
+
+  // 5. Response headers from next.config.js (audit R-28). Verified in a real
+  // browser once (pages hydrate, no CSP violations); this pins the policy shape.
+  const nextConfig = (await import('../next.config.js')).default as {
+    poweredByHeader?: boolean;
+    headers: () => Promise<Array<{ source: string; headers: Array<{ key: string; value: string }> }>>;
+  };
+  const all = (await nextConfig.headers()).find((h) => h.source === '/:path*')?.headers ?? [];
+  const csp = all.find((h) => h.key === 'Content-Security-Policy')?.value ?? '';
+  check('R-28: X-Powered-By disabled', nextConfig.poweredByHeader === false);
+  check("R-28: CSP has default-src 'self'", /(^|; )default-src 'self'(;|$)/.test(csp));
+  check("R-28: CSP keeps frame-ancestors 'none'", /frame-ancestors 'none'/.test(csp));
+  check("R-28: CSP has object-src 'none' and base-uri 'self'", /object-src 'none'/.test(csp) && /base-uri 'self'/.test(csp));
+  // form-action would also apply to the 303 from the consent form to the client's redirect_uri.
+  check('R-28: CSP has no form-action (would break the OAuth redirect)', !/form-action/.test(csp));
+  // Regression (verified in Chromium): with `no-referrer`, browsers send `Origin: null` on the
+  // consent/login form POSTs, and the Origin-based CSRF check rejected every real browser login.
+  const referrer = all.find((h) => h.key === 'Referrer-Policy')?.value ?? '';
+  check('Referrer-Policy keeps the Origin header on same-origin form posts', referrer === 'same-origin');
 
   if (failed === 0) {
     console.log(`\n${pass} route assertions passed.`);

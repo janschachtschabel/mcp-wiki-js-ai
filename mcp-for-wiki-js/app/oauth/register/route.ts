@@ -1,6 +1,8 @@
 import { corsPreflightResponse } from '../../../lib/oauth/metadata';
 import { OAuthError, registerClient } from '../../../lib/oauth/service';
 import { oauthEnabled } from '../../../lib/oauth/store';
+import { jsonResponse, oauthDisabledResponse, oauthErrorResponse } from '../../../lib/oauth/http';
+import { registrationAttempt } from '../../../lib/oauth/rate-limit';
 import { FORM_BODY_LIMIT, readBody } from '../../../lib/body-limit';
 
 export const dynamic = 'force-dynamic';
@@ -9,39 +11,37 @@ export const dynamic = 'force-dynamic';
  * RFC 7591 Dynamic Client Registration — open (as the MCP spec expects), but
  * only public PKCE clients come out of it: no secrets are issued, and a
  * registration grants nothing by itself (authorization still requires a
- * Wiki.js login in the user's browser).
+ * Wiki.js login in the user's browser). Rate-limited per client IP (R-10).
  */
 export async function POST(req: Request): Promise<Response> {
-  if (!oauthEnabled()) return new Response('OAuth is not enabled on this deployment.', { status: 404 });
+  if (!oauthEnabled()) return oauthDisabledResponse();
+  const wait = registrationAttempt(req.headers);
+  if (wait) {
+    return jsonResponse(
+      { error: 'too_many_requests', error_description: 'Too many client registrations from this address — retry later.' },
+      429,
+      { 'Retry-After': String(wait) },
+    );
+  }
   const text = await readBody(req, FORM_BODY_LIMIT);
   if (text instanceof Response) return text;
-  let body: unknown;
   try {
-    body = JSON.parse(text);
-  } catch {
-    return errorResponse(new OAuthError('invalid_request', 'Body must be JSON.'));
-  }
-  try {
-    const result = registerClient(body);
-    return new Response(JSON.stringify(result), {
-      status: 201,
-      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' },
-    });
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      throw new OAuthError('invalid_request', 'Body must be JSON.');
+    }
+    return jsonResponse(registerClient(body), 201);
   } catch (e) {
-    return errorResponse(e);
+    // RFC 7591 §3.2.2 error codes.
+    return oauthErrorResponse(e, 'Client registration', (err) => ({
+      error: err.code === 'invalid_redirect_uri' ? 'invalid_redirect_uri' : 'invalid_client_metadata',
+      status: 400,
+    }));
   }
 }
 
 export async function OPTIONS(): Promise<Response> {
   return corsPreflightResponse();
-}
-
-function errorResponse(e: unknown): Response {
-  const err = e instanceof OAuthError ? e : new OAuthError('invalid_request', 'Registration failed.');
-  // RFC 7591 uses "invalid_redirect_uri" / "invalid_client_metadata" error codes.
-  const code = err.code === 'invalid_redirect_uri' ? 'invalid_redirect_uri' : 'invalid_client_metadata';
-  return new Response(JSON.stringify({ error: code, error_description: err.message }), {
-    status: 400,
-    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-  });
 }

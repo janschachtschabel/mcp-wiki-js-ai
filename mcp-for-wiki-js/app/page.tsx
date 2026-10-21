@@ -2,16 +2,15 @@ import { headers } from 'next/headers';
 import { allTools } from '../lib/tools/index';
 import { SERVER_INFO } from '../lib/meta';
 import { oauthEnabled } from '../lib/oauth/store';
-import { card, code, h2, mono, muted, ol } from './theme';
+import { resolveIssuer } from '../lib/oauth/metadata';
+import { card, code, h2, link, mono, muted, ol, successCard } from './theme';
 
 export const dynamic = 'force-dynamic';
+// The layout's title template does not apply to the root segment itself.
+export const metadata = { title: { absolute: 'Übersicht – Wiki-MCP-Server' } };
 
 export default async function Home() {
-  const h = await headers();
-  const proto = h.get('x-forwarded-proto') ?? 'https';
-  const host = h.get('x-forwarded-host') ?? h.get('host') ?? 'your-deploy.example.com';
-  const base = `${proto}://${host}`;
-  const mcpUrl = `${base}/mcp`;
+  const mcpUrl = `${resolveIssuer({ headers: await headers() })}/mcp`;
 
   const byCategory = allTools.reduce<Record<string, number>>((acc, t) => {
     acc[t.category] = (acc[t.category] ?? 0) + 1;
@@ -21,7 +20,7 @@ export default async function Home() {
   return (
     <main style={{ maxWidth: 880, margin: '0 auto', padding: '48px 24px 80px' }}>
       <h1 style={{ fontSize: 30, marginBottom: 4 }}>
-        {SERVER_INFO.name} <span style={{ color: '#7d8bb5', fontSize: 18 }}>v{SERVER_INFO.version}</span>
+        {SERVER_INFO.name} <span style={{ ...muted, fontSize: 18 }}>v{SERVER_INFO.version}</span>
       </h1>
       <p style={{ ...muted, marginTop: 0 }}>
         Wiki.js-MCP-Server — volle GraphQL-API, eigener API-Key pro Nutzer, feingranulare Rechte. Endpoint:{' '}
@@ -29,7 +28,7 @@ export default async function Home() {
       </p>
 
       {oauthEnabled() ? (
-        <div style={{ ...card, border: '1px solid #2f4a2f', background: '#12241a' }}>
+        <div style={successCard}>
           <h2 style={h2}>✅ Empfohlen: Eine URL für alle — Login ist der Wiki-Login (OAuth)</h2>
           <p style={{ ...muted, marginTop: 2 }}>
             Diese URL enthält <strong>kein Geheimnis</strong> und ist für alle Team-Mitglieder gleich. Beim ersten
@@ -43,7 +42,7 @@ export default async function Home() {
             <li><strong>ChatGPT / Codex:</strong> Connector mit dieser URL anlegen — der OAuth-Login startet automatisch.</li>
           </ol>
           <p style={{ ...muted, fontSize: 13, marginBottom: 0 }}>
-            Eigene Verbindungen ansehen &amp; widerrufen: <a href="/me" style={{ color: '#7ab3ff' }}>/me</a>. Die
+            Eigene Verbindungen ansehen &amp; widerrufen: <a href="/me" style={link}>/me</a>. Die
             Varianten unten (Handle/BYOK) bleiben als Fallback erhalten.
           </p>
         </div>
@@ -123,7 +122,7 @@ export default async function Home() {
         </div>
       </div>
 
-      <p style={{ color: '#5f6f9c', fontSize: 13 }}>
+      <p style={{ ...muted, fontSize: 13 }}>
         Verbindung prüfen: das Tool <span style={mono}>wiki_connection_status</span> aufrufen lassen. Vollständige
         Doku im Repository unter <span style={mono}>docs/</span>.
       </p>

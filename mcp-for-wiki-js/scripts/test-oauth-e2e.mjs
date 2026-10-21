@@ -4,8 +4,8 @@
 //
 // Prerequisites (like scripts/test-local-live.ts, this needs a live wiki):
 //   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d   (repo root)
-//   ADMIN_EMAIL=... ADMIN_PASSWORD=... DEMO_PASSWORD=... \
-//     node deploy/scripts/bootstrap.mjs --demo
+//   ADMIN_EMAIL=... ADMIN_PASSWORD=... DEMO_PASSWORD=... docker compose \
+//     -f docker-compose.yml -f docker-compose.local.yml run --rm bootstrap --demo
 //   npm run test:e2e
 //
 // Base URL + credentials come from env (defaults match the documented local
@@ -64,6 +64,18 @@ async function mcp(method, params, token, id = 1) {
   return { status: res.status, body: await mcpParse(res) };
 }
 
+/** Like a browser: load a form page and keep its CSRF nonce cookie + hidden field. */
+async function formPage(url, cookie) {
+  const res = await fetch(url, cookie ? { headers: { cookie } } : {});
+  const html = await res.text();
+  const nonceCookie = res.headers.getSetCookie().map((c) => c.split(';')[0]).find((c) => c.includes('csrf')) ?? '';
+  const csrf = (html.match(/name="csrf" value="([^"]*)"/) ?? [])[1] ?? '';
+  return { res, html, nonceCookie, csrf };
+}
+
+/** The mcp_me session cookie (name=value) from a response, if set. */
+const meCookieOf = (res) => res.headers.getSetCookie().map((c) => c.split(';')[0]).find((c) => /mcp_me=/.test(c)) ?? '';
+
 /** tools/call helper returning { isError, text, structured }. */
 async function call(tool, args, token) {
   const r = await mcp('tools/call', { name: tool, arguments: args }, token, Math.floor(Math.random() * 1e6));
@@ -108,19 +120,28 @@ async function main() {
     client_id: reg.client_id, redirect_uri: 'http://localhost:44444/cb',
     response_type: 'code', code_challenge: challenge, code_challenge_method: 'S256', state: 'e2e-state',
   });
-  const authPage = await fetch(`${BASE}/oauth/authorize?${authQuery}`);
-  const authHtml = await authPage.text();
+  const { res: authPage, html: authHtml, nonceCookie, csrf } = await formPage(`${BASE}/oauth/authorize?${authQuery}`);
   check('authorize page renders login form', authPage.status === 200 && authHtml.includes('mode') && authHtml.includes('password'));
   check('authorize page names the client', authHtml.includes('E2E Test Client'));
+  check('authorize page issues a CSRF nonce (cookie + hidden field)', nonceCookie !== '' && csrf !== '');
+
+  const decisionBody = {
+    client_id: reg.client_id, redirect_uri: 'http://localhost:44444/cb',
+    code_challenge: challenge, code_challenge_method: 'S256', state: 'e2e-state',
+    mode: 'credentials', action: 'allow', username: ADMIN.user, password: ADMIN.pass,
+  };
+  // A form planted on a wiki page has no nonce: same-origin, but refused.
+  const forged = await fetch(`${BASE}/oauth/authorize/decision`, {
+    method: 'POST', redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE },
+    body: new URLSearchParams(decisionBody),
+  });
+  check('decision without the page nonce is refused (CSRF)', forged.status === 403, forged.status);
 
   const decision = await fetch(`${BASE}/oauth/authorize/decision`, {
     method: 'POST', redirect: 'manual',
-    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE },
-    body: new URLSearchParams({
-      client_id: reg.client_id, redirect_uri: 'http://localhost:44444/cb',
-      code_challenge: challenge, code_challenge_method: 'S256', state: 'e2e-state',
-      mode: 'credentials', action: 'allow', username: ADMIN.user, password: ADMIN.pass,
-    }),
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE, cookie: nonceCookie },
+    body: new URLSearchParams({ ...decisionBody, csrf }),
   });
   const loc = decision.headers.get('location') ?? '';
   check('decision 303-redirects to the client callback', decision.status === 303 && loc.startsWith('http://localhost:44444/cb?'), `${decision.status} ${loc}`);
@@ -211,14 +232,20 @@ async function main() {
   check('old access token is dead after refresh', oldProfile.status === 401 || oldProfile.isError, `status=${oldProfile.status}`);
 
   // ---- 7. /me self-service --------------------------------------------------
-  const meLogin = await fetch(`${BASE}/me/login`, {
-    method: 'POST', redirect: 'manual',
-    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE },
-    body: new URLSearchParams({ username: ADMIN.user, password: ADMIN.pass }),
-  });
-  const meCookie2 = (meLogin.headers.get('set-cookie') ?? '').split(';')[0];
+  /** /me/login through the rendered login form (nonce cookie + field), like a browser. */
+  const meLoginAs = async (user) => {
+    const form = await formPage(`${BASE}/me`);
+    return fetch(`${BASE}/me/login`, {
+      method: 'POST', redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE, cookie: form.nonceCookie },
+      body: new URLSearchParams({ username: user.user, password: user.pass, csrf: form.csrf }),
+    });
+  };
+  const meLogin = await meLoginAs(ADMIN);
+  const meCookie2 = meCookieOf(meLogin);
   check('/me/login sets session cookie', meLogin.status === 303 && meCookie2.startsWith('mcp_me='));
-  const mePage = await (await fetch(`${BASE}/me`, { headers: { cookie: meCookie2 } })).text();
+  const meForm = await formPage(`${BASE}/me`, meCookie2);
+  const mePage = meForm.html;
   check('/me lists the E2E client session', mePage.includes('E2E Test Client'));
   // Admin rendering gate: a wiki admin (admin@example.com) sees the team-wide
   // sessions + audit sections; the isWikiAdmin probe drives this.
@@ -228,12 +255,8 @@ async function main() {
   );
   // Negative: a non-admin (Team group, no manage:users) must NOT see it.
   // Fixture: the demo user from bootstrap --demo.
-  const nonAdminLogin = await fetch(`${BASE}/me/login`, {
-    method: 'POST', redirect: 'manual',
-    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE },
-    body: new URLSearchParams({ username: DEMO.user, password: DEMO.pass }),
-  });
-  const nonAdminCookie = (nonAdminLogin.headers.get('set-cookie') ?? '').split(';')[0];
+  const nonAdminLogin = await meLoginAs(DEMO);
+  const nonAdminCookie = meCookieOf(nonAdminLogin);
   const nonAdminPage = await (await fetch(`${BASE}/me`, { headers: { cookie: nonAdminCookie } })).text();
   check(
     '/me hides the admin section from a non-admin',
@@ -251,8 +274,8 @@ async function main() {
   if (sessionId) {
     await fetch(`${BASE}/me/revoke`, {
       method: 'POST', redirect: 'manual',
-      headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE, cookie: meCookie2 },
-      body: new URLSearchParams({ session_id: sessionId }),
+      headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE, cookie: `${meCookie2}; ${meForm.nonceCookie}` },
+      body: new URLSearchParams({ session_id: sessionId, csrf: meForm.csrf }),
     });
     const afterRevoke = await call('wiki_user_profile', {}, ref.access_token);
     check('revoked session loses MCP access immediately', afterRevoke.status === 401 || afterRevoke.isError, `status=${afterRevoke.status}`);

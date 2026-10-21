@@ -29,6 +29,11 @@ export const ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 h — refresh happens si
 const CODE_TTL_MS = 5 * 60 * 1000;
 /** Wiki.js default auth.tokenRenewal is 14d; after that idle time the stored JWT is dead. */
 const SESSION_IDLE_MAX_MS = 14 * 24 * 60 * 60 * 1000;
+/** Hard cap independent of use (R-25): a stolen session cannot be kept alive forever. */
+export const SESSION_ABSOLUTE_MAX_MS = 30 * 24 * 60 * 60 * 1000;
+/** A replay of the just-rotated refresh token within this window is a lost
+ *  response or a parallel refresh, not theft (R-40). */
+const REFRESH_REUSE_GRACE_MS = 60 * 1000;
 
 export class OAuthError extends Error {
   constructor(
@@ -37,7 +42,8 @@ export class OAuthError extends Error {
       | 'invalid_client'
       | 'invalid_grant'
       | 'unsupported_grant_type'
-      | 'invalid_redirect_uri',
+      | 'invalid_redirect_uri'
+      | 'invalid_target',
     message: string,
   ) {
     super(message);
@@ -60,8 +66,21 @@ function validRedirectUri(uri: string): boolean {
     return false;
   }
   if (u.hash) return false;
-  if (u.protocol === 'https:') return true;
+  if (u.protocol === 'https:') return redirectHostAllowed(u);
   return u.protocol === 'http:' && isLoopbackHost(u.hostname);
+}
+
+/**
+ * Optional operator allowlist (R-16): with MCP_ALLOWED_REDIRECT_HOSTS set
+ * (comma-separated host names), codes only go to those hosts or to loopback
+ * (a program on the user's own machine). Unset = any https host (open DCR).
+ */
+function redirectHostAllowed(u: URL, env: Record<string, string | undefined> = process.env): boolean {
+  const list = (env.MCP_ALLOWED_REDIRECT_HOSTS ?? '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+  return list.length === 0 || isLoopbackHost(u.hostname) || list.includes(u.hostname.toLowerCase());
 }
 
 function isLoopbackHost(host: string): boolean {
@@ -112,6 +131,36 @@ export interface AuthorizeParams {
   codeChallenge: string;
   codeChallengeMethod: string;
   state?: string;
+  /** RFC 8707 resource indicator, if the client sent one (see validateResource). */
+  resource?: string;
+}
+
+/**
+ * RFC 8707: a client may name the resource it wants a token for. This server
+ * protects exactly one resource (<issuer>/mcp), so anything else is refused
+ * instead of silently issuing a token the client did not ask for (R-48).
+ */
+export function validateResource(resource: string | undefined, issuer: string): void {
+  if (resource === undefined || resource === '') return;
+  let u: URL;
+  try {
+    u = new URL(resource);
+  } catch {
+    throw new OAuthError('invalid_target', 'resource must be an absolute URL.');
+  }
+  const normalized = `${u.origin}${u.pathname.replace(/\/+$/, '')}`;
+  if (u.search || u.hash || normalized !== `${issuer}/mcp`) {
+    throw new OAuthError('invalid_target', `This server only issues tokens for ${issuer}/mcp.`);
+  }
+}
+
+/** The client's redirect_uri with response parameters, `state` and `iss` (RFC 9207, R-48). */
+export function authorizationResponseUrl(p: AuthorizeParams, issuer: string, params: Record<string, string>): string {
+  const url = new URL(p.redirectUri);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  if (p.state) url.searchParams.set('state', p.state);
+  url.searchParams.set('iss', issuer);
+  return url.toString();
 }
 
 /**
@@ -141,6 +190,10 @@ export function validateAuthorizeRequest(params: AuthorizeParams): store.ClientR
   if (!client.redirectUris.some((r) => redirectUriMatches(r, params.redirectUri))) {
     throw new OAuthError('invalid_redirect_uri', 'redirect_uri does not match any registered URI.');
   }
+  // Re-checked here: the client may have registered before the allowlist was set.
+  if (!validRedirectUri(params.redirectUri)) {
+    throw new OAuthError('invalid_redirect_uri', 'redirect_uri is not allowed on this deployment.');
+  }
   if (params.codeChallengeMethod !== 'S256' || !/^[A-Za-z0-9\-_]{43}$/.test(params.codeChallenge)) {
     throw new OAuthError('invalid_request', 'PKCE with code_challenge_method=S256 is required.');
   }
@@ -155,10 +208,12 @@ export interface IssuedCode {
 /** Called by the authorize page AFTER a successful Wiki.js login/consent. */
 export function issueAuthorizationCode(
   params: AuthorizeParams,
-  identity: { name: string; email: string },
+  identity: { id: number; name: string; email: string },
   wikiJwt: string,
+  issuer: string,
 ): IssuedCode {
   validateAuthorizeRequest(params);
+  validateResource(params.resource, issuer);
   const code = newToken('mcp_ac_');
   store.insertCode({
     codeHash: sha256hex(code),
@@ -168,12 +223,10 @@ export function issueAuthorizationCode(
     encJwt: encryptString(wikiJwt, 'db-jwt'),
     userLabel: identity.name,
     userEmail: identity.email,
+    userId: identity.id,
     expiresAt: Date.now() + CODE_TTL_MS,
   });
-  const url = new URL(params.redirectUri);
-  url.searchParams.set('code', code);
-  if (params.state) url.searchParams.set('state', params.state);
-  return { code, redirect: url.toString() };
+  return { code, redirect: authorizationResponseUrl(params, issuer, { code }) };
 }
 
 // ----------------------------------------------------------------- token ---
@@ -186,11 +239,11 @@ export interface TokenResponse {
   scope: 'wiki';
 }
 
-function issueSessionTokens(): { access: string; refresh: string; accessExpiresAt: number } {
+function issueSessionTokens(now: number = Date.now()): { access: string; refresh: string; accessExpiresAt: number } {
   return {
     access: newToken('mcp_at_'),
     refresh: newToken('mcp_rt_'),
-    accessExpiresAt: Date.now() + ACCESS_TOKEN_TTL_MS,
+    accessExpiresAt: now + ACCESS_TOKEN_TTL_MS,
   };
 }
 
@@ -199,10 +252,18 @@ export function exchangeAuthorizationCode(p: {
   clientId: string;
   redirectUri: string;
   codeVerifier: string;
-  clientName?: string;
 }): TokenResponse {
-  const row = store.consumeCode(sha256hex(p.code)); // single-use: consumed even on later failures
-  if (!row) throw new OAuthError('invalid_grant', 'Authorization code is unknown, used or expired.');
+  const codeHash = sha256hex(p.code);
+  const row = store.consumeCode(codeHash); // single-use: consumed even on later failures
+  if (!row) {
+    // OAuth 2.1 §4.1.3: a code redeemed twice means it leaked — revoke what it produced (R-25).
+    const used = store.consumedCodeSession(codeHash);
+    if (used?.sessionId) {
+      store.revokeSession(used.sessionId);
+      console.error(`OAuth: authorization-code reuse detected — session ${used.sessionId} revoked.`);
+    }
+    throw new OAuthError('invalid_grant', 'Authorization code is unknown, used or expired.');
+  }
   if (row.clientId !== p.clientId) throw new OAuthError('invalid_grant', 'client_id mismatch.');
   if (!redirectUriMatches(row.redirectUri, p.redirectUri)) {
     throw new OAuthError('invalid_grant', 'redirect_uri does not match the authorization request.');
@@ -220,12 +281,14 @@ export function exchangeAuthorizationCode(p: {
     clientName: client?.name ?? 'MCP client',
     userLabel: row.userLabel,
     userEmail: row.userEmail,
+    userId: row.userId,
     encJwt: row.encJwt,
     accessExpiresAt: t.accessExpiresAt,
     createdAt: Date.now(),
     lastUsedAt: Date.now(),
     revokedAt: null,
   });
+  store.linkCodeToSession(codeHash, id);
   return {
     access_token: t.access,
     token_type: 'Bearer',
@@ -235,14 +298,18 @@ export function exchangeAuthorizationCode(p: {
   };
 }
 
-export function refreshAccessToken(p: { refreshToken: string; clientId: string }): TokenResponse {
+export function refreshAccessToken(p: { refreshToken: string; clientId: string }, now: number = Date.now()): TokenResponse {
   const hash = sha256hex(p.refreshToken);
   const session = store.getSessionByRefreshHash(hash);
   if (!session) {
     // OAuth 2.1 reuse detection: a refresh token that was ALREADY rotated is
-    // being replayed — assume theft and kill the whole session family.
+    // being replayed — assume theft and kill the whole session family. Except
+    // right after the rotation (R-40): a client retrying a lost response or
+    // refreshing twice in parallel gets invalid_grant, but keeps its session.
     const reused = store.getSessionByPrevRefreshHash(hash);
-    if (reused && !reused.revokedAt) {
+    // accessExpiresAt is set to rotation time + ACCESS_TOKEN_TTL_MS on every rotation.
+    const rotatedAt = reused ? reused.accessExpiresAt - ACCESS_TOKEN_TTL_MS : 0;
+    if (reused && !reused.revokedAt && now - rotatedAt > REFRESH_REUSE_GRACE_MS) {
       store.revokeSession(reused.id);
       console.error(`OAuth: refresh-token reuse detected — session ${reused.id} revoked.`);
     }
@@ -250,13 +317,20 @@ export function refreshAccessToken(p: { refreshToken: string; clientId: string }
   }
   if (session.revokedAt) throw new OAuthError('invalid_grant', 'Refresh token is invalid or revoked.');
   if (session.clientId !== p.clientId) throw new OAuthError('invalid_grant', 'client_id mismatch.');
-  if (Date.now() - session.lastUsedAt > SESSION_IDLE_MAX_MS) {
+  if (now - session.lastUsedAt > SESSION_IDLE_MAX_MS) {
     // The stored wiki JWT is past Wiki.js' renewal window — force a fresh login.
     store.revokeSession(session.id);
     throw new OAuthError('invalid_grant', 'Session expired after inactivity — authorize again.');
   }
-  const t = issueSessionTokens();
-  store.rotateSessionTokens(session.id, sha256hex(t.access), sha256hex(t.refresh), t.accessExpiresAt);
+  if (now - session.createdAt > SESSION_ABSOLUTE_MAX_MS) {
+    store.revokeSession(session.id);
+    throw new OAuthError('invalid_grant', 'Session reached its maximum lifetime — authorize again.');
+  }
+  const t = issueSessionTokens(now);
+  if (!store.rotateSessionTokens(session.id, hash, sha256hex(t.access), sha256hex(t.refresh), t.accessExpiresAt)) {
+    // A parallel request rotated this token first (R-42) — same as a replay inside the grace window.
+    throw new OAuthError('invalid_grant', 'Refresh token is invalid or revoked.');
+  }
   // Opportunistic prune on the refresh path too (runs ~hourly per active client),
   // so a deployment where sessions are refreshed rather than freshly created
   // still bounds the store — not only on insertSession.
@@ -288,7 +362,7 @@ const TOUCH_INTERVAL_MS = 60 * 1000;
 export function verifyAccessToken(bearer: string): VerifiedSession | undefined {
   if (!bearer.startsWith('mcp_at_')) return undefined;
   const session = store.getSessionByAccessHash(sha256hex(bearer));
-  if (!session || session.revokedAt) return undefined;
+  if (!session || !isSessionActive(session)) return undefined;
   if (session.accessExpiresAt < Date.now()) return undefined;
   if (Date.now() - session.lastUsedAt > TOUCH_INTERVAL_MS) store.touchSession(session.id);
   return {
@@ -299,6 +373,25 @@ export function verifyAccessToken(bearer: string): VerifiedSession | undefined {
     clientId: session.clientId,
     expiresAtSec: Math.floor(session.accessExpiresAt / 1000),
   };
+}
+
+/**
+ * Whether a session can still be used: not revoked, not idle past the wiki's
+ * renewal window, not past the absolute cap. /me lists only these as active (R-44).
+ */
+export function isSessionActive(s: store.SessionRow, now: number = Date.now()): boolean {
+  return !s.revokedAt && now - s.lastUsedAt <= SESSION_IDLE_MAX_MS && now - s.createdAt <= SESSION_ABSOLUTE_MAX_MS;
+}
+
+/**
+ * RFC 7009 token revocation (R-48): an access or refresh token ends its whole
+ * session. Public clients authenticate by client_id only, so a token of another
+ * client is ignored. Unknown tokens are not an error (§2.2).
+ */
+export function revokeToken(p: { token: string; clientId: string }): void {
+  const hash = sha256hex(p.token);
+  const session = store.getSessionByAccessHash(hash) ?? store.getSessionByRefreshHash(hash);
+  if (session && session.clientId === p.clientId) store.revokeSession(session.id);
 }
 
 /** Persist a renewed Wiki.js JWT captured from a `new-jwt` response header. */
