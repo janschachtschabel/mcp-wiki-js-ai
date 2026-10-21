@@ -18,6 +18,7 @@ frühere Vercel/Handle-Betrieb funktioniert weiter, ist aber eingefroren
 | [**Integration in bestehendes Wiki.js**](./integration-bestehendes-wiki.md) | MCP neben eine laufende Wiki.js-Installation hängen — Schritt für Schritt |
 | [Root-README](../../README.md) (🇬🇧 [EN](../../README.en.md)) | Deployment (Compose/Helm), Ersteinrichtung (Bootstrap), Client verbinden |
 | [Audit 2026-10-21](./audits/2026-10-21-audit.md) · [Re-Audit](./audits/2026-10-21-reaudit.md) | Sicherheits- und Code-Audits mit Befunden, Umsetzungsstand und Roadmap |
+| [**Architektur-Grafik**](./architektur.png) · [interaktiv](./architektur.html) | Gesamtbild: Clients → Caddy → MCP-Server (OAuth, Policy-Gate, Tools) → Wiki.js → PostgreSQL, mit Netz- und Container-Grenzen |
 | [**Nächste Ausbaustufe**](./naechste-ausbaustufe.md) | Offene Umbauten (Tests/CI, React 19, Store/Audit) und bekannte Grenzen als TODO-Liste |
 
 **Kurzfassung Verbinden:** MCP-URL `https://<host>/mcp` im Client eintragen

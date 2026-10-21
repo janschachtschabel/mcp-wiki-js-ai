@@ -17,13 +17,10 @@ Cursor, …) can use safely through the **Model Context Protocol**:
 - **Self-service at `/me`**: every user sees and revokes their own AI
   connections; wiki admins additionally see all sessions and the audit log.
 
-```
-                   ┌──────────────────────── one host / one domain ────────────────────────┐
-  Browser ────────►│  caddy ──► /mcp /oauth /me /.well-known… ──► mcp  ──► GraphQL ──► wiki │
-  MCP clients ────►│        ──► everything else ────────────────────────────────────► wiki │
-                   │                                          wiki ──► postgres (db)       │
-                   └───────────────────────────────────────────────────────────────────────┘
-```
+![Architecture: AI clients and browser → Caddy (one domain) → MCP server (OAuth, policy gate, tools, GraphQL client) → Wiki.js → PostgreSQL on an internal network](mcp-for-wiki-js/docs/architektur.png)
+
+Interactive version with per-component source links (German labels): [docs/architektur.html](mcp-for-wiki-js/docs/architektur.html)
+(open locally in a browser; editable archify source: [architektur.archify.json](mcp-for-wiki-js/docs/architektur.archify.json)).
 
 > **For IT:** compact guide covering both paths (existing wiki via Helm/Kubernetes, or fresh
 > install via Docker Compose, plus end-user usage; German):

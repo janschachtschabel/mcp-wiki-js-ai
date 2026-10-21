@@ -1,0 +1,497 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Wiki.js + MCP-Server — Architektur der Appliance",
+    "locale": "de",
+    "output": ".archify/architecture-appliance-20261021-202911/architektur.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/janschachtschabel/mcp-wiki-js-ai.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "0c1736f16a25c921b9aa4040feb412f356c16232"
+    },
+    "legend": {
+      "entries": {
+        "frontend": {
+          "label": "Web-Anwendung"
+        },
+        "backend": {
+          "label": "Dienst / Modul"
+        },
+        "database": {
+          "label": "Datenspeicher"
+        },
+        "security": {
+          "label": "Sicherheit / Zugang"
+        },
+        "external": {
+          "label": "Extern"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "browser",
+      "type": "external",
+      "label": "Anwender (Browser)",
+      "sublabel": "Wiki · Freigabe · /me",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "aiclients",
+      "type": "external",
+      "label": "KI-Clients",
+      "sublabel": "Claude · ChatGPT · Cursor",
+      "pos": [
+        40,
+        200
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "caddy",
+      "type": "security",
+      "label": "Caddy",
+      "sublabel": "TLS · /finalize 403",
+      "pos": [
+        280,
+        196
+      ],
+      "size": [
+        160,
+        72
+      ],
+      "sources": [
+        {
+          "path": "deploy/caddy/Caddyfile",
+          "line": 30,
+          "end_line": 62,
+          "label": "Routing"
+        }
+      ]
+    },
+    {
+      "id": "endpoint",
+      "type": "backend",
+      "label": "MCP-Endpoint",
+      "sublabel": "/mcp · Bearer-Prüfung",
+      "pos": [
+        525,
+        200
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "mcp-for-wiki-js/app/[transport]/route.ts",
+          "line": 31,
+          "end_line": 115,
+          "label": "Transport + OAuth"
+        }
+      ]
+    },
+    {
+      "id": "tools",
+      "type": "backend",
+      "label": "Policy-Gate + Tools",
+      "sublabel": "confirm · Tag-Sperre",
+      "pos": [
+        770,
+        200
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "mcp-for-wiki-js/lib/register.ts",
+          "line": 103,
+          "end_line": 162,
+          "label": "Policy-Gate"
+        },
+        {
+          "path": "mcp-for-wiki-js/lib/tools/index.ts",
+          "line": 1,
+          "end_line": 27,
+          "label": "Tool-Liste"
+        },
+        {
+          "path": "mcp-for-wiki-js/lib/guardrails.ts",
+          "line": 110,
+          "label": "Tag-Sperre"
+        }
+      ]
+    },
+    {
+      "id": "gqlclient",
+      "type": "backend",
+      "label": "GraphQL-Client",
+      "sublabel": "Timeout · Limits · Retry",
+      "pos": [
+        1005,
+        200
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "mcp-for-wiki-js/lib/wikijs/client.ts",
+          "line": 240,
+          "end_line": 330,
+          "label": "WikiClient"
+        }
+      ]
+    },
+    {
+      "id": "wiki",
+      "type": "frontend",
+      "label": "Wiki.js 2",
+      "sublabel": "requarks/wiki:2",
+      "pos": [
+        1262,
+        200
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 68,
+          "end_line": 97,
+          "label": "Dienst wiki"
+        }
+      ]
+    },
+    {
+      "id": "bootstrap",
+      "type": "backend",
+      "label": "Bootstrap",
+      "sublabel": "compose run (Profil setup)",
+      "pos": [
+        1512,
+        200
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 212,
+          "end_line": 232,
+          "label": "Dienst bootstrap"
+        },
+        {
+          "path": "deploy/scripts/bootstrap.mjs",
+          "line": 118,
+          "end_line": 140,
+          "label": "Ersteinrichtung"
+        }
+      ]
+    },
+    {
+      "id": "oauth",
+      "type": "security",
+      "label": "OAuth 2.1-Schicht",
+      "sublabel": "Wiki-Login · Nonce · Limits",
+      "pos": [
+        515,
+        360
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "sources": [
+        {
+          "path": "mcp-for-wiki-js/lib/oauth/service.ts",
+          "line": 209,
+          "end_line": 380,
+          "label": "Code/Token/Verify"
+        },
+        {
+          "path": "mcp-for-wiki-js/lib/oauth/wiki-login.ts",
+          "line": 84,
+          "end_line": 127,
+          "label": "Wiki-Login"
+        },
+        {
+          "path": "mcp-for-wiki-js/lib/oauth/rate-limit.ts",
+          "line": 94,
+          "end_line": 140,
+          "label": "Login-Limits"
+        }
+      ]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "Session-Store + Audit",
+      "sublabel": "sqlite · /data · AES-GCM",
+      "pos": [
+        515,
+        510
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "sources": [
+        {
+          "path": "mcp-for-wiki-js/lib/oauth/store.ts",
+          "line": 74,
+          "end_line": 100,
+          "label": "DB-Datei"
+        },
+        {
+          "path": "mcp-for-wiki-js/lib/oauth/store.ts",
+          "line": 357,
+          "end_line": 365,
+          "label": "Audit-Log"
+        },
+        {
+          "path": "mcp-for-wiki-js/lib/oauth/crypto.ts",
+          "line": 77,
+          "end_line": 84,
+          "label": "Verschlüsselung"
+        }
+      ]
+    },
+    {
+      "id": "postgres",
+      "type": "database",
+      "label": "PostgreSQL 15",
+      "sublabel": "Wiki-Inhalte",
+      "pos": [
+        1262,
+        360
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 47,
+          "end_line": 67,
+          "label": "Dienst db"
+        }
+      ]
+    },
+    {
+      "id": "backup",
+      "type": "backend",
+      "label": "db-backup",
+      "sublabel": "pg_dump + sqlite .backup",
+      "pos": [
+        1262,
+        510
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "docker-compose.yml",
+          "line": 140,
+          "end_line": 186,
+          "label": "Dienst db-backup"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Docker-Compose-Stack · eine Domain",
+      "wraps": [
+        "caddy",
+        "endpoint",
+        "tools",
+        "gqlclient",
+        "oauth",
+        "store",
+        "wiki",
+        "postgres",
+        "backup",
+        "bootstrap"
+      ],
+      "pad": 26
+    },
+    {
+      "kind": "region",
+      "label": "MCP-Server (Next.js-Container)",
+      "wraps": [
+        "endpoint",
+        "tools",
+        "gqlclient",
+        "oauth",
+        "store"
+      ],
+      "pad": 14
+    },
+    {
+      "kind": "security-group",
+      "label": "Netz db (internal)",
+      "wraps": [
+        "wiki",
+        "postgres",
+        "backup"
+      ],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    {
+      "from": "aiclients",
+      "to": "caddy",
+      "label": "HTTPS /mcp",
+      "variant": "emphasis"
+    },
+    {
+      "from": "browser",
+      "to": "caddy",
+      "label": "HTTPS",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "from": "caddy",
+      "to": "endpoint",
+      "label": "/mcp",
+      "variant": "emphasis"
+    },
+    {
+      "from": "caddy",
+      "to": "oauth",
+      "label": "/oauth · /me"
+    },
+    {
+      "from": "caddy",
+      "to": "wiki",
+      "label": "übrige Pfade",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [
+          360,
+          140
+        ],
+        [
+          1337,
+          140
+        ]
+      ]
+    },
+    {
+      "from": "endpoint",
+      "to": "oauth",
+      "label": "Token prüfen",
+      "variant": "security"
+    },
+    {
+      "from": "endpoint",
+      "to": "tools",
+      "label": "Tool-Aufruf",
+      "variant": "emphasis"
+    },
+    {
+      "from": "tools",
+      "to": "gqlclient",
+      "label": "Abfragen",
+      "variant": "emphasis"
+    },
+    {
+      "from": "gqlclient",
+      "to": "wiki",
+      "label": "GraphQL + JWT",
+      "variant": "emphasis"
+    },
+    {
+      "from": "oauth",
+      "to": "gqlclient",
+      "label": "Wiki-Login",
+      "variant": "security"
+    },
+    {
+      "from": "oauth",
+      "to": "store",
+      "label": "Sessions · Audit"
+    },
+    {
+      "from": "wiki",
+      "to": "postgres",
+      "label": "SQL"
+    },
+    {
+      "from": "backup",
+      "to": "postgres",
+      "label": "pg_dump"
+    },
+    {
+      "from": "backup",
+      "to": "store",
+      "label": "sqlite .backup",
+      "variant": "dashed"
+    },
+    {
+      "from": "bootstrap",
+      "to": "wiki",
+      "label": "Setup intern",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Ein Login für Mensch und KI",
+      "items": [
+        "KI-Clients autorisieren sich per OAuth 2.1 mit dem normalen Wiki.js-Konto",
+        "Tool-Aufrufe laufen mit dem Wiki-JWT des Nutzers — Wiki.js setzt die Rechte durch",
+        "Gleiche Domain für Wiki und MCP: eine Wiki-Sitzung macht die Freigabe zum Ein-Klick"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Schutzschichten",
+      "items": [
+        "Policy-Gate: allow / confirm / block je Kategorie, Tag-Sperre kein-ki",
+        "Freigabe und /me mit CSRF-Nonce, Login-Limits pro IP und Konto",
+        "Caddy sperrt /finalize; Ersteinrichtung nur über den Dienst bootstrap",
+        "Postgres nur im internen Netz db erreichbar"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Kubernetes-Variante (Helm)",
+      "items": [
+        "Chart deployt nur den MCP-Server als StatefulSet mit PVC für /data",
+        "Wiki.js läuft separat; Ingress legt nur die MCP-Pfade auf die Wiki-Domain",
+        "Eine Replika: sqlite-Store und Login-Limits liegen im Prozess"
+      ]
+    }
+  ]
+}

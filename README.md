@@ -15,13 +15,10 @@ Cursor, …) über das **Model Context Protocol** sicher mitbenutzen können:
   Aktionen und eine **Tag-Sperre** (`kein-ki`), die Seiten für KI unsichtbar macht.
 - **Selbstverwaltung unter `/me`**: eigene KI-Verbindungen ansehen & widerrufen.
 
-```
-                   ┌──────────────────────── ein Host / eine Domain ───────────────────────┐
-  Browser ────────►│  caddy ──► /mcp /oauth /me /.well-known… ──► mcp  ──► GraphQL ──► wiki │
-  MCP-Clients ────►│        ──► alles andere ────────────────────────────────────────► wiki │
-                   │                                          wiki ──► postgres (db)        │
-                   └────────────────────────────────────────────────────────────────────────┘
-```
+![Architektur: KI-Clients und Browser → Caddy (eine Domain) → MCP-Server (OAuth, Policy-Gate, Tools, GraphQL-Client) → Wiki.js → PostgreSQL im internen Netz](mcp-for-wiki-js/docs/architektur.png)
+
+Interaktive Fassung mit Quellenverweisen je Komponente: [docs/architektur.html](mcp-for-wiki-js/docs/architektur.html)
+(lokal im Browser öffnen; Quelle zum Weiterbearbeiten mit archify: [architektur.archify.json](mcp-for-wiki-js/docs/architektur.archify.json)).
 
 > **Für die IT:** kompakte Anleitung für beide Wege (bestehendes Wiki per Helm/Kubernetes
 > oder Neuinstallation per Docker Compose): [installation-it.md](mcp-for-wiki-js/docs/installation-it.md).

@@ -359,6 +359,10 @@ Mehr zu den Admin-Domänen (Theming/Storage/Mail/Search/…): [docs/admin-extens
 
 ## Architektur
 
+![Architektur der Appliance](./docs/architektur.png)
+
+Interaktiv mit Quellenverweisen je Komponente: [docs/architektur.html](./docs/architektur.html). Modulübersicht:
+
 ```
 app/[transport]/route.ts           Streamable-HTTP-Endpoint /mcp via mcp-handler (+ URL-Param→Header)
 app/.well-known/mcp.json/route.ts  Discovery-Dokument

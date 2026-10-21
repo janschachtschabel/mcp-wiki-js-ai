@@ -22,3 +22,6 @@ data/
 
 # Helm-Pakete
 *.tgz
+
+# Arbeitsordner des Diagramm-Werkzeugs archify (Zwischenstände)
+.archify/
