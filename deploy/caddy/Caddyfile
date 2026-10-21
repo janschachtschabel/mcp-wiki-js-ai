@@ -8,18 +8,15 @@
 # Zertifikat aus (Browser-Warnung beim ersten Mal ist normal).
 #
 # Diese Pfade gehören dem MCP-Server — im Wiki KEINE Seiten unter
-# me/, oauth/, mcp, sse, api/ anlegen (siehe mcp-for-wiki-js/docs/oauth.md).
+# me/, oauth/, mcp, api/ anlegen (siehe mcp-for-wiki-js/docs/oauth.md).
 
 {$DOMAIN:localhost} {
-	@mcp path \
-		/mcp /mcp/* \
-		/oauth/* \
-		/me /me/* \
-		/api/health \
-		/.well-known/oauth-authorization-server* \
-		/.well-known/oauth-protected-resource* \
-		/.well-known/mcp.json \
-		/_next/*
+	# Repeated `path` lines in one matcher block are merged (any match wins).
+	@mcp {
+		path /mcp /mcp/* /oauth/* /me /me/* /api/health
+		path /.well-known/oauth-authorization-server* /.well-known/oauth-protected-resource*
+		path /.well-known/mcp.json /_next/*
+	}
 
 	handle @mcp {
 		# Anonymous bodies are read before any auth check — cap them at the edge
