@@ -46,7 +46,7 @@ spec:
         - configMapRef:
             name: {{ include "wikijs-mcp.fullname" . }}-env
         - secretRef:
-            name: {{ include "wikijs-mcp.fullname" . }}-env
+            name: {{ include "wikijs-mcp.secretName" . }}
         ports:
         - name: http
           containerPort: {{ .Values.service.port }}

@@ -8,7 +8,7 @@ data:
   WIKIJS_URL: {{ required "config.wikijs.url is required (base URL of the Wiki.js instance)" .Values.config.wikijs.url | quote }}
 
   # ---- OAuth (Wiki.js login as identity) ----
-  {{- if .Values.config.oauth.sessionSecret }}
+  {{- if include "wikijs-mcp.oauthEnabled" . }}
   PUBLIC_BASE_URL: {{ required "config.oauth.publicBaseUrl is required when OAuth is enabled" .Values.config.oauth.publicBaseUrl | quote }}
   WIKIJS_OAUTH_ROLE: {{ .Values.config.oauth.role | quote }}
   MCP_DATA_DIR: {{ .Values.persistence.mountPath | quote }}

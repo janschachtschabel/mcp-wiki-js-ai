@@ -83,8 +83,8 @@ ingress:
   enabled: true
 
   annotations:
-    ## @param ingress.annotations.nginx.ingress.kubernetes.io/proxy-body-size Max request body size (asset uploads go through the MCP endpoint)
-    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    ## @param ingress.annotations.nginx.ingress.kubernetes.io/proxy-body-size Max request body size. The app itself rejects /mcp bodies over 4 MB (413); keep this slightly above (same 8 MB as the Caddy setup)
+    nginx.ingress.kubernetes.io/proxy-body-size: "8m"
     ## @param ingress.annotations.nginx.ingress.kubernetes.io/proxy-read-timeout Streamable-HTTP requests may run up to 60s
     nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
     ## @param ingress.annotations.nginx.ingress.kubernetes.io/proxy-send-timeout Set proxy-send-timeout on nginx ingress
@@ -122,6 +122,14 @@ ingress:
 ## @section Application configuration
 config:
 
+  ## @param config.existingSecret Name of an existing Secret with the key MCP_SESSION_SECRET (exact name, min 16 chars).
+  ## Recommended for production: keeps the secret out of values files and the Helm release history.
+  ## When set, config.oauth.sessionSecret / config.wikijs.token are ignored, the chart creates no Secret, and OAuth mode is on.
+  ## Do NOT put WIKIJS_TOKEN into it: it is ignored in OAuth mode, and if MCP_SESSION_SECRET is missing or mistyped
+  ## the server falls back to single-tenant mode and serves /mcp unauthenticated with that key (the server warns at startup).
+  ## Changing the Secret does not restart the pod: run `kubectl rollout restart statefulset/<name>` afterwards.
+  existingSecret: ""
+
   wikijs:
     ## @param config.wikijs.url Base URL of the Wiki.js instance (REQUIRED). Cluster-internal service URL
     ## (e.g. http://wiki.wiki-ns.svc:3000) or public URL — no trailing /graphql.
@@ -132,10 +140,11 @@ config:
 
   oauth:
     ## @param config.oauth.sessionSecret Enables OAuth mode ("wiki login is the login"). 32+ random bytes,
-    ## base64url. Empty = OAuth off (legacy handle/BYOK only). Stored in the chart secret.
+    ## base64url (at least 16 characters — the server refuses to start otherwise). Empty = OAuth off
+    ## (legacy handle/BYOK only). Stored in the chart secret. Prefer config.existingSecret in production.
     sessionSecret: ""
     ## @param config.oauth.publicBaseUrl Public base URL of THIS service (issuer for OAuth discovery),
-    ## e.g. https://wiki.example.de — REQUIRED when sessionSecret is set.
+    ## e.g. https://wiki.example.de — REQUIRED when OAuth is on (sessionSecret or existingSecret).
     publicBaseUrl: ""
     ## @param config.oauth.role Agent-safety overlay role for OAuth sessions (config/roles.json)
     role: "wiki"

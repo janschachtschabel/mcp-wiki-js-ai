@@ -1,0 +1,64 @@
+# =============================================================================
+# Produktions-Vorlage für das wikijs-mcp-Chart (bestehendes Wiki.js im Cluster)
+# =============================================================================
+# Kopieren, <...> ersetzen, installieren:
+#
+#   cp deploy/helm/wikijs-mcp/values-prod.example.yaml values-prod.yaml
+#
+#   # Secret einmalig anlegen (bleibt aus Values-Datei und Helm-Historie heraus):
+#   kubectl -n <namespace> create secret generic wikijs-mcp-secret \
+#     --from-literal=MCP_SESSION_SECRET="$(openssl rand -base64 32)"
+#
+#   helm install wikijs-mcp deploy/helm/wikijs-mcp -n <namespace> -f values-prod.yaml
+#
+# Alle weiteren Werte und ihre Defaults: values.yaml (kommentiert).
+# =============================================================================
+
+global:
+  image:
+    # Image aus der eigenen Registry (GitLab-Pipeline) …
+    registry: <registry>              # z. B. docker.edu-sharing.com
+    repository: <pfad/wikijs-mcp>     # z. B. projects/wlo/wikijs-mcp
+    # … oder aus GHCR (GitHub-Pipeline):  registry: ghcr.io
+    #                                    repository: janschachtschabel/mcp-wiki-js-ai
+    # Private Registry? Pull-Secret angeben:
+    # pullSecrets:
+    #   - name: <registry-pull-secret>
+
+image:
+  # Unveränderlichen Release-Tag pinnen (vX.Y.Z) — nicht "main" in Produktion.
+  tag: "<vX.Y.Z>"
+
+config:
+  # Name des oben angelegten Secrets (enthält MCP_SESSION_SECRET, mind. 16 Zeichen).
+  existingSecret: wikijs-mcp-secret
+
+  wikijs:
+    # Interne Service-Adresse des Wiki.js, OHNE /graphql.
+    url: http://<wiki-service>.<wiki-namespace>.svc:3000
+
+  oauth:
+    # Öffentliche URL — exakt die Domain, unter der das Wiki erreichbar ist.
+    publicBaseUrl: https://<wiki.example.org>
+
+  policy:
+    # Seiten mit diesem Tag sind für KI-Agenten unsichtbar (leer = aus).
+    blockedTags: "kein-ki"
+
+ingress:
+  # GLEICHE Domain wie das Wiki: das Chart belegt dort nur die MCP-Pfade
+  # (/mcp, /oauth, /me, /.well-known/…, /_next, /api/health), alles andere
+  # bleibt beim Wiki-Ingress. Nur so ist die Freigabe ein Klick (SSO).
+  hosts:
+    - <wiki.example.org>
+  tls:
+    - secretName: <vorhandenes-tls-secret-des-wikis>
+      hosts:
+        - <wiki.example.org>
+
+persistence:
+  # OAuth-Sessions + Audit-Log (sqlite). Klein, muss aber persistent sein.
+  size: 1Gi
+  # storageClassName: <storage-class>   # leer = Cluster-Default
+
+# replicaCount bleibt 1 (Single-Writer-sqlite auf der PVC) — nicht erhöhen.

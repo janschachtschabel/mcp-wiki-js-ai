@@ -47,6 +47,21 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
+OAuth mode is on when a session secret is configured — inline or via an existing Secret.
+Renders "true" or nothing; use as: {{ if include "wikijs-mcp.oauthEnabled" . }}
+*/}}
+{{- define "wikijs-mcp.oauthEnabled" -}}
+{{- if or .Values.config.oauth.sessionSecret .Values.config.existingSecret -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Name of the Secret the container reads its credentials from.
+*/}}
+{{- define "wikijs-mcp.secretName" -}}
+{{- default (printf "%s-env" (include "wikijs-mcp.fullname" .)) .Values.config.existingSecret -}}
+{{- end -}}
+
+{{/*
 Fully qualified container image reference.
 */}}
 {{- define "wikijs-mcp.image" -}}

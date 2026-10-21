@@ -6,7 +6,19 @@ selbst ist nicht Teil dieses Charts** — es läuft als eigenes Deployment
 (offizielles `requarks/wiki:2`-Image) und wird über `config.wikijs.url`
 angebunden.
 
-## Minimal-Install (OAuth-Modus, empfohlen)
+## Produktions-Install (empfohlen)
+
+Fertige Vorlage: [`values-prod.example.yaml`](values-prod.example.yaml) — kopieren,
+Platzhalter `<...>` ersetzen. Das Session-Secret liegt darin **nicht** im Klartext,
+sondern in einem vorab angelegten Kubernetes-Secret (`config.existingSecret`):
+
+```bash
+kubectl -n <namespace> create secret generic wikijs-mcp-secret \
+  --from-literal=MCP_SESSION_SECRET="$(openssl rand -base64 32)"
+helm install wikijs-mcp ./deploy/helm/wikijs-mcp -n <namespace> -f values-prod.yaml
+```
+
+## Minimal-Install (Test, Secret inline)
 
 ```bash
 helm install wikijs-mcp ./deploy/helm/wikijs-mcp \
@@ -32,9 +44,18 @@ anlegen.
 
 | Modus | Aktivierung | Verhalten |
 |---|---|---|
-| **OAuth** (empfohlen) | `config.oauth.sessionSecret` + `config.oauth.publicBaseUrl` | Clients verbinden mit einer geheimnislosen URL; Autorisierung = Wiki.js-Login; Rechte pro User aus Wiki.js |
+| **OAuth** (empfohlen) | `config.existingSecret` (oder `config.oauth.sessionSecret`) + `config.oauth.publicBaseUrl` | Clients verbinden mit einer geheimnislosen URL; Autorisierung = Wiki.js-Login; Rechte pro User aus Wiki.js |
 | Single-Tenant | `config.wikijs.token` | Ein geteilter Wiki.js-API-Key für alle Requests |
 | BYOK/Handles | beides leer | Credentials pro Request (Header/URL-Param), wie im Server-README beschrieben |
+
+Das Secret braucht genau den Schlüssel `MCP_SESSION_SECRET` (dort **kein** `WIKIJS_TOKEN`
+ablegen: im OAuth-Modus wirkungslos, und fehlt `MCP_SESSION_SECRET`, würde der Server damit
+ohne Anmeldung bedienen). Nach einer Änderung des Secrets startet der Pod nicht von selbst neu:
+`kubectl -n <namespace> rollout restart statefulset/wikijs-mcp`.
+
+Neben OAuth ist der BYOK-/Handle-Weg standardmäßig **aus**; nur für Altbestand per
+`config.extraEnv.WIKIJS_ALLOW_LEGACY: "true"` zuschalten. Das Session-Secret muss
+mindestens 16 Zeichen haben — `helm install` bricht sonst ab (der Server würde nicht starten).
 
 ## Replikas
 
@@ -47,3 +68,6 @@ bedient ein Team locker).
 
 Siehe kommentierte [values.yaml](values.yaml). Pflicht: `config.wikijs.url`;
 im OAuth-Modus zusätzlich `config.oauth.publicBaseUrl`.
+
+Das Ingress-Body-Limit steht auf 8 MB; der Server selbst lehnt Anfragen an `/mcp`
+über 4 MB mit `413` ab (große Dateien direkt im Wiki hochladen).
