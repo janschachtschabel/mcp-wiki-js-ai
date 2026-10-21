@@ -62,6 +62,16 @@ export function checkConfig(env: Env = process.env): ConfigReport {
   if (secret && secret.length >= MIN_SECRET_LENGTH && !set(env, 'PUBLIC_BASE_URL')) {
     warnings.push('OAuth is on but PUBLIC_BASE_URL is unset — the issuer is derived from X-Forwarded-* headers.');
   }
+  // A public URL without a secret usually means a broken OAuth setup (e.g. a
+  // mistyped key in an existing Kubernetes Secret) — not a deliberate choice.
+  if (!secret && set(env, 'PUBLIC_BASE_URL')) {
+    warnings.push(
+      'PUBLIC_BASE_URL is set but MCP_SESSION_SECRET is not — OAuth is OFF.' +
+        (set(env, 'WIKIJS_TOKEN') || set(env, 'WIKIJS_API_KEY')
+          ? ' WIKIJS_TOKEN is set, so /mcp serves unauthenticated callers with that service key.'
+          : ''),
+    );
+  }
 
   const preset = set(env, 'WIKIJS_PERMISSION_PRESET');
   if (preset && !PRESETS[preset.toLowerCase()]) {

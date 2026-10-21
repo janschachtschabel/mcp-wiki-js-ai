@@ -80,6 +80,20 @@ check(
     errs({ MCP_SESSION_SECRET: SECRET }).length === 0,
 );
 
+// 5b. A public URL without a session secret looks like a broken OAuth setup (e.g. a
+// mistyped key in an existing K8s Secret). With WIKIJS_TOKEN present, /mcp would
+// then serve anonymous callers with the service key — warn loudly.
+check(
+  'PUBLIC_BASE_URL + WIKIJS_TOKEN without MCP_SESSION_SECRET → warning (OAuth is off)',
+  checkConfig({ PUBLIC_BASE_URL: 'https://wiki.example.org', WIKIJS_TOKEN: 'svc' }).warnings.some(
+    (w) => /OAuth is OFF/.test(w) && /WIKIJS_TOKEN/.test(w),
+  ),
+);
+check(
+  'plain single-tenant (no PUBLIC_BASE_URL) → no OAuth warning',
+  !checkConfig({ WIKIJS_TOKEN: 'svc' }).warnings.some((w) => /OAuth is OFF/.test(w)),
+);
+
 // 6. assertConfig aborts with ALL errors in one message.
 check(
   'assertConfig throws listing every error',
