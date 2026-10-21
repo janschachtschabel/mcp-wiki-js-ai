@@ -4,6 +4,7 @@ import { allTools, type ToolDef } from './tools/index';
 import { resolveContext, basePolicy, toolExtraFromServerContext } from './context';
 import { fail } from './wikijs/format';
 import { oauthEnabled } from './oauth/crypto';
+import { GuardrailError } from './guardrails';
 import type { Category } from './permissions';
 
 const CATEGORY_LABEL: Record<Category, string> = {
@@ -126,7 +127,7 @@ export function registerAll(server: McpServer): void {
           outcome = result.isError ? 'error' : 'ok';
           return result;
         } catch (e) {
-          outcome = 'error';
+          outcome = e instanceof GuardrailError ? 'blocked' : 'error';
           return fail(e instanceof Error ? e.message : String(e));
         } finally {
           // Audit non-read actions (executions + blocked attempts); skip reads and dry-run previews.

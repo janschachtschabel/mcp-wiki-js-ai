@@ -35,12 +35,21 @@ function check(name: string, cond: boolean): void {
 
 // ---- upstream stub + audit capture ------------------------------------------
 let upstreamCalls = 0;
+const upstreamBodies: string[] = [];
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   if (url.startsWith('https://wiki.example.org')) {
     upstreamCalls++;
-    return new Response(JSON.stringify({ data: {} }), { status: 200, headers: { 'content-type': 'application/json' } });
+    const body = typeof init?.body === 'string' ? init.body : '';
+    upstreamBodies.push(body);
+    // Guardrail pre-fetch: page 7 carries the blocked tag.
+    const data = body.includes('single(id:$id){ tags')
+      ? { pages: { single: { tags: [{ tag: 'kein-ki' }] } } }
+      : body.includes('pages { tags { id tag } }')
+        ? { pages: { tags: [{ id: 3, tag: 'kein-ki' }] } } // tag id 3 is the guardrail tag
+        : {};
+    return new Response(JSON.stringify({ data }), { status: 200, headers: { 'content-type': 'application/json' } });
   }
   return realFetch(input, init);
 }) as typeof fetch;
@@ -149,6 +158,18 @@ async function main(): Promise<void> {
       }
     }
   }
+
+  // ---- tag guardrail refusals are policy decisions, not errors ----------------
+  process.env.WIKIJS_BLOCKED_TAGS = 'kein-ki';
+  upstreamBodies.length = 0;
+  const g = await run('wiki_page_delete', { id: 7, confirm: true }, {});
+  check('guardrail: delete of a kein-ki page is refused', g.result.isError === true && /not available to AI agents/.test(g.text));
+  check('guardrail: the delete mutation never reaches Wiki.js', !upstreamBodies.some((b) => b.includes('delete(id:$id)')));
+  check('guardrail: refusal is audited as "blocked" (not "error")', g.audit.some((a) => a.tool === 'wiki_page_delete' && a.outcome === 'blocked'));
+  const t = await run('wiki_tag_delete', { id: 3, confirm: true }, {});
+  check('guardrail: deleting the guardrail tag itself is refused', t.result.isError === true && /protected AI-guardrail tag/.test(t.text));
+  check('guardrail: tag-delete refusal is audited as "blocked"', t.audit.some((a) => a.tool === 'wiki_tag_delete' && a.outcome === 'blocked'));
+  delete process.env.WIKIJS_BLOCKED_TAGS;
 
   globalThis.fetch = realFetch;
   console.log = realLog;

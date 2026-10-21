@@ -43,10 +43,13 @@ export function tagsBlocked(tags: unknown, blocked: Set<string> = blockedTags())
   return extractTags(tags).some((t) => blocked.has(t));
 }
 
+/** A guardrail refusal — a policy decision, audited as "blocked" rather than "error". */
+export class GuardrailError extends Error {}
+
 /** Throw the uniform refusal for a blocked page (read AND write paths). */
 export function assertTagsNotBlocked(tags: unknown, what: string): void {
   if (tagsBlocked(tags)) {
-    throw new Error(`${what} is not available to AI agents (carries a blocked tag — see WIKIJS_BLOCKED_TAGS).`);
+    throw new GuardrailError(`${what} is not available to AI agents (carries a blocked tag — see WIKIJS_BLOCKED_TAGS).`);
   }
 }
 
@@ -124,7 +127,7 @@ export async function assertTagIdNotBlocked(ctx: WikiContext, id: number, action
   );
   const tag = data.pages.tags.find((t) => t.id === id);
   if (tag && blocked.has(tag.tag.toLowerCase())) {
-    throw new Error(
+    throw new GuardrailError(
       `${action} refused: "${tag.tag}" is a protected AI-guardrail tag (WIKIJS_BLOCKED_TAGS) and must be managed by a human in the wiki UI.`,
     );
   }
