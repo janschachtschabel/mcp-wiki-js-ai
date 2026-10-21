@@ -1,8 +1,30 @@
 import { randomBytes } from 'crypto';
 import { z } from 'zod';
-import { ok, assertOk } from '../wikijs/format';
+import type { CallToolResult } from '@modelcontextprotocol/server';
+import { ok, fail, assertOk } from '../wikijs/format';
 import { DEFAULT_RESPONSE, type ToolDef } from './types';
 import type { WikiContext } from '../context';
+
+/**
+ * Setting groups through users.create/update IS group management — groups:[1]
+ * makes someone an Administrator. It needs what wiki_group_assign_user needs,
+ * not just manage_users (audit R-12). Returns a refusal/preview, or undefined
+ * when the call may proceed.
+ */
+function groupAssignmentGate(groups: number[] | undefined, confirm: unknown, ctx: WikiContext): CallToolResult | undefined {
+  if (groups === undefined) return undefined;
+  const mode = ctx.policy.resolve('wiki_group_assign_user', 'manage_groups');
+  if (mode === 'block') {
+    return fail('Setting "groups" is blocked by the active permission policy (category: manage_groups). Omit "groups".');
+  }
+  if (mode === 'confirm' && confirm !== true) {
+    return ok(
+      { dryRun: true, groups },
+      '⚠️ Confirmation required — setting "groups" is gated by policy (category: manage_groups). DRY RUN, nothing changed. Call again with "confirm": true.',
+    );
+  }
+  return undefined;
+}
 
 /** Strong random password: base64url entropy + one char of each class (password-policy compliance). */
 function generatePassword(): string {
@@ -117,6 +139,8 @@ export const userTools: ToolDef[] = [
       sendWelcomeEmail: z.boolean().default(false),
     },
     handler: async (a, ctx) => {
+      const gated = groupAssignmentGate(a.groups?.length ? a.groups : undefined, a.confirm, ctx);
+      if (gated) return gated;
       const data = await ctx.client.request(
         `mutation($email:String!,$name:String!,$passwordRaw:String,$providerKey:String!,$groups:[Int]!,$mustChangePassword:Boolean,$sendWelcomeEmail:Boolean){ users { create(email:$email,name:$name,passwordRaw:$passwordRaw,providerKey:$providerKey,groups:$groups,mustChangePassword:$mustChangePassword,sendWelcomeEmail:$sendWelcomeEmail){ ${DEFAULT_RESPONSE} user { id name email } } } }`,
         {
@@ -160,6 +184,9 @@ export const userTools: ToolDef[] = [
       appearance: z.string().optional(),
     },
     handler: async (a, ctx) => {
+      // groups:[] on update strips every membership — gated as well.
+      const gated = groupAssignmentGate(a.groups, a.confirm, ctx);
+      if (gated) return gated;
       const data = await ctx.client.request(
         `mutation($id:Int!,$email:String,$name:String,$newPassword:String,$groups:[Int],$location:String,$jobTitle:String,$timezone:String,$dateFormat:String,$appearance:String){ users { update(id:$id,email:$email,name:$name,newPassword:$newPassword,groups:$groups,location:$location,jobTitle:$jobTitle,timezone:$timezone,dateFormat:$dateFormat,appearance:$appearance){ ${DEFAULT_RESPONSE} } } }`,
         {

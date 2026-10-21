@@ -1,0 +1,31 @@
+# Wiki.js-Konfiguration — wird per Compose ÜBER die config.yml des offiziellen
+# Images gemountet. Identisch zum Original (dev/build/config.yml im Wiki.js-
+# Repo) PLUS dem pool-Block: das Image selbst bietet keine Pool-Steuerung an
+# und fällt auf den Knex-Default (min 2 / max 10) zurück — zu knapp, wenn
+# mehrere KI-Agenten parallel zur normalen Nutzung arbeiten.
+#
+# $(VAR:default) wird von Wiki.js VOR dem YAML-Parsen ersetzt (Zahlen bleiben
+# Zahlen). Die DB_POOL_*-Werte kommen aus docker-compose.yml / .env.
+port: 3000
+bindIP: 0.0.0.0
+db:
+  type: $(DB_TYPE)
+  host: '$(DB_HOST)'
+  port: $(DB_PORT)
+  user: '$(DB_USER)'
+  pass: '$(DB_PASS)'
+  db: $(DB_NAME)
+  storage: $(DB_FILEPATH)
+  ssl: $(DB_SSL)
+pool:
+  min: $(DB_POOL_MIN:2)
+  max: $(DB_POOL_MAX:20)
+ssl:
+  enabled: $(SSL_ACTIVE)
+  port: 3443
+  provider: letsencrypt
+  domain: $(LETSENCRYPT_DOMAIN)
+  subscriberEmail: $(LETSENCRYPT_EMAIL)
+logLevel: $(LOG_LEVEL:info)
+logFormat: $(LOG_FORMAT:default)
+ha: $(HA_ACTIVE)

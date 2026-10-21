@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { resolveIssuer } from '../../../lib/oauth/metadata';
 import { oauthEnabled } from '../../../lib/oauth/store';
 import { identityFromCookies, isWikiAdmin, sameOrigin } from '../../../lib/oauth/web';
+import { FORM_BODY_LIMIT, readBody } from '../../../lib/body-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,7 +15,9 @@ export async function POST(req: Request): Promise<Response> {
   const me = await identityFromCookies(await cookies());
   if (!me) return new Response(null, { status: 303, headers: { Location: `${issuer}/me` } });
 
-  const form = new URLSearchParams(await req.text());
+  const body = await readBody(req, FORM_BODY_LIMIT);
+  if (body instanceof Response) return body;
+  const form = new URLSearchParams(body);
   const sessionId = form.get('session_id') ?? '';
   const store = await import('../../../lib/oauth/store');
   const session = store.getSessionById(sessionId);

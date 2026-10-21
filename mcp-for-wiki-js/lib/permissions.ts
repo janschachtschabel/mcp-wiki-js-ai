@@ -156,11 +156,15 @@ export const PRESETS: Record<string, CategoryMap> = Object.fromEntries(
 /** The default/ceiling role name (used for the global ceiling and entries without a role). */
 export const DEFAULT_PRESET = LOADED.defaultRole;
 
-/** A role expressed as a tighten-only PolicyConfig overlay (categories + per-tool). */
-export function roleConfig(name: string | undefined): PolicyConfig | undefined {
-  if (!name) return undefined;
-  const r = ROLES[name];
-  if (!r) return undefined;
+/**
+ * A role expressed as a tighten-only PolicyConfig overlay (categories + per-tool).
+ * No name → the defaultRole. An unknown name throws: falling back to "no overlay"
+ * would silently grant the global ceiling (audit R-03). lib/config-check.ts
+ * reports configured typos at startup; this is the fail-closed backstop.
+ */
+export function roleConfig(name: string | undefined): PolicyConfig {
+  const r = ROLES[name || DEFAULT_PRESET];
+  if (!r) throw new Error(`Unknown role "${name}" — not defined in config/roles.json or WIKIJS_ROLES.`);
   return { categories: { ...r.categories }, tools: { ...r.tools } };
 }
 

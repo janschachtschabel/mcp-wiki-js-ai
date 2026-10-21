@@ -2,6 +2,7 @@ import { resolveIssuer } from '../../../lib/oauth/metadata';
 import { oauthEnabled } from '../../../lib/oauth/store';
 import { loginWithCredentials } from '../../../lib/oauth/wiki-login';
 import { isSecureRequest, meCookieHeader, meCookieValue, sameOrigin, wikiBaseUrl } from '../../../lib/oauth/web';
+import { FORM_BODY_LIMIT, readBody } from '../../../lib/body-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,7 +13,9 @@ export async function POST(req: Request): Promise<Response> {
   const issuer = resolveIssuer(req);
   if (!sameOrigin(req, issuer)) return new Response('Cross-origin form post rejected.', { status: 403 });
 
-  const form = new URLSearchParams(await req.text());
+  const body = await readBody(req, FORM_BODY_LIMIT);
+  if (body instanceof Response) return body;
+  const form = new URLSearchParams(body);
   const outcome = await loginWithCredentials(wikiBaseUrl(), form.get('username') ?? '', form.get('password') ?? '');
 
   if (outcome.kind === 'ok') {

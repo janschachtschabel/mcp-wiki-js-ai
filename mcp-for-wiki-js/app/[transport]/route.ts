@@ -2,6 +2,7 @@ import { createMcpHandler, withMcpAuth } from 'mcp-handler';
 import { registerAll } from '../../lib/register';
 import { SERVER_INFO, INSTRUCTIONS } from '../../lib/meta';
 import { oauthEnabled } from '../../lib/oauth/store';
+import { MCP_BODY_LIMIT, readBody } from '../../lib/body-limit';
 import { legacyAllowed, shouldUseOAuth } from '../../lib/oauth/routing';
 
 export const dynamic = 'force-dynamic';
@@ -94,7 +95,9 @@ async function handler(req: Request): Promise<Response> {
       if (value && !guards.some((g) => headers.has(g))) headers.set(header, value);
     }
     // Rebuild the request with injected headers (Headers are immutable on the original).
-    const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : await req.text();
+    // Capped like the SDK's own reader — this read happens before any auth (R-09).
+    const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : await readBody(req, MCP_BODY_LIMIT);
+    if (body instanceof Response) return body;
     request = new Request(req.url, { method: req.method, headers, body });
   }
 

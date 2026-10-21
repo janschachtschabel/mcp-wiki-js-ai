@@ -3,7 +3,7 @@
  * Run: npm run test:policy
  */
 import assert from 'node:assert';
-import { basePolicyFromEnv, parsePolicyConfig, roleConfig } from '../lib/permissions';
+import { basePolicyFromEnv, parsePolicyConfig, roleConfig, DEFAULT_PRESET } from '../lib/permissions';
 
 let passed = 0;
 function check(label: string, fn: () => void) {
@@ -71,8 +71,15 @@ check('ceiling "safe" caps systemadmin: write -> confirm (not allow)', () =>
 check('ceiling "safe" caps systemadmin: manage_users -> block', () =>
   assert.equal(cappedAdmin.resolve('wiki_user_create', 'manage_users'), 'block'));
 
-// 8. unknown role name -> no-op overlay (effective = ceiling)
-check('unknown role name -> no-op', () =>
-  assert.equal(editor.withOverlay(roleConfig('does-not-exist')).resolve('wiki_page_create', 'write'), 'allow'));
+// 8. audit R-03: an unknown role must fail CLOSED (error), a missing role gets defaultRole
+check('unknown role name -> throws (no silent fall-back to the ceiling)', () =>
+  assert.throws(() => roleConfig('does-not-exist'), /Unknown role "does-not-exist"/));
+check('missing role -> defaultRole overlay (not the ceiling)', () =>
+  assert.deepEqual(roleConfig(undefined), roleConfig(DEFAULT_PRESET)));
+check('missing role on systemadmin ceiling: defaultRole "safe" -> write confirm', () =>
+  assert.equal(
+    basePolicyFromEnv({ WIKIJS_PERMISSION_PRESET: 'systemadmin' }).withOverlay(roleConfig(undefined)).resolve('wiki_page_create', 'write'),
+    'confirm',
+  ));
 
 console.log(`\n${passed} policy assertions passed.`);

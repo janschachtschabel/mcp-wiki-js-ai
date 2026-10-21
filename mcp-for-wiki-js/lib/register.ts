@@ -3,6 +3,7 @@ import type { McpServer, ServerContext, CallToolResult, ToolAnnotations } from '
 import { allTools, type ToolDef } from './tools/index';
 import { resolveContext, basePolicy, toolExtraFromServerContext } from './context';
 import { fail } from './wikijs/format';
+import { oauthEnabled } from './oauth/crypto';
 import type { Category } from './permissions';
 
 const CATEGORY_LABEL: Record<Category, string> = {
@@ -53,7 +54,7 @@ function audit(tool: ToolDef, profile: string | undefined, sessionId: string | u
   console.log(
     JSON.stringify({ audit: 'wikijs-mcp', tool: tool.name, category: tool.category, profile: profile ?? null, outcome, ms }),
   );
-  if (process.env.MCP_SESSION_SECRET) {
+  if (oauthEnabled()) {
     // Fire-and-forget: auditing must never fail or slow the tool call.
     import('./oauth/store')
       .then((store) =>

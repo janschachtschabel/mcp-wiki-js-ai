@@ -22,6 +22,12 @@
 		/_next/*
 
 	handle @mcp {
+		# Anonymous bodies are read before any auth check — cap them at the edge
+		# (the server caps /mcp at 4 MB and forms at 64 KB itself). Wiki paths
+		# stay unlimited here: asset uploads go through them.
+		request_body {
+			max_size 8MB
+		}
 		reverse_proxy mcp:3000
 	}
 

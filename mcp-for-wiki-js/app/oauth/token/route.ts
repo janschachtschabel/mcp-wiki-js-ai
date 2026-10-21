@@ -6,6 +6,7 @@ import {
   type TokenResponse,
 } from '../../../lib/oauth/service';
 import { oauthEnabled } from '../../../lib/oauth/store';
+import { FORM_BODY_LIMIT, readBody } from '../../../lib/body-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,9 +18,11 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: Request): Promise<Response> {
   if (!oauthEnabled()) return new Response('OAuth is not enabled on this deployment.', { status: 404 });
 
+  const body = await readBody(req, FORM_BODY_LIMIT);
+  if (body instanceof Response) return body;
   let form: URLSearchParams;
   try {
-    form = new URLSearchParams(await req.text());
+    form = new URLSearchParams(body);
   } catch {
     return errorResponse(new OAuthError('invalid_request', 'Body must be application/x-www-form-urlencoded.'));
   }

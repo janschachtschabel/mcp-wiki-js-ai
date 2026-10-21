@@ -1,6 +1,7 @@
 import { corsPreflightResponse } from '../../../lib/oauth/metadata';
 import { OAuthError, registerClient } from '../../../lib/oauth/service';
 import { oauthEnabled } from '../../../lib/oauth/store';
+import { FORM_BODY_LIMIT, readBody } from '../../../lib/body-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,9 +13,11 @@ export const dynamic = 'force-dynamic';
  */
 export async function POST(req: Request): Promise<Response> {
   if (!oauthEnabled()) return new Response('OAuth is not enabled on this deployment.', { status: 404 });
+  const text = await readBody(req, FORM_BODY_LIMIT);
+  if (text instanceof Response) return text;
   let body: unknown;
   try {
-    body = await req.json();
+    body = JSON.parse(text);
   } catch {
     return errorResponse(new OAuthError('invalid_request', 'Body must be JSON.'));
   }

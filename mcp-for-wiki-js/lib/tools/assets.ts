@@ -3,6 +3,33 @@ import { ok, fail, assertOk } from '../wikijs/format';
 import { AssetTooLargeError } from '../wikijs/client';
 import { DEFAULT_RESPONSE, type ToolDef } from './types';
 
+/**
+ * First path segments Wiki.js routes to something other than an asset
+ * (wiki/server/controllers/*.js, /graphql): admin, page source/history/editor,
+ * raw GraphQL, login flows. A "read" download must not reach them with the
+ * caller's credential — that would bypass the manage_* blocks and the tag
+ * guardrail (audit R-05).
+ */
+const RESERVED_ROOTS = new Set([
+  'a', 'd', 'e', 'h', 'i', 'p', 's', 't', 'u',
+  'graphql', 'login', 'logout', 'register', 'verify', 'login-reset', 'healthz', 'robots.txt', '_userav',
+]);
+
+/** Why `path` is not a plain asset path, or undefined if it is one. */
+function assetPathError(path: string): string | undefined {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    return 'malformed percent-encoding';
+  }
+  if (/[?#\\]/.test(decoded)) return 'it must not contain "?", "#" or "\\"';
+  const segments = decoded.replace(/^\/+/, '').split('/');
+  if (segments.some((s) => s === '' || s.startsWith('.'))) return 'empty, "." or ".." segments are not allowed';
+  if (RESERVED_ROOTS.has(segments[0].toLowerCase())) return `"/${segments[0]}" is a Wiki.js route, not an asset folder`;
+  return undefined;
+}
+
 export const assetTools: ToolDef[] = [
   {
     name: 'wiki_assets_list',
@@ -49,6 +76,10 @@ export const assetTools: ToolDef[] = [
         .describe('Refuse files larger than this (protects the context window). Max 5 MB.'),
     },
     handler: async (a, ctx) => {
+      const pathError = assetPathError(a.path);
+      if (pathError) {
+        return fail(`Not an asset path (${pathError}). Use a path from wiki_assets_list, e.g. "uploads/report.pdf".`);
+      }
       const limit = a.maxBytes ?? 1_000_000;
       let payload: { data: Uint8Array; mime: string };
       try {
@@ -72,6 +103,11 @@ export const assetTools: ToolDef[] = [
         throw e;
       }
       const { data, mime } = payload;
+      // HTML is a rendered PAGE (pages share the URL space with assets) — page
+      // reads go through the page tools and their tag guardrail.
+      if (/^text\/html\b/i.test(mime)) {
+        return fail(`${a.path} is a wiki page, not an asset. Use wiki_page_get to read pages.`);
+      }
       if (data.byteLength > limit) {
         return fail(
           `Asset ${a.path} is ${data.byteLength} bytes (limit ${limit}). Raise maxBytes (up to 5000000) if you really need it.`,

@@ -14,12 +14,11 @@
 
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { sessionSecret } from './crypto';
+import { oauthEnabled } from './crypto';
 
-/** OAuth is on ⇔ a session secret is configured (checked before any store use). */
-export function oauthEnabled(): boolean {
-  return Boolean(sessionSecret());
-}
+// Re-exported: the routes import it from here; it lives in crypto.ts so callers
+// that must not load node:sqlite (lib/register.ts, stdio) can use it too.
+export { oauthEnabled };
 
 export interface ClientRow {
   id: string;
@@ -174,6 +173,7 @@ const now = () => Date.now();
 // ------------------------------------------------------------------ clients ---
 
 export function insertClient(c: ClientRow): void {
+  cleanupSessions(); // open DCR: keep the client table bounded without a background job
   getDb()
     .prepare('INSERT INTO oauth_clients (id, name, redirect_uris, created_at) VALUES (?, ?, ?, ?)')
     .run(c.id, c.name, JSON.stringify(c.redirectUris), c.createdAt);
@@ -245,9 +245,13 @@ const REVOKED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const IDLE_RETENTION_MS = 28 * 24 * 60 * 60 * 1000;
 /** Audit rows are the persisted accountability trail; keep them longer than sessions. */
 const AUDIT_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
+/** A registered client with no session or code left is dead weight after a day
+ *  (authorization takes minutes; MCP clients re-register on invalid_client). */
+const UNUSED_CLIENT_RETENTION_MS = 24 * 60 * 60 * 1000;
 
-/** Delete dead session rows and aged-out audit entries. Called opportunistically
- *  on session creation, so the store stays bounded without a background job. */
+/** Delete dead session rows, unused clients and aged-out audit entries. Called
+ *  opportunistically on session/client creation, so the store stays bounded
+ *  without a background job. */
 export function cleanupSessions(at: number = now()): void {
   const d = getDb();
   d.prepare('DELETE FROM oauth_sessions WHERE (revoked_at IS NOT NULL AND revoked_at < ?) OR last_used_at < ?').run(
@@ -255,10 +259,14 @@ export function cleanupSessions(at: number = now()): void {
     at - IDLE_RETENTION_MS,
   );
   d.prepare('DELETE FROM audit_log WHERE ts < ?').run(at - AUDIT_RETENTION_MS);
+  d.prepare(
+    `DELETE FROM oauth_clients WHERE created_at < ?
+       AND NOT EXISTS (SELECT 1 FROM oauth_sessions s WHERE s.client_id = oauth_clients.id)
+       AND NOT EXISTS (SELECT 1 FROM oauth_codes c WHERE c.client_id = oauth_clients.id)`,
+  ).run(at - UNUSED_CLIENT_RETENTION_MS);
 }
 
 export function insertSession(s: SessionRow): void {
-  cleanupSessions();
   getDb()
     .prepare(
       `INSERT INTO oauth_sessions
@@ -269,6 +277,9 @@ export function insertSession(s: SessionRow): void {
       s.id, s.accessHash, s.refreshHash, s.clientId, s.clientName, s.userLabel, s.userEmail,
       s.encJwt, s.accessExpiresAt, s.createdAt, s.lastUsedAt, s.revokedAt,
     );
+  // AFTER the insert: the code was already consumed, so before it the client
+  // would briefly look unused and be purged.
+  cleanupSessions();
 }
 
 export function getSessionByAccessHash(hash: string): SessionRow | undefined {

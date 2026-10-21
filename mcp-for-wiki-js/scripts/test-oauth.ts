@@ -6,7 +6,7 @@
  */
 process.env.MCP_SESSION_SECRET = 'test-secret-for-oauth-suite-0123456789';
 
-import { createHash, randomBytes } from 'node:crypto';
+import { createCipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto';
 
 let pass = 0;
 let failed = 0;
@@ -34,17 +34,18 @@ async function main(): Promise<void> {
   const crypto = await import('../lib/oauth/crypto');
   const store = await import('../lib/oauth/store');
   const service = await import('../lib/oauth/service');
+  const web = await import('../lib/oauth/web');
 
   store.openTestStore();
 
   // ---- crypto -------------------------------------------------------------
   const secretText = 'wiki-jwt-payload-äöü-🔑';
-  check('encrypt/decrypt roundtrip', crypto.decryptString(crypto.encryptString(secretText)) === secretText);
-  check('ciphertexts are salted (two encryptions differ)', crypto.encryptString('x') !== crypto.encryptString('x'));
+  check('encrypt/decrypt roundtrip', crypto.decryptString(crypto.encryptString(secretText, 'db-jwt'), 'db-jwt') === secretText);
+  check('ciphertexts are salted (two encryptions differ)', crypto.encryptString('x', 'db-jwt') !== crypto.encryptString('x', 'db-jwt'));
   let tampered = false;
   try {
-    const c = crypto.encryptString('x');
-    crypto.decryptString(c.slice(0, -4) + 'AAAA');
+    const c = crypto.encryptString('x', 'db-jwt');
+    crypto.decryptString(c.slice(0, -4) + 'AAAA', 'db-jwt');
   } catch {
     tampered = true;
   }
@@ -155,6 +156,32 @@ async function main(): Promise<void> {
   service.persistRenewedJwt(session!.sessionId, 'WIKI_JWT_RENEWED');
   check('renewed JWT is persisted', service.verifyAccessToken(tokens.access_token)?.wikiJwt === 'WIKI_JWT_RENEWED');
 
+  // ---- audit R-02: one key per purpose ------------------------------------
+  // A DB copy must not log anyone in: the stored ciphertext is no valid mcp_me cookie.
+  const dbCipher = store.getSessionById(session!.sessionId)!.encJwt;
+  check('R-02: DB ciphertext (oauth_sessions.enc_jwt) is NOT a valid mcp_me cookie', web.meCookieJwt(dbCipher) === undefined);
+  const cookie = web.meCookieValue('WIKI_JWT_COOKIE');
+  check('R-02: mcp_me cookie roundtrip', web.meCookieJwt(cookie) === 'WIKI_JWT_COOKIE');
+  check('R-02: a cookie does not decrypt as a DB value', (() => {
+    try { crypto.decryptString(cookie, 'db-jwt'); return false; } catch { return true; }
+  })());
+  // Well-formed, fresh cookie payloads under another purpose's key — only key separation rejects them.
+  const nowS = Math.floor(Date.now() / 1000);
+  const forged = JSON.stringify({ jwt: 'X', iat: nowS });
+  check('R-02: a fresh cookie payload under the DB key is not a cookie', web.meCookieJwt(crypto.encryptString(forged, 'db-jwt')) === undefined);
+  check('R-02: a fresh cookie payload under the 2FA key is not a cookie', web.meCookieJwt(crypto.encryptString(forged, 'tfa')) === undefined);
+  check('R-02: cookie expires server-side after max-age',
+    web.meCookieJwt(web.meCookieValue('J', nowS - web.ME_COOKIE_MAX_AGE_S - 1)) === undefined);
+  check('R-02: cookie valid just inside max-age',
+    web.meCookieJwt(web.meCookieValue('J', nowS - web.ME_COOKIE_MAX_AGE_S + 5)) === 'J');
+  // Existing sessions survive the upgrade: the DB purpose keeps the pre-R-02 key derivation.
+  const legacyKey = Buffer.from(hkdfSync('sha256', process.env.MCP_SESSION_SECRET!, 'wikijs-mcp', 'wikijs-mcp/session-encryption/v1', 32));
+  const iv = randomBytes(12);
+  const c0 = createCipheriv('aes-256-gcm', legacyKey, iv);
+  const ct0 = Buffer.concat([c0.update('PRE_UPGRADE_JWT', 'utf8'), c0.final()]);
+  const legacyCipher = Buffer.concat([iv, c0.getAuthTag(), ct0]).toString('base64url');
+  check('R-02: pre-upgrade DB ciphertext still decrypts (sessions stay valid)', crypto.decryptString(legacyCipher, 'db-jwt') === 'PRE_UPGRADE_JWT');
+
   // ---- refresh rotation ---------------------------------------------------
   const refreshed = service.refreshAccessToken({ refreshToken: tokens.refresh_token, clientId: reg.client_id });
   check('refresh issues a new access token', refreshed.access_token !== tokens.access_token);
@@ -204,10 +231,32 @@ async function main(): Promise<void> {
     userLabel: 'Old', userEmail: 'old@example.org', encJwt: 'enc', accessExpiresAt: old,
     createdAt: old, lastUsedAt: old, revokedAt: null,
   });
-  check('stale session exists before cleanup', store.getSessionById('stale-session') !== undefined);
+  // insertSession prunes AFTER its insert (see store.ts) — an already-stale row goes at once
+  // (a failed insert would have thrown above).
+  check('session insert purges idle-expired sessions', store.getSessionById('stale-session') === undefined);
   store.cleanupSessions();
-  check('cleanup purges idle-expired sessions', store.getSessionById('stale-session') === undefined);
   check('cleanup keeps live sessions', store.listSessionsByEmail('alice@example.org').length === 2);
+
+  // R-10: open DCR must not grow forever — clients without any session/code are purged after 24h.
+  const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
+  store.insertClient({ id: 'mcp_client_unused_old', name: 'flood', redirectUris: ['https://x.example/cb'], createdAt: twoDaysAgo });
+  store.insertClient({ id: 'mcp_client_unused_new', name: 'fresh', redirectUris: ['https://x.example/cb'], createdAt: Date.now() });
+  store.insertClient({ id: 'mcp_client_used_old', name: 'used', redirectUris: ['https://x.example/cb'], createdAt: twoDaysAgo });
+  store.insertSession({
+    id: 'live-on-old-client', accessHash: 'y1', refreshHash: 'y2', clientId: 'mcp_client_used_old', clientName: 'used',
+    userLabel: 'U', userEmail: 'u@example.org', encJwt: 'enc', accessExpiresAt: Date.now() + 3600_000,
+    createdAt: Date.now(), lastUsedAt: Date.now(), revokedAt: null,
+  });
+  store.cleanupSessions();
+  check('cleanup purges old clients without sessions', store.getClient('mcp_client_unused_old') === undefined);
+  check('cleanup keeps freshly registered clients (authorization may be in progress)', store.getClient('mcp_client_unused_new') !== undefined);
+  check('cleanup keeps old clients that still have a session', store.getClient('mcp_client_used_old') !== undefined);
+  check('cleanup keeps the active test client', store.getClient(reg.client_id) !== undefined);
+  // Token exchange consumes the code BEFORE the session row exists — an old client must survive that.
+  store.insertClient({ id: 'mcp_client_reauth', name: 'returning', redirectUris: [params.redirectUri], createdAt: twoDaysAgo });
+  const reauth = service.issueAuthorizationCode({ ...params, clientId: 'mcp_client_reauth' }, identity, 'WIKI_JWT_RA');
+  service.exchangeAuthorizationCode({ code: reauth.code, clientId: 'mcp_client_reauth', redirectUri: params.redirectUri, codeVerifier: verifier });
+  check('old client survives its own code→token exchange', store.getClient('mcp_client_reauth') !== undefined);
 
   store.insertAudit({ ts: Date.now(), sessionId: null, profile: 'Alice', tool: 'wiki_page_update', category: 'write', outcome: 'ok', ms: 12 });
   const audit = store.listAudit(10);

@@ -1,6 +1,6 @@
 import { WikiClient } from './wikijs/client';
 import { Policy, basePolicyFromEnv, parsePolicyConfig, roleConfig, type PolicyConfig } from './permissions';
-import { sessionSecret, sha256hex } from './oauth/crypto';
+import { oauthEnabled, sha256hex } from './oauth/crypto';
 
 /**
  * Per-request execution context: which Wiki.js instance + key to talk to, and the
@@ -192,7 +192,7 @@ export function resolveContext(extra?: ToolExtra): WikiContext {
   if (!token && typeof extra?.authInfo?.token === 'string') token = extra.authInfo.token;
   // Single-tenant env fallback only without OAuth — with OAuth on, an empty or
   // missing per-request credential must never borrow the service key.
-  if (!token && !sessionSecret(env)) token = env.WIKIJS_TOKEN || env.WIKIJS_API_KEY || undefined;
+  if (!token && !oauthEnabled(env)) token = env.WIKIJS_TOKEN || env.WIKIJS_API_KEY || undefined;
 
   // --- untrusted per-request overlay (client) — can only tighten ---
   let requestOverlay: PolicyConfig | undefined = parsePolicyConfig(header(headers, 'x-wikijs-policy'));
@@ -220,6 +220,10 @@ export function resolveContext(extra?: ToolExtra): WikiContext {
     }
   } else {
     realToken = resolveAlias(token, env);
+    // A KEY_MAP alias unlocks a SERVER key but carries no role → defaultRole,
+    // like a profile without one (R-03). Raw BYOK keys keep the ceiling: there
+    // Wiki.js enforces the caller's own key.
+    if (realToken !== token) roleOverlay = roleConfig(undefined);
     const callerUrl = header(headers, 'x-wikijs-url');
     baseUrl = (
       (callerUrl ? checkCallerUrl(callerUrl, env) : undefined) ||

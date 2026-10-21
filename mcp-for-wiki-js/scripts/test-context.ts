@@ -11,7 +11,10 @@ process.env.WIKIJS_PERMISSION_PRESET = 'systemadmin'; // ceiling = allow everyth
 process.env.WIKIJS_PROFILES = JSON.stringify({
   'secret-handle-A': { label: 'Alice', token: 'real-key-A', role: 'leser' },
   'secret-handle-B': { label: 'Bob', token: 'real-key-B', role: 'redakteur' },
+  'secret-handle-C': { label: 'Carol', token: 'real-key-C' }, // no role → defaultRole
+  'secret-handle-D': { label: 'Dave', token: 'real-key-D', role: 'redakter' }, // typo
 });
+process.env.WIKIJS_KEY_MAP = JSON.stringify({ 'legacy-handle': 'real-key-E' });
 
 let pass = 0;
 let failed = 0;
@@ -52,6 +55,15 @@ async function main(): Promise<void> {
   check('profile B: label "Bob"', b.profile === 'Bob');
   check('profile B (redakteur): write -> allow', b.policy.resolve('wiki_page_create', 'write') === 'allow');
   check('profile B (redakteur): delete -> confirm', b.policy.resolve('wiki_page_delete', 'delete') === 'confirm');
+
+  // 2b. Audit R-03: a missing role gets defaultRole ("safe"), never the systemadmin ceiling;
+  // an unknown role fails closed instead of silently granting the ceiling.
+  const carol = h({ 'x-wikijs-token': 'secret-handle-C' });
+  check('profile C (no role → safe): write -> confirm', carol.policy.resolve('wiki_page_create', 'write') === 'confirm');
+  check('profile C (no role → safe): manage_users -> block', carol.policy.resolve('wiki_user_create', 'manage_users') === 'block');
+  check('profile D (unknown role "redakter") → throws', throws(() => h({ 'x-wikijs-token': 'secret-handle-D' })));
+  const legacy = h({ 'x-wikijs-token': 'legacy-handle' });
+  check('KEY_MAP alias (server key, no role) → defaultRole: write -> confirm', legacy.policy.resolve('wiki_page_create', 'write') === 'confirm');
 
   // 3. Unknown token -> verbatim BYOK key, no profile label.
   // A caller-supplied URL is only honoured when allow-listed (audit F-01: SSRF).

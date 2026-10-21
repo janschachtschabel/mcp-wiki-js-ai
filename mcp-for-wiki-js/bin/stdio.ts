@@ -12,8 +12,11 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { registerAll } from '../lib/register';
 import { SERVER_INFO, INSTRUCTIONS } from '../lib/meta';
+import { assertConfig } from '../lib/config-check';
 
 async function main(): Promise<void> {
+  // Same startup check as the HTTP server (instrumentation.ts); warnings → stderr.
+  assertConfig(process.env, (msg) => console.error(`[mcp-wikijs-mv] ${msg}`));
   const server = new McpServer(SERVER_INFO, { instructions: INSTRUCTIONS });
   registerAll(server);
 

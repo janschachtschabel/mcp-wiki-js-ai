@@ -1,7 +1,7 @@
 # Referenzmaterial — nicht Teil dieses Repos:
 # wiki/ = Clone von requarks/wiki, mcp2/ = Community-MCP-Server zum Vergleich.
-wiki/
-mcp2/
+/wiki/
+/mcp2/
 
 # Secrets & lokale Konfiguration
 .env

@@ -17,6 +17,7 @@ import {
   sameOrigin,
   wikiBaseUrl,
 } from '../../../../lib/oauth/web';
+import { FORM_BODY_LIMIT, readBody } from '../../../../lib/body-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,7 +33,9 @@ export async function POST(req: Request): Promise<Response> {
   const issuer = resolveIssuer(req);
   if (!sameOrigin(req, issuer)) return new Response('Cross-origin form post rejected.', { status: 403 });
 
-  const form = new URLSearchParams(await req.text());
+  const body = await readBody(req, FORM_BODY_LIMIT);
+  if (body instanceof Response) return body;
+  const form = new URLSearchParams(body);
   const p: AuthorizeParams = {
     clientId: form.get('client_id') ?? '',
     redirectUri: form.get('redirect_uri') ?? '',
@@ -70,7 +73,7 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     if (mode === 'tfa') {
-      const continuation = decryptString(form.get('tfa') ?? '');
+      const continuation = decryptString(form.get('tfa') ?? '', 'tfa');
       const outcome = await loginTfa(wikiBaseUrl(), continuation, form.get('security_code') ?? '');
       return handleLoginOutcome(issuer, p, outcome, req);
     }
@@ -89,7 +92,7 @@ export async function POST(req: Request): Promise<Response> {
 
 async function handleLoginOutcome(issuer: string, p: AuthorizeParams, outcome: LoginOutcome, req: Request): Promise<Response> {
   if (outcome.kind === 'tfa') {
-    return backToAuthorize(issuer, p, { tfa: encryptString(outcome.continuationToken) });
+    return backToAuthorize(issuer, p, { tfa: encryptString(outcome.continuationToken, 'tfa') });
   }
   if (outcome.kind === 'error') {
     return backToAuthorize(issuer, p, { force_login: '1', login_error: outcome.message.slice(0, 180) });

@@ -47,21 +47,34 @@ export async function identityFromCookies(cookies: {
     }
   }
   const me = cookies.get(ME_COOKIE)?.value;
-  if (me) {
-    try {
-      const jwt = decryptString(me);
-      const identity = await fetchIdentity(wikiBaseUrl(), jwt);
-      if (identity) return { identity, jwt, source: 'me-cookie' };
-    } catch {
-      /* tampered/stale cookie — fall through to the login form */
-    }
+  const jwt = me ? meCookieJwt(me) : undefined;
+  if (jwt) {
+    const identity = await fetchIdentity(wikiBaseUrl(), jwt);
+    if (identity) return { identity, jwt, source: 'me-cookie' };
   }
   return undefined;
 }
 
-/** Serialized Set-Cookie value for our own session cookie (encrypted wiki JWT). */
-export function meCookieValue(jwt: string): string {
-  return encryptString(jwt);
+/**
+ * Serialized Set-Cookie value for our own session cookie: {jwt, iat} under the
+ * cookie-only key, so neither a DB ciphertext nor an old cookie replays (R-02).
+ */
+export function meCookieValue(jwt: string, iat: number = Math.floor(Date.now() / 1000)): string {
+  return encryptString(JSON.stringify({ jwt, iat }), 'cookie');
+}
+
+/** The wiki JWT from an mcp_me cookie, or undefined if foreign, tampered or past max-age. */
+export function meCookieJwt(value: string, now: number = Math.floor(Date.now() / 1000)): string | undefined {
+  let payload: { jwt?: unknown; iat?: unknown };
+  try {
+    payload = JSON.parse(decryptString(value, 'cookie'));
+  } catch {
+    return undefined; // tampered / other purpose / pre-R-02 cookie → login form
+  }
+  const { jwt, iat } = payload ?? {};
+  if (typeof jwt !== 'string' || typeof iat !== 'number') return undefined;
+  if (iat > now + 60 || now - iat > ME_COOKIE_MAX_AGE_S) return undefined;
+  return jwt;
 }
 
 export function meCookieHeader(value: string, secure: boolean): string {

@@ -233,6 +233,8 @@ export class WikiClient {
         const res = await fetch(url, {
           headers: { ...(this.token ? { authorization: `Bearer ${this.token}` } : {}) },
           signal: controller.signal,
+          // Assets are served directly; a redirect (e.g. to /login) leaves the asset space.
+          redirect: 'error',
         });
         this.captureRenewedJwt(res);
         if (!res.ok) throw new Error(`Asset download failed: HTTP ${res.status} for ${path}`);

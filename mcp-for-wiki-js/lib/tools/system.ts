@@ -1,6 +1,17 @@
 import { z } from 'zod';
-import { ok, assertOk } from '../wikijs/format';
+import { Kind, parse } from 'graphql';
+import { ok, fail, assertOk } from '../wikijs/format';
 import { DEFAULT_RESPONSE, type ToolDef } from './types';
+
+/**
+ * Whether a GraphQL document can change state: any mutation/subscription
+ * operation. Parsed, not pattern-matched — commas and comments are ignored
+ * tokens, so a regex misses e.g. ",mutation{…}" (audit R-04). Throws on a
+ * syntax error; the caller refuses to forward such a document.
+ */
+function isWriteDocument(query: string): boolean {
+  return parse(query).definitions.some((d) => d.kind === Kind.OPERATION_DEFINITION && d.operation !== 'query');
+}
 
 export const systemTools: ToolDef[] = [
   // ------------------------------------------------------------- DIAGNOSTIC ---
@@ -153,8 +164,9 @@ export const systemTools: ToolDef[] = [
     name: 'wiki_graphql',
     description:
       'Run an arbitrary Wiki.js GraphQL query or mutation. Use for any operation not covered by a ' +
-      'dedicated tool. Powerful — gated under the manage_system category. Safety net: a raw MUTATION ' +
-      'returns a dry-run preview unless you pass confirm=true; plain queries run directly.',
+      'dedicated tool. Powerful — it bypasses the per-category policy and the tag guardrail, so every ' +
+      'role except systemadmin blocks it. Safety net: a raw MUTATION returns a dry-run preview unless ' +
+      'you pass confirm=true; plain queries run directly.',
     category: 'manage_system',
     inputSchema: {
       query: z.string().min(1).describe('GraphQL query or mutation document.'),
@@ -164,7 +176,12 @@ export const systemTools: ToolDef[] = [
       // The escape hatch can run ANY mutation (delete pages, wipe navigation, revoke API keys, …).
       // Even when policy sets manage_system to "allow", never execute a raw mutation without an
       // explicit confirm — return a dry-run preview first. Read queries are unaffected.
-      const isMutation = /(^|[\s{(])mutation\b/i.test(a.query);
+      let isMutation: boolean;
+      try {
+        isMutation = isWriteDocument(a.query);
+      } catch (e) {
+        return fail(`Invalid GraphQL document — nothing sent. ${e instanceof Error ? e.message : String(e)}`);
+      }
       if (isMutation && a.confirm !== true) {
         return ok(
           { dryRun: true, operation: 'mutation', query: a.query, variables: a.variables ?? {} },

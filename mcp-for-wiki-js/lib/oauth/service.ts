@@ -47,9 +47,12 @@ export class OAuthError extends Error {
 // ------------------------------------------------------------ registration ---
 
 const MAX_REDIRECT_URIS = 20;
+/** Open DCR is anonymous — bound what one registration can store (R-10). */
+const MAX_REDIRECT_URI_LENGTH = 2048;
 
 /** Loopback redirects are allowed on http; everything else must be https. */
 function validRedirectUri(uri: string): boolean {
+  if (uri.length > MAX_REDIRECT_URI_LENGTH) return false;
   let u: URL;
   try {
     u = new URL(uri);
@@ -80,7 +83,7 @@ export function registerClient(body: unknown): RegistrationResult {
   if (uris.length === 0 || uris.length > MAX_REDIRECT_URIS || !uris.every(validRedirectUri)) {
     throw new OAuthError(
       'invalid_redirect_uri',
-      'redirect_uris must be 1-20 absolute https URLs (or http on localhost/127.0.0.1) without fragments.',
+      `redirect_uris must be 1-${MAX_REDIRECT_URIS} absolute https URLs (or http on localhost/127.0.0.1) without fragments, each at most ${MAX_REDIRECT_URI_LENGTH} characters.`,
     );
   }
   const name = typeof meta.client_name === 'string' && meta.client_name.trim() ? meta.client_name.trim().slice(0, 100) : 'MCP client';
@@ -162,7 +165,7 @@ export function issueAuthorizationCode(
     clientId: params.clientId,
     redirectUri: params.redirectUri,
     challenge: params.codeChallenge,
-    encJwt: encryptString(wikiJwt),
+    encJwt: encryptString(wikiJwt, 'db-jwt'),
     userLabel: identity.name,
     userEmail: identity.email,
     expiresAt: Date.now() + CODE_TTL_MS,
@@ -290,7 +293,7 @@ export function verifyAccessToken(bearer: string): VerifiedSession | undefined {
   if (Date.now() - session.lastUsedAt > TOUCH_INTERVAL_MS) store.touchSession(session.id);
   return {
     sessionId: session.id,
-    wikiJwt: decryptString(session.encJwt),
+    wikiJwt: decryptString(session.encJwt, 'db-jwt'),
     label: session.userLabel,
     email: session.userEmail,
     clientId: session.clientId,
@@ -300,5 +303,5 @@ export function verifyAccessToken(bearer: string): VerifiedSession | undefined {
 
 /** Persist a renewed Wiki.js JWT captured from a `new-jwt` response header. */
 export function persistRenewedJwt(sessionId: string, jwt: string): void {
-  store.updateSessionJwt(sessionId, encryptString(jwt));
+  store.updateSessionJwt(sessionId, encryptString(jwt, 'db-jwt'));
 }
