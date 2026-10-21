@@ -11,9 +11,15 @@
 # Quick-Start:
 #   cp .env.example .env        # DOMAIN, Passwörter, MCP_SESSION_SECRET setzen
 #   docker compose up -d
-#   https://<DOMAIN>            → Wiki.js (Setup beim ersten Start)
+#   ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='…' \
+#     docker compose run --rm bootstrap --locale=de   # Ersteinrichtung (idempotent)
+#   https://<DOMAIN>            → Wiki.js
 #   https://<DOMAIN>/mcp        → MCP-Endpoint (Connector-URL für alle Clients)
 #   https://<DOMAIN>/me         → eigene KI-Zugänge ansehen/widerrufen
+#
+# Den Setup-Wizard von Wiki.js (POST /finalize = erstes Admin-Konto) sperrt
+# Caddy nach außen mit 403 — eingerichtet wird nur über den bootstrap-Dienst,
+# der im internen Netz direkt mit wiki:3000 spricht.
 #
 # Update:   docker compose pull && docker compose build --pull mcp && docker compose up -d
 # Logs:     docker compose logs -f
@@ -21,9 +27,25 @@
 #           Postgres (Wiki-Inhalte) via pg_dump UND die MCP-sqlite (Audit-Log +
 #           Sessions) via `sqlite3 .backup`. Volume off-host replizieren.
 # Reset:    docker compose down -v   # ACHTUNG: löscht ALLE Daten
+#
+# Base-Images bewusst per Tag (postgres:15-alpine, requarks/wiki:2, caddy:2-alpine)
+# und nicht per Digest gepinnt: ohne Renovate/Dependabot würden Digests veralten
+# und Sicherheits-Updates des Upstreams aussperren. `docker compose pull` holt sie.
+
+# Für jeden Dienst: keine Rechteausweitung per setuid, Log-Rotation (sonst
+# wachsen json-Logs unbegrenzt).
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
 
 services:
   db:
+    <<: *hardening
     image: postgres:15-alpine
     restart: unless-stopped
     # Resource-Ceilings, damit kein Service den Appliance-Host OOMt.
@@ -35,6 +57,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD fehlt — bitte .env anlegen}
     volumes:
       - db-data:/var/lib/postgresql/data
+    # Nur im internen db-Netz: Caddy und MCP erreichen Postgres nicht.
+    networks: [db]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U wikijs -d wiki"]
       interval: 10s
@@ -42,6 +66,7 @@ services:
       retries: 5
 
   wiki:
+    <<: *hardening
     image: requarks/wiki:2
     restart: unless-stopped
     # Höheres Ceiling: Wiki.js rendert Seiten in Node (der schwerste Service).
@@ -67,8 +92,11 @@ services:
       # Wie die config.yml des Images, plus pool-Block (siehe Datei-Kommentar).
       - ./deploy/wiki/config.yml:/wiki/config.yml:ro
     # Kein Port nach außen — Zugriff ausschließlich über caddy.
+    # default: für caddy/mcp/bootstrap und ausgehend (Sprachpakete); db: Postgres.
+    networks: [default, db]
 
   mcp:
+    <<: *hardening
     build:
       context: .
       dockerfile: Dockerfile
@@ -94,6 +122,8 @@ services:
       # Max. gleichzeitige GraphQL-Requests an Wiki.js — unter DB_POOL_MAX halten,
       # damit fürs Browsen der Menschen Pool-Luft bleibt.
       WIKIJS_MAX_CONCURRENCY: ${WIKIJS_MAX_CONCURRENCY:-12}
+      # Optional: erlaubte OAuth-Redirect-Hosts (kommagetrennt; leer = jeder https-Host).
+      MCP_ALLOWED_REDIRECT_HOSTS: ${MCP_ALLOWED_REDIRECT_HOSTS:-}
     volumes:
       - mcp-data:/data
     depends_on:
@@ -102,12 +132,13 @@ services:
   # Periodisches Backup mit Retention — deckt BEIDE Datenquellen ab:
   #   Postgres (Wiki-Inhalte) via pg_dump, und die MCP-sqlite (Audit-Log +
   #   Sessions) via `sqlite3 .backup` (konsistenter Hot-Backup, kein naives cp).
-  # Restore Wiki:
+  # Restore Wiki (über diesen Dienst: nur er mountet db-backups, PGPASSWORD ist gesetzt):
   #   docker compose stop wiki
-  #   docker compose exec db sh -c 'pg_restore -U wikijs -d wiki --clean /backups/<datei>.dump'
+  #   docker compose exec db-backup pg_restore -h db -U wikijs -d wiki --clean /backups/<datei>.dump
   #   docker compose start wiki
   # Restore MCP-Store: mcp stoppen, mcp-<ts>.sqlite als /data/mcp.sqlite einspielen, mcp starten.
   db-backup:
+    <<: *hardening
     image: postgres:15-alpine
     restart: unless-stopped
     mem_limit: 256m
@@ -125,6 +156,11 @@ services:
       # WAL-Read-Lock (braucht Schreibzugriff aufs -shm), läuft aber gefahrlos
       # parallel zum MCP-Writer.
       - mcp-data:/mcp-data
+    # db: für pg_dump; default: ausgehend für `apk add sqlite` beim Start.
+    networks: [default, db]
+    # `apk add` bei jedem (seltenen) Containerstart statt eigenem Image: spart
+    # Build und Registry. Fehlt das Netz, laufen die Postgres-Backups weiter,
+    # nur der sqlite-Teil meldet dann FAILED.
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -149,6 +185,7 @@ services:
         done
 
   caddy:
+    <<: *hardening
     image: caddy:2-alpine
     restart: unless-stopped
     mem_limit: 128m
@@ -157,7 +194,8 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      DOMAIN: ${DOMAIN}
+      # Fail at `docker compose` time: an empty site address makes the Caddyfile invalid.
+      DOMAIN: ${DOMAIN:?DOMAIN fehlt — bitte .env anlegen}
     volumes:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -165,6 +203,36 @@ services:
     depends_on:
       - wiki
       - mcp
+
+  # Ersteinrichtung (startet NICHT mit `up`, nur per `run`):
+  #   ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='…' \
+  #     docker compose run --rm bootstrap --locale=de [--demo]
+  # Spricht im internen Netz mit wiki:3000 — der Setup-Endpunkt /finalize ist
+  # über Caddy gesperrt. Idempotent; Details im Kopf von deploy/scripts/bootstrap.mjs.
+  bootstrap:
+    <<: *hardening
+    image: node:24-alpine
+    profiles: ["setup"]
+    depends_on:
+      - wiki
+    volumes:
+      - ./deploy/scripts:/scripts:ro
+    entrypoint: ["node", "/scripts/bootstrap.mjs"]
+    environment:
+      WIKI_URL: http://wiki:3000
+      # Steht als Connector-Adresse auf /ki-zugang und wird die Site-URL von Wiki.js.
+      PUBLIC_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN:?DOMAIN fehlt — bitte .env anlegen}}
+      # Ohne Wert: aus der Shell (oder .env) übernommen, keine Defaults für Passwörter.
+      ADMIN_EMAIL:
+      ADMIN_PASSWORD:
+      DEMO_EMAIL:
+      DEMO_NAME:
+      DEMO_PASSWORD:
+
+networks:
+  # Intern: kein Zugang nach außen, nur db, wiki und db-backup hängen daran.
+  db:
+    internal: true
 
 volumes:
   db-data:

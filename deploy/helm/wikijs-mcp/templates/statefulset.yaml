@@ -1,3 +1,6 @@
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- fail "replicaCount must be 0 or 1: OAuth sessions live in a single-writer sqlite file on one PVC (and the login/registration limits count per process)" }}
+{{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -22,6 +25,8 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
+      # The app never calls the Kubernetes API — no token in the pod.
+      automountServiceAccountToken: false
       {{- with .Values.global.image.pullSecrets }}
       imagePullSecrets: {{ toYaml . | nindent 8 }}
       {{- end }}
@@ -41,7 +46,7 @@ spec:
       containers:
       - name: {{ include "wikijs-mcp.name" . }}
         image: {{ include "wikijs-mcp.image" . }}
-        imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+        imagePullPolicy: {{ include "wikijs-mcp.imagePullPolicy" . }}
         envFrom:
         - configMapRef:
             name: {{ include "wikijs-mcp.fullname" . }}-env

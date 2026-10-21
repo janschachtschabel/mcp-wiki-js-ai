@@ -5,6 +5,10 @@
 #   http://localhost:8090/mcp   → MCP-Endpoint
 #   http://localhost:8090/me    → Selbstverwaltung
 #
+# Ersteinrichtung genauso mit beiden Dateien:
+#   ADMIN_EMAIL=… ADMIN_PASSWORD=… docker compose -f docker-compose.yml \
+#     -f docker-compose.local.yml run --rm bootstrap --locale=de
+#
 # In der .env reichen dafür: DOMAIN=localhost (Platzhalter), POSTGRES_PASSWORD,
 # MCP_SESSION_SECRET. Produktion nutzt NUR docker-compose.yml (Auto-HTTPS).
 
@@ -21,3 +25,8 @@ services:
       # Überschreibbar via .env — z. B. mit einer Cloudflare-Tunnel-URL, um den
       # Stack testweise von außen (claude.ai, ChatGPT) erreichbar zu machen.
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8090}
+
+  bootstrap:
+    environment:
+      # Gleiche Adresse wie beim MCP: steht als Connector-URL auf /ki-zugang.
+      PUBLIC_URL: ${PUBLIC_BASE_URL:-http://localhost:8090}

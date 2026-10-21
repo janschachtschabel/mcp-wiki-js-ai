@@ -11,6 +11,27 @@
 # me/, oauth/, mcp, api/ anlegen (siehe mcp-for-wiki-js/docs/oauth.md).
 
 {$DOMAIN:localhost} {
+	# HSTS for the whole site, but only over HTTPS (never on the plain-HTTP ":80"
+	# test site) and not for "localhost" — HSTS there would pin every local
+	# http://localhost app in the browser to HTTPS.
+	@hsts {
+		protocol https
+		not host localhost
+	}
+	header @hsts ?Strict-Transport-Security "max-age=31536000"
+
+	# Wiki.js setup wizard: POST /finalize creates the first admin account, and
+	# Wiki.js serves it to anyone until setup is done (it is the only setup POST
+	# route, wiki/server/setup.js). Never reachable from outside — the first-run
+	# setup runs inside the Docker network instead:
+	#   docker compose run --rm bootstrap
+	# Caddy path matching is case-insensitive, so /FINALIZE (Express matches it
+	# too) is covered; /finalize/* covers the trailing-slash variant.
+	@wikiSetup path /finalize /finalize/*
+	handle @wikiSetup {
+		respond "Setup only via: docker compose run --rm bootstrap" 403
+	}
+
 	# Repeated `path` lines in one matcher block are merged (any match wins).
 	@mcp {
 		path /mcp /mcp/* /oauth/* /me /me/* /api/health
@@ -29,6 +50,14 @@
 	}
 
 	handle {
+		# Defensive defaults for Wiki.js responses. `?` sets a header only where
+		# Wiki.js sends none, so its own (stricter) values always win. SAMEORIGIN,
+		# not DENY: Wiki.js editors use same-origin iframes. One directive per
+		# header on purpose: in a `header { }` block the `?` conditions are ANDed,
+		# so one header from Wiki.js would suppress all the others.
+		header ?X-Content-Type-Options nosniff
+		header ?Referrer-Policy strict-origin-when-cross-origin
+		header ?X-Frame-Options SAMEORIGIN
 		reverse_proxy wiki:3000
 	}
 }

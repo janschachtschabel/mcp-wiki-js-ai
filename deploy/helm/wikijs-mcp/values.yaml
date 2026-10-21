@@ -29,7 +29,7 @@ global:
   debug: false
 
   image:
-    ## @param global.image.pullPolicy Set global image pullPolicy
+    ## @param global.image.pullPolicy Pull policy for immutable tags only: full releases (X.Y.Z / vX.Y.Z, optionally -prerelease) and commit tags (sha-<hex>). Every other tag moves (main, develop, latest, pr-N, the GHCR aliases X.Y and X) and is always pulled ("Always"), whatever is set here
     pullPolicy: IfNotPresent
     ## @param global.image.pullSecrets Set global image pullSecrets
     pullSecrets: []
@@ -40,7 +40,7 @@ global:
 
   metrics:
     servicemonitor:
-      ## @param global.metrics.servicemonitor.enabled Enable a Prometheus ServiceMonitor (the app exposes no /metrics yet)
+      ## @param global.metrics.servicemonitor.enabled Keep false: the app has NO /metrics endpoint, so a ServiceMonitor would only add a permanently failing scrape target
       enabled: false
 
   ## @param global.security Set global custom pod security context parameters (merged into podSecurityContext)
@@ -59,12 +59,12 @@ fullnameOverride: ""
 image:
   ## @param image.name Override image repository (defaults to global.image.registry/global.image.repository)
   name: ""
-  ## @param image.tag Set image tag (defaults to .Chart.AppVersion)
+  ## @param image.tag Set image tag (defaults to .Chart.AppVersion = "main"). Production: pin a release tag (GitLab registry: vX.Y.Z, GHCR: X.Y.Z)
   tag: ""
 
 ########################################################################################################################
 
-## @param replicaCount Amount of replicas. MUST stay 1 — OAuth sessions live in a single-writer sqlite DB on one PVC.
+## @param replicaCount Amount of replicas: 1 (or 0 to stop). Values above 1 make the install fail — OAuth sessions live in a single-writer sqlite DB on one PVC.
 replicaCount: 1
 
 ########################################################################################################################
@@ -99,8 +99,8 @@ ingress:
   - wiki.127.0.0.1.nip.io
 
   ## @param ingress.paths Paths owned by the MCP server on the shared host (pathType Prefix)
-  # No /sse: the SSE transport is disabled in the server (disableSse), so routing
-  # it would only expose a dead path that nginx's read timeout would cut anyway.
+  # No /sse: the server speaks stateless Streamable HTTP on /mcp only (mcp-handler 2),
+  # so routing it would only expose a dead path.
   paths:
   - /mcp
   - /oauth
@@ -125,6 +125,7 @@ config:
   ## @param config.existingSecret Name of an existing Secret with the key MCP_SESSION_SECRET (exact name, min 16 chars).
   ## Recommended for production: keeps the secret out of values files and the Helm release history.
   ## When set, config.oauth.sessionSecret / config.wikijs.token are ignored, the chart creates no Secret, and OAuth mode is on.
+  ## Further secret variables (WIKIJS_PROFILES, WIKIJS_KEY_MAP …) go into the same Secret as extra keys — all keys become env vars.
   ## Do NOT put WIKIJS_TOKEN into it: it is ignored in OAuth mode, and if MCP_SESSION_SECRET is missing or mistyped
   ## the server falls back to single-tenant mode and serves /mcp unauthenticated with that key (the server warns at startup).
   ## Changing the Secret does not restart the pod: run `kubectl rollout restart statefulset/<name>` afterwards.
@@ -159,8 +160,12 @@ config:
   ## @param config.audit Log write/delete/admin actions (and persist them when OAuth mode is on)
   audit: true
 
-  ## @param config.extraEnv Extra plain environment variables (map) injected into the container
+  ## @param config.extraEnv Extra PLAIN environment variables (map), stored in the ConfigMap — nothing secret here
   extraEnv: {}
+
+  ## @param config.extraSecretEnv Extra SECRET environment variables (map), stored in the chart Secret — e.g. WIKIJS_PROFILES or
+  ## WIKIJS_KEY_MAP, which may contain API keys. Not allowed together with config.existingSecret (put the keys into that Secret).
+  extraSecretEnv: {}
 
 ########################################################################################################################
 
@@ -192,11 +197,24 @@ tolerations: []
 ## @param podAnnotations Set custom pod annotations
 podAnnotations: {}
 
+## @section Network policy
+networkPolicy:
+  ## @param networkPolicy.enabled Create an ingress NetworkPolicy (only the HTTP port; egress stays open for Wiki.js and DNS)
+  enabled: false
+  ## @param networkPolicy.ingressFrom Allowed sources (NetworkPolicyPeer list); empty = any source, port-restricted only. Example:
+  ##   - namespaceSelector:
+  ##       matchLabels:
+  ##         kubernetes.io/metadata.name: ingress-nginx
+  ingressFrom: []
+
 podSecurityContext:
   ## @param podSecurityContext.fsGroup Set fs group for volume access (matches the image's "node" user)
   fsGroup: 1000
   ## @param podSecurityContext.fsGroupChangePolicy Set change policy for fs group
   fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    ## @param podSecurityContext.seccompProfile.type Seccomp profile of the container runtime (blocks rarely needed syscalls)
+    type: RuntimeDefault
 
 securityContext:
   ## @param securityContext.allowPrivilegeEscalation Allow privilege escalation
@@ -239,6 +257,10 @@ livenessProbe:
   ## @param livenessProbe.timeoutSeconds Timeout seconds for livenessProbe
   timeoutSeconds: 5
 
+# Readiness uses the same /api/health as liveness on purpose: with one replica
+# there is no other pod to shift traffic to, there is no warm-up after the
+# startupProbe, and the endpoint checks no upstream (a Wiki.js outage never
+# restarts this pod) — only the local sqlite store. Only the period differs.
 readinessProbe:
   ## @param readinessProbe.failureThreshold Failure threshold for readinessProbe
   failureThreshold: 3

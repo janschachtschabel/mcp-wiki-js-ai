@@ -26,7 +26,8 @@ global:
     #   - name: <registry-pull-secret>
 
 image:
-  # Unveränderlichen Release-Tag pinnen (vX.Y.Z) — nicht "main" in Produktion.
+  # Unveränderlichen Release-Tag pinnen — nicht "main" in Produktion.
+  # GitLab-Registry: vX.Y.Z (Git-Tag-Name) · GHCR: X.Y.Z (ohne "v").
   tag: "<vX.Y.Z>"
 
 config:

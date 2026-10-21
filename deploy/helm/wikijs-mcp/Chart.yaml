@@ -7,10 +7,11 @@ type: application
 
 # Chart-Version (SemVer der Verpackung selbst).
 version: 0.1.0
-# Default-Image-Tag für manuelle Installs. Absichtlich NICHT "latest" (den Tag
-# pusht die Pipeline nie → ImagePullBackOff). "main" existiert nach dem ersten
-# main-Branch-Pipeline-Lauf. Die CI überschreibt appVersion beim Paketieren
-# (--app-version). Für Produktion einen unveränderlichen Release-Tag pinnen:
+# Default-Image-Tag für manuelle Installs. Absichtlich NICHT "latest": die
+# GitLab-Pipeline pusht ihn nie (→ ImagePullBackOff), die GitHub-Pipeline nur bei
+# Release-Tags. "main" existiert in beiden nach dem ersten main-Branch-Lauf. Die CI überschreibt appVersion beim Paketieren
+# (--app-version). "main" wird mit imagePullPolicy Always gezogen (veränderlicher
+# Tag). Für Produktion einen unveränderlichen Release-Tag pinnen:
 #   helm install ... --set image.tag=vX.Y.Z
 appVersion: "main"
 kubeVersion: ">=1.23.0-0"

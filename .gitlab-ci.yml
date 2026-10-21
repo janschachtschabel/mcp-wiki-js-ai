@@ -62,8 +62,13 @@ typecheck & tests:
   before_script:
     - cd "$CI_PROJECT_DIR/mcp-for-wiki-js"
     - node --version
-    - npm ci --no-audit --no-fund
+    # npm-Cache im Projektordner (GitLab cacht nur Pfade unter $CI_PROJECT_DIR);
+    # node_modules zu cachen bringt nichts, `npm ci` löscht es vor der Installation.
+    - npm ci --no-audit --no-fund --prefer-offline --cache "$CI_PROJECT_DIR/.npm"
   script:
+    # Gate auf HIGH+ wie in .github/workflows/ci.yml: blockt ernste CVEs in
+    # Runtime-Deps, fixbare Moderates bleiben eine Warnung.
+    - npm audit --omit=dev --audit-level=high
     - npm run typecheck
     - npm test
     - npm run build
@@ -73,7 +78,7 @@ typecheck & tests:
       files:
         - mcp-for-wiki-js/package-lock.json
     paths:
-      - mcp-for-wiki-js/node_modules/
+      - .npm/
     policy: pull-push
 
 # -----------------------------------------------------------------------------
@@ -152,11 +157,16 @@ build and push (tags):
     - helm package deploy/helm/wikijs-mcp
         --version "$CHART_VERSION"
         --app-version "$APP_VERSION"
+    # Zugangsdaten per curl-Config über stdin statt `-u user:pass` in argv (in
+    # `ps` sichtbar). printf ist Shell-Builtin; sed maskiert " und \ für das
+    # Config-Format und bekommt die Werte ebenfalls nur über stdin.
     - >
-      curl --fail --silent --show-error
-      -u "$HELM_USERNAME:$HELM_PASSWORD"
+      printf 'user = "%s:%s"\n'
+      "$(printf '%s' "$HELM_USERNAME" | sed 's/[\\"]/\\&/g')"
+      "$(printf '%s' "$HELM_PASSWORD" | sed 's/[\\"]/\\&/g')"
+      | curl --fail --silent --show-error --config -
       --upload-file edu_sharing-projects-wlo-wikijs-mcp-${CHART_VERSION}.tgz
-      $HELM_REGISTRY
+      "$HELM_REGISTRY"
 
 build and push helm chart:
   extends: .helm_base

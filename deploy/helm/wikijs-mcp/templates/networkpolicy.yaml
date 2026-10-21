@@ -1,0 +1,23 @@
+{{- if .Values.networkPolicy.enabled }}
+# Ingress only: the pod accepts traffic on its HTTP port, optionally only from
+# the peers in networkPolicy.ingressFrom (e.g. the ingress controller's
+# namespace). Egress stays open — the pod must reach Wiki.js and DNS, whose
+# location this chart does not know.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "wikijs-mcp.fullname" . }}
+  labels: {{ include "wikijs-mcp.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{ include "wikijs-mcp.selectorLabels" . | nindent 6 }}
+  policyTypes:
+  - Ingress
+  ingress:
+  - ports:
+    - port: http
+      protocol: TCP
+    {{- with .Values.networkPolicy.ingressFrom }}
+    from: {{ toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
