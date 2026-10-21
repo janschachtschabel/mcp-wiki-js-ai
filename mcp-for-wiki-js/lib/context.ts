@@ -1,6 +1,6 @@
 import { WikiClient } from './wikijs/client';
 import { Policy, basePolicyFromEnv, parsePolicyConfig, roleConfig, type PolicyConfig } from './permissions';
-import { sha256hex } from './oauth/crypto';
+import { sessionSecret, sha256hex } from './oauth/crypto';
 
 /**
  * Per-request execution context: which Wiki.js instance + key to talk to, and the
@@ -68,6 +68,36 @@ function header(
   const v = headers[name] ?? headers[name.toLowerCase()];
   const s = Array.isArray(v) ? v[0] : v;
   return typeof s === 'string' && s.length > 0 ? s : undefined;
+}
+
+function originOf(url: string): string | undefined {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A caller-supplied wiki URL (X-Wikijs-Url / ?url=) is honoured only if its origin
+ * is allow-listed (WIKIJS_ALLOWED_URLS) or equals WIKIJS_URL — otherwise anonymous
+ * callers could make this server fetch arbitrary internal addresses (SSRF).
+ * With neither configured, the deployment is pure multi-tenant BYOK and any URL
+ * is accepted (legacy behaviour).
+ */
+function checkCallerUrl(url: string, env: Record<string, string | undefined>): string {
+  const configured = (env.WIKIJS_URL || env.WIKIJS_BASE_URL || '').trim();
+  const allowed = (env.WIKIJS_ALLOWED_URLS || '')
+    .split(',')
+    .map((u) => u.trim())
+    .filter(Boolean);
+  if (!configured && allowed.length === 0) return url;
+  const origin = originOf(url);
+  const permitted = [configured, ...allowed].filter(Boolean).map(originOf);
+  if (origin === undefined || !permitted.includes(origin)) {
+    throw new Error('X-Wikijs-Url is not allowed on this server (see WIKIJS_ALLOWED_URLS).');
+  }
+  return url;
 }
 
 /** Look up a named profile by alias in WIKIJS_PROFILES (JSON: { "<alias>": { url, token, preset, policy } }). */
@@ -146,7 +176,9 @@ export function resolveContext(extra?: ToolExtra): WikiContext {
     if (auth && /^bearer\s+/i.test(auth)) token = auth.replace(/^bearer\s+/i, '').trim();
   }
   if (!token && typeof extra?.authInfo?.token === 'string') token = extra.authInfo.token;
-  if (!token) token = env.WIKIJS_TOKEN || env.WIKIJS_API_KEY || undefined;
+  // Single-tenant env fallback only without OAuth — with OAuth on, an empty or
+  // missing per-request credential must never borrow the service key.
+  if (!token && !sessionSecret(env)) token = env.WIKIJS_TOKEN || env.WIKIJS_API_KEY || undefined;
 
   // --- untrusted per-request overlay (client) — can only tighten ---
   let requestOverlay: PolicyConfig | undefined = parsePolicyConfig(header(headers, 'x-wikijs-policy'));
@@ -174,8 +206,9 @@ export function resolveContext(extra?: ToolExtra): WikiContext {
     }
   } else {
     realToken = resolveAlias(token, env);
+    const callerUrl = header(headers, 'x-wikijs-url');
     baseUrl = (
-      header(headers, 'x-wikijs-url') ||
+      (callerUrl ? checkCallerUrl(callerUrl, env) : undefined) ||
       (typeof extra?.authInfo?.extra?.baseUrl === 'string' ? (extra.authInfo.extra.baseUrl as string) : undefined) ||
       env.WIKIJS_URL ||
       env.WIKIJS_BASE_URL ||

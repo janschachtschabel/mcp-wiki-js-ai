@@ -106,6 +106,8 @@ Im Mehrbenutzer-Modus liegen die echten Keys **als Env-Variable in Vercel** (Ver
 | `WIKIJS_POLICY` | nein | – | JSON-Feinjustierung deploy-weit pro Kategorie/Tool |
 | `WIKIJS_ROLES` | nein | – | JSON, das die **Rollen-Definitionen** zur Laufzeit überschreibt (Form wie `config/roles.json`) |
 | `WIKIJS_SHOW_BLOCKED` | nein | `false` | geblockte Tools als deaktivierte Stubs in `tools/list` zeigen |
+| `WIKIJS_ALLOWED_URLS` | nein | – | Kommaliste erlaubter Wiki-Origins für `X-Wikijs-Url`/`?url=`. Ohne Liste wird eine Client-URL nur akzeptiert, wenn kein `WIKIJS_URL` gesetzt ist (reiner Multi-Tenant-BYOK) oder sie `WIKIJS_URL` entspricht |
+| `WIKIJS_ALLOW_LEGACY` | nein | `false` | Nur mit OAuth relevant: `true` öffnet zusätzlich den Legacy-Weg (BYOK-Key/Handle per Header oder URL). Standardmäßig aus — der Legacy-Handler hat keine eigene Anmeldung |
 | `WIKIJS_KEY_MAP` | nein | – | Legacy-Map Handle→Token (nur Token; URL/Policy aus Env). Von `WIKIJS_PROFILES` abgelöst |
 | `WIKIJS_TIMEOUT_MS` | nein | `30000` | Timeout pro GraphQL-Request (AbortController) |
 | `WIKIJS_MAX_CONCURRENCY` | nein | `8` | Max. parallele Upstream-Requests (Overload-Schutz; queued/sheddet bei Überlast) |
@@ -209,7 +211,7 @@ Eintrag aus `WIKIJS_PROFILES` entfernen → **Redeploy**. (Der Wiki.js-Key selbs
 | **Cursor** | ✅ | **Header** |
 | **Claude Desktop** (lokal) | – | **stdio** mit Env (oder Web-Connector) |
 
-> Bei `WIKIJS_PROFILES` schickt der Client **nur den Handle** als Token — keine URL nötig (die steckt im Profil). Ohne Profile (direktes BYOK) zusätzlich die Instanz-URL mitgeben (`?url=…` bzw. `X-Wikijs-Url`).
+> Bei `WIKIJS_PROFILES` schickt der Client **nur den Handle** als Token — keine URL nötig (die steckt im Profil). Ohne Profile (direktes BYOK) zusätzlich die Instanz-URL mitgeben (`?url=…` bzw. `X-Wikijs-Url`) — ist auf dem Server `WIKIJS_URL` gesetzt, muss die URL in `WIKIJS_ALLOWED_URLS` stehen.
 
 ### ChatGPT (Developer Mode → Custom Connector)
 Voraussetzung: Plan **Plus/Pro/Business/Enterprise/Edu**; Server über **HTTPS** erreichbar (Vercel ✓).

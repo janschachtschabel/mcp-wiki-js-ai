@@ -25,6 +25,15 @@ function check(name: string, cond: boolean): void {
   }
 }
 
+function throws(fn: () => unknown): boolean {
+  try {
+    fn();
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 async function main(): Promise<void> {
   const { resolveContext } = await import('../lib/context');
   const h = (headers: Record<string, string>) => resolveContext({ requestInfo: { headers } });
@@ -44,11 +53,46 @@ async function main(): Promise<void> {
   check('profile B (redakteur): write -> allow', b.policy.resolve('wiki_page_create', 'write') === 'allow');
   check('profile B (redakteur): delete -> confirm', b.policy.resolve('wiki_page_delete', 'delete') === 'confirm');
 
-  // 3. Unknown token -> verbatim BYOK key, no profile label, URL from header
+  // 3. Unknown token -> verbatim BYOK key, no profile label.
+  // A caller-supplied URL is only honoured when allow-listed (audit F-01: SSRF).
+  process.env.WIKIJS_ALLOWED_URLS = 'https://other.example, https://third.example/';
   const c = h({ 'x-wikijs-token': 'raw-byok-key', 'x-wikijs-url': 'https://other.example' });
   check('byok: no profile label', c.profile === undefined);
-  check('byok: url from X-Wikijs-Url header', c.baseUrl === 'https://other.example');
+  check('byok: allow-listed url from X-Wikijs-Url header', c.baseUrl === 'https://other.example');
   check('byok: hasToken', c.hasToken === true);
+  check(
+    'byok: allow-list matches by origin (trailing slash in list)',
+    h({ 'x-wikijs-token': 'k', 'x-wikijs-url': 'https://third.example' }).baseUrl === 'https://third.example',
+  );
+  check(
+    'byok: url outside the allow-list is refused',
+    throws(() => h({ 'x-wikijs-token': 'k', 'x-wikijs-url': 'http://169.254.169.254/latest' })),
+  );
+  delete process.env.WIKIJS_ALLOWED_URLS;
+  check(
+    'byok: no allow-list + WIKIJS_URL set → header url refused',
+    throws(() => h({ 'x-wikijs-token': 'k', 'x-wikijs-url': 'https://other.example' })),
+  );
+  check(
+    'byok: header url equal to WIKIJS_URL is fine',
+    h({ 'x-wikijs-token': 'k', 'x-wikijs-url': 'https://wiki.example.org/' }).baseUrl === 'https://wiki.example.org/',
+  );
+  const savedUrl = process.env.WIKIJS_URL;
+  delete process.env.WIKIJS_URL;
+  check(
+    'byok: pure multi-tenant (no WIKIJS_URL, no allow-list) keeps header url',
+    h({ 'x-wikijs-token': 'k', 'x-wikijs-url': 'https://any.example' }).baseUrl === 'https://any.example',
+  );
+  process.env.WIKIJS_URL = savedUrl;
+
+  // 3b. Audit F-02: with OAuth on, the single-tenant env token is never a fallback.
+  process.env.WIKIJS_TOKEN = 'ENV-SERVICE-TOKEN';
+  process.env.MCP_SESSION_SECRET = 'x'.repeat(32);
+  const e = h({ 'x-wikijs-token': '' });
+  check('oauth on: empty handle header does NOT pick up WIKIJS_TOKEN', e.hasToken === false);
+  delete process.env.MCP_SESSION_SECRET;
+  check('oauth off: env token still used as single-tenant fallback', h({}).hasToken === true);
+  delete process.env.WIKIJS_TOKEN;
 
   // 4. Per-request preset can only TIGHTEN (readonly over a redakteur profile)
   const d = h({ 'x-wikijs-token': 'secret-handle-B', 'x-wikijs-preset': 'readonly' });

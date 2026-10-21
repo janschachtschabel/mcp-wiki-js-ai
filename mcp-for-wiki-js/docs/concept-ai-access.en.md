@@ -19,7 +19,7 @@ OAuth deep-dive (German): [oauth.md](oauth.md).
   wiki permissions.
 - **Operated as a Docker appliance** (Postgres + Wiki.js + MCP server +
   Caddy on one domain). Legacy handle/BYOK access remains functional as a
-  fallback.
+  fallback (next to OAuth only with `WIKIJS_ALLOW_LEGACY=true`).
 
 ---
 
@@ -177,7 +177,8 @@ daily `pg_dump` backup sidecar.
 
 **Unchanged (backwards compatibility):** stdio mode, BYOK headers,
 `WIKIJS_PROFILES` handles incl. the role ladder. These legacy paths are
-**frozen** — not needed in OAuth container operation.
+**frozen** — not needed in OAuth container operation and switched off
+there by default (`WIKIJS_ALLOW_LEGACY`).
 
 **Verification:** 108 offline assertions (6 suites), 33 E2E assertions
 against the real stack through a public URL (OAuth → tool call as the real

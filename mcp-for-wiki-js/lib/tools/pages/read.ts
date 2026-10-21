@@ -104,7 +104,12 @@ export const pageReadTools: ToolDef[] = [
           authorId: a.authorId,
         },
       );
-      const { visible, hidden } = filterBlockedPages(data.pages.list as { tags?: unknown }[]);
+      // A tag-filtered list only returns the MATCHING tags, so the tag check alone
+      // misses blocked pages — filter by the blocked-id set as well.
+      const pages = data.pages.list as { id: number; tags?: unknown }[];
+      const blocked = await blockedPageSets(ctx);
+      const { visible } = filterBlockedPages(pages.filter((p) => !blocked.ids.has(Number(p.id))));
+      const hidden = pages.length - visible.length;
       return ok(hidden > 0 ? { pages: visible, hiddenByTagGuardrail: hidden } : visible);
     },
   },

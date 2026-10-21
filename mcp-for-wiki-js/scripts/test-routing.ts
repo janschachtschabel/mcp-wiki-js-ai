@@ -27,17 +27,39 @@ const h = (init?: Record<string, string>) => new Headers(init);
 // (which this predicate deliberately never reads).
 check('oauth on, no credential → OAuth path', shouldUseOAuth(true, h()) === true);
 check('oauth on, our access token → OAuth path', shouldUseOAuth(true, h({ authorization: 'Bearer mcp_at_abc' })) === true);
+// Legacy path is OFF by default while OAuth is on (audit F-01: the legacy
+// handler is unauthenticated and honours caller-supplied upstream URLs).
 check(
-  'oauth on, explicit BYOK bearer → legacy path',
-  shouldUseOAuth(true, h({ authorization: 'Bearer wikijs-real-api-key' })) === false,
+  'oauth on, BYOK bearer, legacy not allowed → OAuth path',
+  shouldUseOAuth(true, h({ authorization: 'Bearer wikijs-real-api-key' })) === true,
 );
 check(
-  'oauth on, explicit X-Wikijs-Token handle → legacy path',
-  shouldUseOAuth(true, h({ 'x-wikijs-token': 'wzp_secret_handle' })) === false,
+  'oauth on, X-Wikijs-Token, legacy not allowed → OAuth path',
+  shouldUseOAuth(true, h({ 'x-wikijs-token': 'wzp_secret_handle' })) === true,
+);
+
+// Explicit opt-in (WIKIJS_ALLOW_LEGACY=true) restores the BYOK/handle routes.
+check(
+  'oauth on + legacy allowed, explicit BYOK bearer → legacy path',
+  shouldUseOAuth(true, h({ authorization: 'Bearer wikijs-real-api-key' }), true) === false,
 );
 check(
-  'oauth on, handle wins even next to a non-mcp bearer',
-  shouldUseOAuth(true, h({ 'x-wikijs-token': 'wzp_x', authorization: 'Bearer other' })) === false,
+  'oauth on + legacy allowed, explicit X-Wikijs-Token handle → legacy path',
+  shouldUseOAuth(true, h({ 'x-wikijs-token': 'wzp_secret_handle' }), true) === false,
+);
+check(
+  'oauth on + legacy allowed, handle wins even next to a non-mcp bearer',
+  shouldUseOAuth(true, h({ 'x-wikijs-token': 'wzp_x', authorization: 'Bearer other' }), true) === false,
+);
+// Audit F-02: an EMPTY handle header is no credential — it must not divert to
+// the legacy path (where the env token would fill the gap).
+check(
+  'oauth on + legacy allowed, empty X-Wikijs-Token → OAuth path',
+  shouldUseOAuth(true, h({ 'x-wikijs-token': '' }), true) === true,
+);
+check(
+  'oauth on + legacy allowed, whitespace X-Wikijs-Token → OAuth path',
+  shouldUseOAuth(true, h({ 'x-wikijs-token': '   ' }), true) === true,
 );
 
 // --- OAuth disabled -> always legacy (single-tenant / stdio / BYOK) --------

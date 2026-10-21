@@ -1,4 +1,5 @@
 import { SERVER_INFO } from '../../../lib/meta';
+import { oauthEnabled } from '../../../lib/oauth/store';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,11 +19,17 @@ const handler = async (request: Request) => {
       type: 'streamable_http',
       url: `${baseUrl}/mcp`,
     },
-    authentication: {
-      type: 'bearer-or-header',
-      hint:
-        'Send the Wiki.js API key as `Authorization: Bearer <key>` or `X-Wikijs-Token`, and the instance URL as `X-Wikijs-Url`.',
-    },
+    authentication: oauthEnabled()
+      ? {
+          type: 'oauth2',
+          protectedResourceMetadata: `${baseUrl}/.well-known/oauth-protected-resource`,
+          hint: 'OAuth 2.1 with the Wiki.js login — clients discover it from the 401 on /mcp.',
+        }
+      : {
+          type: 'bearer-or-header',
+          hint:
+            'Send the Wiki.js API key as `Authorization: Bearer <key>` or `X-Wikijs-Token`, and the instance URL as `X-Wikijs-Url`.',
+        },
   });
 };
 

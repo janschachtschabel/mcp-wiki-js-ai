@@ -52,9 +52,9 @@ export const pageWriteTools: ToolDef[] = [
       id: z.number().int(),
       content: z.string().optional().describe('Full replacement content.'),
       edits: z
-        .array(z.object({ find: z.string(), replace: z.string() }))
+        .array(z.object({ find: z.string().min(1), replace: z.string() }))
         .optional()
-        .describe('Find/replace edits applied to current content (alternative to content).'),
+        .describe('Find/replace edits applied to current content (alternative to content). Each edit replaces ALL occurrences of "find".'),
       title: z.string().optional(),
       description: z.string().optional(),
       tags: z.array(z.string()).optional(),
@@ -82,9 +82,11 @@ export const pageWriteTools: ToolDef[] = [
         isPrivate: boolean;
         content: string;
         tags: { tag: string }[];
+        scriptCss: string | null;
+        scriptJs: string | null;
       };
       const cur = await ctx.client.request<{ pages: { single: Cur | null } }>(
-        `query($id:Int!){ pages { single(id:$id){ path locale title description editor isPublished isPrivate content tags { tag } } } }`,
+        `query($id:Int!){ pages { single(id:$id){ path locale title description editor isPublished isPrivate content tags { tag } scriptCss scriptJs } } }`,
         { id: a.id },
       );
       const p = cur.pages.single;
@@ -115,8 +117,9 @@ export const pageWriteTools: ToolDef[] = [
           path: a.path ?? p.path,
           tags,
           title: a.title ?? p.title,
-          scriptCss: a.scriptCss,
-          scriptJs: a.scriptJs,
+          // Wiki.js resets omitted scripts to '' for users with write:styles/scripts.
+          scriptCss: a.scriptCss ?? p.scriptCss ?? '',
+          scriptJs: a.scriptJs ?? p.scriptJs ?? '',
         },
       );
       assertOk(data.pages.update.responseResult, 'Update page');

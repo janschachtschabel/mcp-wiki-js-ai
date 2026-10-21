@@ -61,12 +61,13 @@ läuft die Session aus — der Client startet die Ein-Klick-Freigabe erneut.
   port-agnostisch (RFC 8252) — nötig für Claude/Codex-CLI-Callbacks.
 - Passwörter werden **nie gespeichert**, nur an Wiki.js' `login`-Mutation
   durchgereicht (deren eingebautes Rate-Limit 5/min greift).
-- **Transport-Routing:** Bei aktivem OAuth entscheidet `shouldUseOAuth` pro
-  Request. Nur eine *explizit* mitgeschickte Legacy-Credential (BYOK-Bearer
-  oder `X-Wikijs-Token`-Handle) nimmt den Legacy-Pfad; alles andere geht in
-  den OAuth-Flow (401 → Discovery). Ein evtl. gesetztes Single-Tenant-Env-Token
-  (`WIKIJS_TOKEN`) beeinflusst diese Entscheidung **nicht** und kann `/mcp`
-  daher nie unauthentifiziert bedienen — es gilt nur, wenn OAuth ganz aus ist.
+- **Transport-Routing:** Bei aktivem OAuth geht **jeder** Request in den
+  OAuth-Flow (401 → Discovery). Der Legacy-Pfad (BYOK-Bearer,
+  `X-Wikijs-Token`-Handle, `?token=`) ist daneben nur erreichbar, wenn
+  `WIKIJS_ALLOW_LEGACY=true` gesetzt ist — er hat keine eigene Anmeldung und
+  würde sonst anonyme Upstream-Aufrufe erlauben. Auch dann zählt nur eine
+  *nicht-leere* Legacy-Credential. Ein Single-Tenant-Env-Token (`WIKIJS_TOKEN`)
+  wird bei aktivem OAuth **nie** als Fallback verwendet.
 
 ## Rechte & Guardrails
 
@@ -107,7 +108,8 @@ das hebelt dort ALLE Page-Rules aus.
 - Legt keine Wiki-Seiten unter den Pfaden `me`, `oauth`, `mcp`, `api`
   an — diese Pfade gehören dem MCP-Server (Reverse-Proxy-Routing).
 - Die `confirm`-Gates der Rolle `wiki` gelten für **OAuth-Sessions**. Wer statt
-  dessen eine eigene Wiki-Credential direkt per Header mitschickt (Legacy/BYOK),
+  dessen (mit `WIKIJS_ALLOW_LEGACY=true`) eine eigene Wiki-Credential direkt per
+  Header mitschickt (Legacy/BYOK),
   unterliegt der Policy seines Profils bzw. dem BYOK-Verhalten — kein
   Sicherheitsverlust, denn wer einen echten Wiki-Key besitzt, kann Wiki.js
   ohnehin direkt ansprechen. Die Tag-Sperre greift für alle Credential-Typen.

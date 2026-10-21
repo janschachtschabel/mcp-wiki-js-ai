@@ -2,7 +2,7 @@ import { createMcpHandler, withMcpAuth } from 'mcp-handler';
 import { registerAll } from '../../lib/register';
 import { SERVER_INFO, INSTRUCTIONS } from '../../lib/meta';
 import { oauthEnabled } from '../../lib/oauth/store';
-import { shouldUseOAuth } from '../../lib/oauth/routing';
+import { legacyAllowed, shouldUseOAuth } from '../../lib/oauth/routing';
 
 export const dynamic = 'force-dynamic';
 // 60s deploys on every Vercel plan (incl. Hobby). Pro/Enterprise can raise this.
@@ -101,10 +101,9 @@ async function handler(req: Request): Promise<Response> {
     request = new Request(req.url, { method: req.method, headers, body });
   }
 
-  // OAuth vs legacy transport decision (see lib/oauth/routing.ts). A single
-  // env WIKIJS_TOKEN no longer diverts credential-less requests to the legacy
-  // path, so a mixed OAuth+env-token setup can never serve /mcp unauthenticated.
-  if (shouldUseOAuth(oauthEnabled(), request.headers)) return mcpWithOauth(request);
+  // OAuth vs legacy transport decision (see lib/oauth/routing.ts). With OAuth
+  // on, the unauthenticated legacy handler is only reachable on explicit opt-in.
+  if (shouldUseOAuth(oauthEnabled(), request.headers, legacyAllowed())) return mcpWithOauth(request);
   return mcp(request);
 }
 

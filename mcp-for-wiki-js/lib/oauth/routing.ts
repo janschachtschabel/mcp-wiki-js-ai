@@ -12,12 +12,23 @@
  *
  * The env token is intentionally NOT consulted here: it is a single-tenant
  * fallback that only applies when OAuth is disabled entirely.
+ *
+ * With OAuth on, the legacy path is OFF unless the operator opts in
+ * (WIKIJS_ALLOW_LEGACY=true): the legacy handler has no authentication of its
+ * own, so leaving it reachable turns /mcp into an anonymous proxy.
  */
-export function shouldUseOAuth(oauthEnabled: boolean, headers: Headers): boolean {
+export function shouldUseOAuth(oauthEnabled: boolean, headers: Headers, allowLegacy = false): boolean {
   if (!oauthEnabled) return false;
+  if (!allowLegacy) return true;
   const auth = headers.get('authorization') ?? '';
   if (/^bearer\s+mcp_at_/i.test(auth)) return true; // one of our OAuth access tokens
-  if (headers.has('x-wikijs-token')) return false; // explicit BYOK handle (incl. ?token= injected earlier)
+  // An empty handle is no credential: it would let resolveContext fall back to the env token.
+  if ((headers.get('x-wikijs-token') ?? '').trim()) return false; // explicit BYOK handle (incl. ?token= injected earlier)
   if (/^bearer\s+/i.test(auth)) return false; // explicit BYOK bearer key
   return true; // nothing explicit → OAuth path issues the 401 + discovery chain
+}
+
+/** Operator opt-in for the legacy BYOK/handle path next to OAuth. */
+export function legacyAllowed(env: Record<string, string | undefined> = process.env): boolean {
+  return /^(1|true|yes|on)$/i.test(env.WIKIJS_ALLOW_LEGACY || '');
 }

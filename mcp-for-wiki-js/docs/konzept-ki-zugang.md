@@ -19,7 +19,8 @@ steuert**. Technische Tiefe zum OAuth-Flow: [oauth.md](oauth.md).
   exakt seinen Wiki-Rechten.
 - **Betrieb als Docker-Appliance** (Postgres + Wiki.js + MCP-Server + Caddy
   auf einer Domain). Vercel wird nicht mehr produktiv genutzt; die alten
-  Handle-/BYOK-Zugänge bleiben als Fallback funktionsfähig.
+  Handle-/BYOK-Zugänge bleiben als Fallback funktionsfähig (neben OAuth nur
+  mit `WIKIJS_ALLOW_LEGACY=true`).
 
 ---
 
@@ -207,8 +208,9 @@ Refresh-Reuse-Detection; interne URLs aus Browser-Fehlermeldungen entfernt.
 
 **Unverändert (Rückwärtskompatibilität):** stdio-Betrieb, BYOK-Header,
 `WIKIJS_PROFILES`-Handles samt Rollenleiter. Diese Legacy-Pfade sind
-**eingefroren** — im Container-Betrieb mit OAuth werden sie nicht benötigt
-und nicht weiterentwickelt.
+**eingefroren** — im Container-Betrieb mit OAuth werden sie nicht benötigt,
+sind dort standardmäßig abgeschaltet (`WIKIJS_ALLOW_LEGACY`) und werden nicht
+weiterentwickelt.
 
 **Verifikation:** 102 Offline-Assertions (6 Suiten), 30 E2E-Assertions gegen
 den echten Stack (OAuth → Tool-Call als echter User → Guardrails → Widerruf),

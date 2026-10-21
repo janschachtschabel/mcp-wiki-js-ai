@@ -97,6 +97,11 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
         <strong style={{ color: '#e7ecff' }}>{clientName}</strong> möchte über den MCP-Server auf das Wiki zugreifen —
         mit deinen Wiki-Rechten, in deinem Namen.
       </p>
+      <p style={{ ...muted, fontSize: 14 }}>
+        Nach der Freigabe geht es weiter zu: <strong style={{ color: '#e7ecff' }}>{redirectTarget(p.redirectUri)}</strong>
+        <br />
+        Erlaube den Zugriff nur, wenn du die Verbindung gerade selbst gestartet hast.
+      </p>
 
       {loginError ? (
         <div style={{ ...card, border: '1px solid #7f1d1d', background: '#2a1420' }}>
@@ -163,6 +168,12 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
       </p>
     </Frame>
   );
+}
+
+/** Who receives the authorization code — the registered client name is caller-chosen, the target is not. */
+function redirectTarget(redirectUri: string): string {
+  const host = new URL(redirectUri).hostname; // already validated by validateAuthorizeRequest
+  return /^(localhost|127\.0\.0\.1|\[::1\])$/.test(host) ? `${host} (Programm auf diesem Rechner)` : host;
 }
 
 function flatten(sp: Search): Record<string, string> {
