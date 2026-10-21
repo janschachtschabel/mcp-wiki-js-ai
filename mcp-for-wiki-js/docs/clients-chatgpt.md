@@ -30,7 +30,7 @@ In ChatGPT (Web):
      ```
      https://<deploy>/mcp?url=https://dein-wiki.example.org&token=DEIN_WIKIJS_API_KEY
      ```
-   - **Single-Tenant (Deploy hat `WIKIJS_URL` + `WIKIJS_TOKEN`):** einfach
+   - **Single-Tenant (Deploy hat `WIKIJS_URL` + `WIKIJS_TOKEN`, ohne `WIKIJS_PROFILES`/`WIKIJS_KEY_MAP`):** einfach
      ```
      https://<deploy>/mcp
      ```
@@ -45,9 +45,9 @@ Im Composer das **Connector-/Developer-Mode-Menü** öffnen, `Wiki.js` aktiviere
 
 ## Hinweise
 - **Handle = Geheimnis:** Behandle den `wzp_…`-Token wie ein Passwort. Er landet in der Connector-Config (und ggf. in Logs); der echte Wiki.js-Key tut das **nicht**.
-- **Schreib-Aktionen:** ChatGPT zeigt vor Write-Tools einen Bestätigungs-Dialog. Zusätzlich greift die Server-Policy: im Default-Preset `safe` liefern Write/Delete-Tools zuerst eine **Dry-Run-Vorschau** (echte Ausführung erst mit `confirm: true`). Reines Lese-Setup: `&preset=readonly` an die URL hängen (oder ein readonly-Profil verwenden).
+- **Schreib-Aktionen:** ChatGPT zeigt vor Write-Tools einen Bestätigungs-Dialog. Zusätzlich greift die Server-Policy: im Default-Preset `safe` liefern Write/Delete-Tools zuerst eine **Dry-Run-Vorschau** (echte Ausführung erst mit `confirm: true` — das setzt das Modell selbst, es ist keine menschliche Freigabe). Reines Lese-Setup: `&preset=readonly` an die URL hängen (oder ein readonly-Profil verwenden).
 - **`/sse` vs `/mcp`:** Ältere Anleitungen nennen `/sse`. Dieser Server nutzt bewusst **Streamable HTTP** unter `/mcp` (SSE deaktiviert, kein Redis) — der von ChatGPT Developer Mode unterstützte moderne Transport. Immer die `/mcp`-URL eintragen.
-- **OAuth:** hier nicht nötig. Eine echte OAuth-Anbindung wäre eine separate Ausbaustufe (siehe Projektdiskussion), falls Zugänge gar nicht über die URL laufen sollen.
+- **OAuth:** im Legacy-Weg nicht genutzt. Der OAuth-Betrieb ist inzwischen umgesetzt und der empfohlene Weg (siehe Hinweis oben).
 
 ## Quellen (Stand der Recherche)
 - OpenAI Help Center: „Developer mode — apps and full MCP connectors in ChatGPT" — https://help.openai.com/en/articles/12584461-developer-mode-apps-and-full-mcp-connectors-in-chatgpt-beta

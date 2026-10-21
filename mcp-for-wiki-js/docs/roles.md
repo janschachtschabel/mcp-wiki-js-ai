@@ -8,7 +8,7 @@
 
 Rollen sind in [`config/roles.json`](../config/roles.json) definiert (frei editierbar). Jede Rolle bildet die 7 **Kategorien** auf einen **Modus** ab — und kann einzelne **Tools** abweichend setzen.
 
-**Modi:** `allow` = sofort · `confirm` = Dry-Run-Vorschau, echte Ausführung erst mit `confirm:true` · `block` = ausgeblendet/verweigert.
+**Modi:** `allow` = sofort · `confirm` = Dry-Run-Vorschau, echte Ausführung erst mit `confirm:true` (setzt das Modell selbst — keine menschliche Freigabe) · `block` = ausgeblendet/verweigert.
 
 > Effektive (live geladene) Rollen anzeigen: **`npm run roles`**.
 
@@ -42,6 +42,8 @@ Rollen sind in [`config/roles.json`](../config/roles.json) definiert (frei editi
 | `betreuer` | Wiki-Betreuer | wie `redakteur` + System-Wartung: Cache leeren, Tree neu bauen, Navigation/Site (mit Rückfrage) |
 | `admin` | Administrator | wie `redakteur` + Nutzer-/Gruppen-/System-Verwaltung (mit Rückfrage) |
 | `systemadmin` | **Systemadministrator:in** | **alles** ohne Rückfrage, inkl. API-Keys & Auth-State |
+
+Seiten-JavaScript/-CSS (`scriptJs`/`scriptCss` bei `wiki_page_create`/`_update`) folgt dem Modus von `manage_system` (Policy-Schlüssel `wiki_page_scripts`): bei `autor`/`redakteur`/`moderator` gesperrt, bei `betreuer`/`admin` mit Rückfrage, bei `systemadmin` frei.
 
 ## Wichtig: globale Obergrenze
 `WIKIJS_PERMISSION_PRESET` ist die **Obergrenze** des gesamten Deployments — das **Maximum** jeder Rolle **und** der in `tools/list` **sichtbare** Tool-Satz. Auf die **höchste** verwendete Rolle setzen; einzelne Personen werden über ihre `role` darunter eingeschränkt.

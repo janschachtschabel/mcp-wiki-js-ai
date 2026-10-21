@@ -36,6 +36,9 @@ cp .env.example .env     # set DOMAIN, POSTGRES_PASSWORD, MCP_SESSION_SECRET
 docker compose up -d     # Caddy obtains TLS automatically
 ```
 
+Without `DOMAIN` (or `MCP_SESSION_SECRET`), `docker compose` stops with a clear
+message ("DOMAIN fehlt — bitte .env anlegen").
+
 Local testing without a domain/TLS (everything on `http://localhost:8090`):
 
 ```bash
@@ -50,21 +53,32 @@ for the DB pool). Updating the wiki = pulling a new image.
 
 ## First-run setup (admin account, home page, search)
 
-A fresh Wiki.js starts in setup mode. The bootstrap script does everything in
-one go — **idempotent**, safe to re-run (Node ≥ 18 on the host):
+A fresh Wiki.js starts in setup mode. The Compose service `bootstrap` does
+everything in one go — **idempotent**, safe to re-run (no Node on the host):
 
 ```bash
-WIKI_URL=https://wiki.example.org ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='secure-password' \
-  node deploy/scripts/bootstrap.mjs --locale=de
+ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='secure-password' \
+  docker compose run --rm bootstrap --locale=de
+# local test stack: same -f flags as for `up`
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml run --rm bootstrap --locale=de
 ```
+
+**Why not in the browser?** Until setup is done, the first call to Wiki.js'
+`/finalize` creates the admin account — for anyone who can reach the domain.
+Caddy therefore always answers `/finalize` with `403`; the `bootstrap` service
+talks to Wiki.js directly inside the Docker network. The URL shown on
+`/ki-zugang` comes from `PUBLIC_BASE_URL` or `https://<DOMAIN>` (locally
+`http://localhost:8090`).
 
 This creates: the admin account, a home page, the user guide **`/ki-zugang`**
 (connector URL + per-client setup), the **PostgreSQL search
 engine** (dictionary matching the locale — much better agent search than the
-default), and with `--locale=de` the German UI. On a server with a domain,
-**prefix `WIKI_URL=https://wiki.example.org`** — the default
-`http://localhost:8090` only fits the local test stack, and the URL is also
-shown as the connector URL on `/ki-zugang`.
+default), and with `--locale=de` the German UI.
+
+The script can also run directly with Node ≥ 18
+(`WIKI_URL=https://wiki.example.org … node deploy/scripts/bootstrap.mjs`) — but
+through the domain only for an **already set-up** wiki (e.g. to add `--locale`
+or `--demo` later), since `/finalize` is blocked there.
 
 `--demo` additionally creates a "Team" group (read/write, no delete) plus a
 test user and then **requires `DEMO_PASSWORD`** (no default — a committed one
@@ -129,8 +143,8 @@ requarks/wiki) and `mcp2/` (community MCP servers used for comparison).
 |---|---|---|
 | Access rights | **Wiki.js** (groups, page rules — per person) | hard, server-side; applies to AI sessions too |
 | Area lock-out | Wiki.js: path-based **deny page rule** (e.g. `/internal/*`) | reliable, including search |
-| Tag guardrail | Tag (e.g. `kein-ki`) on the page + `WIKIJS_BLOCKED_TAGS` on the MCP server | MCP hides the page from agents (search/list/read) and refuses writes/moves/deletes |
-| Agent brake | MCP role `wiki` (default for OAuth sessions) | destructive/admin actions return a **dry-run preview** first; they execute only when the AI calls again with `confirm: true` — the AI relays the question to you in chat |
+| Tag guardrail | Tag (e.g. `kein-ki`) on the page + `WIKIJS_BLOCKED_TAGS` on the MCP server | MCP hides the page from agents (search/list/tree/links/read) and refuses writes/moves/deletes; exception: comments addressed only by their comment id |
+| Agent brake | MCP role `wiki` (default for OAuth sessions) | destructive/admin actions return a **dry-run preview** first; they execute only when the AI calls again with `confirm: true` — the AI relays the question to you in chat, but it sets `confirm` itself: a brake, **not** a human approval |
 
 **How the confirm prompt works:** the MCP server never talks to the human
 directly. A gated tool call without `confirm: true` executes nothing and
@@ -158,13 +172,19 @@ variables are listed at the top of [.gitlab-ci.yml](.gitlab-ci.yml). Both
 pipelines stay green while the registry variables are absent (jobs are
 skipped).
 
-## Publishing (GitHub / GitLab)
+## Repository & publishing
 
-`mcp-for-wiki-js/` currently carries its **own git history** (embedded
-repo). Decide before the first push of this root repo: one repo
-(recommended; remove `mcp-for-wiki-js/.git`, then `git init && git add . &&
-git commit` at the root — or migrate the history via `git subtree` /
-`git filter-repo` first) or two repos with a submodule.
+The project is **one** repo on GitHub:
+[github.com/janschachtschabel/mcp-wiki-js-ai](https://github.com/janschachtschabel/mcp-wiki-js-ai).
+`mcp-for-wiki-js/` is a plain folder in it (no history of its own, no submodule).
+[.gitignore](.gitignore) excludes secrets (`.env`), `node_modules/`, build
+output and the reference folders (`wiki/`, `mcp2/`); [.gitattributes](.gitattributes)
+normalizes line endings to LF. Before every commit, `git status` must **not** list a `.env`.
+
+A push to `main` builds the image `ghcr.io/janschachtschabel/mcp-wiki-js-ai` via
+[.github/workflows/](.github/workflows/). For an internal GitLab, mirror the same
+repo: [.gitlab-ci.yml](.gitlab-ci.yml) builds image and Helm chart once the CI/CD
+variables listed at its top are set.
 
 ## License
 

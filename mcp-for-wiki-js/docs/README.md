@@ -42,13 +42,15 @@ frühere Vercel/Handle-Betrieb funktioniert weiter, ist aber eingefroren
 | [Testprotokoll](./TESTPROTOKOLL.md) | Per-Tool-Live-Ergebnis der Tool-Suite (alle 70 Tools) |
 | [Prod-Hardening](./pgbouncer.md) | DB-Pool / PgBouncer — nur für den Serverless-Mehr-Instanz-Betrieb relevant; die Container-Appliance braucht kein PgBouncer |
 
-### Die 3 Legacy-Wege, Zugangsdaten zu übergeben
+### Die 4 Legacy-Wege, Zugangsdaten zu übergeben
 
 Ohne OAuth hält der Server keinen fest verdrahteten Key; ein Client sagt per
 Muster, *welche Instanz* und *welcher Key* gilt:
 
 - **A) Server-Env (Single-Tenant):** `WIKIJS_URL` + `WIKIJS_TOKEN` am Deploy;
-  Clients brauchen keine Auth, nur die URL. Alle teilen einen Key.
+  Clients brauchen keine Auth, nur die URL. Alle teilen einen Key. Entfällt,
+  sobald `WIKIJS_PROFILES` oder `WIKIJS_KEY_MAP` gesetzt sind (dann bekommen
+  anonyme Aufrufer den Key nicht).
 - **B) Request-Header (Multi-Tenant):** `X-Wikijs-Url` + `Authorization: Bearer <key>`
   bzw. `X-Wikijs-Token` — nur header-fähige Clients (Claude Code CLI, Cursor).
 - **C) URL-Parameter (Multi-Tenant):** `…/mcp?url=<wiki>&token=<key-oder-handle>`
@@ -57,7 +59,11 @@ Muster, *welche Instanz* und *welcher Key* gilt:
   geheimen Handle → {Key, Rolle} ab; der echte Key bleibt serverseitig. Handle
   erzeugen: `npm run gen:profile -- "Alice:leser" "Bob:redakteur"`.
 
-Echte Header haben Vorrang vor Query-Parametern.
+Echte Header haben Vorrang vor Query-Parametern. Server-Keys (Env-Token,
+`WIKIJS_KEY_MAP`) gehen nur an `WIKIJS_URL`; eine abweichende Client-URL wird
+dann abgelehnt. Mit eigenem Key muss die Client-URL `WIKIJS_URL` entsprechen
+oder in `WIKIJS_ALLOWED_URLS` stehen; ohne beides (reiner BYOK) werden
+interne Adressen abgelehnt.
 
 ### Wiki.js-API-Key erzeugen (nur Legacy/Single-Tenant)
 

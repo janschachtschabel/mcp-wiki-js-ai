@@ -46,8 +46,9 @@ steuert**. Technische Tiefe zum OAuth-Flow: [oauth.md](oauth.md).
 Das Wiki muss beim Arbeiten **nicht** geöffnet sein. Der Client hält ein
 Token und erneuert es selbst im Hintergrund; der gespeicherte Wiki-JWT
 erneuert sich bei jeder Nutzung mit. Erst nach **14 Tagen ohne Nutzung**
-(Wiki.js-Renewal-Fenster) oder nach einem Widerruf fragt der Client erneut
-nach der Freigabe — wieder nur der eine Browser-Moment.
+(Wiki.js-Renewal-Fenster), spätestens **30 Tage** nach der Freigabe (absolute
+Höchstdauer) oder nach einem Widerruf fragt der Client erneut nach der
+Freigabe — wieder nur der eine Browser-Moment.
 
 ### Selbstverwaltung: `/me`
 
@@ -81,7 +82,7 @@ Wiki.js-Administration:
 | Methode | Wo | Wirkung |
 |---|---|---|
 | **Pfad-Sperre** (harte Garantie) | Wiki.js: Gruppe → Page Rule `Deny`, Match `START`, Pfad z. B. `intern` | Greift serverseitig überall, inkl. Suche — für alle Zugriffe dieser Gruppe |
-| **Tag-Sperre** `kein-ki` (Redaktions-Komfort) | Tag auf der Seite + `WIKIJS_BLOCKED_TAGS` am MCP-Server | MCP verbirgt die Seite vor Agenten (Suche/Liste/Lesen) und verweigert Ändern/Verschieben/Löschen — für **alle** Credential-Typen |
+| **Tag-Sperre** `kein-ki` (Redaktions-Komfort) | Tag auf der Seite + `WIKIJS_BLOCKED_TAGS` am MCP-Server | MCP verbirgt die Seite vor Agenten (Suche/Liste/Baum/Links/Lesen) und verweigert Ändern/Verschieben/Löschen sowie Kommentare lesen/anlegen — für **alle** Credential-Typen |
 
 Empfehlung: Sensibles unter einen gesperrten Pfad legen; das Tag zusätzlich
 für spontane Einzelfälle nutzen.
@@ -111,8 +112,8 @@ cp .env.example .env    # DOMAIN, POSTGRES_PASSWORD, MCP_SESSION_SECRET
 docker compose up -d    # Caddy besorgt TLS automatisch
 
 # Ersteinrichtung (Admin-Konto, Startseite, Anleitung /ki-zugang, Postgres-Suche,
-# optional de + Demo). WIKI_URL = öffentliche Adresse (Connector-URL auf /ki-zugang):
-WIKI_URL=https://<DOMAIN> ADMIN_EMAIL=... ADMIN_PASSWORD=... node deploy/scripts/bootstrap.mjs --locale=de
+# optional de + Demo). Läuft im internen Docker-Netz; /finalize ist über Caddy gesperrt:
+ADMIN_EMAIL=... ADMIN_PASSWORD=... docker compose run --rm bootstrap --locale=de
 ```
 
 Lokaler Test ohne Domain: zusätzlich `-f docker-compose.local.yml`
@@ -155,15 +156,19 @@ Freigabe-Moment und wird danach von Tokens getragen:
 Schutzschichten: Tokens nur als SHA-256-Hash gespeichert; Wiki-JWTs
 AES-256-GCM-verschlüsselt; Access-Token 1 h mit rotierendem Refresh;
 **Reuse-Detection** (wiederverwendetes altes Refresh-Token widerruft die
-ganze Session); Widerruf über `/me` wirkt sofort; Audit-Log der
-Schreib-/Löschaktionen mit echtem Personen-Label.
+ganze Session, außer bei einem Retry innerhalb von 60 s; ein zweimal
+eingelöster Freigabe-Code widerruft die daraus entstandene Session);
+Sessions höchstens 30 Tage; Widerruf über `/me` oder `/oauth/revoke` wirkt
+sofort; Audit-Log der Schreib-/Löschaktionen mit echtem Personen-Label.
 
 **Firmennetz / gemeinsame Büro-IP:** unkritisch. Identität hängt am Token,
 nie an der Absender-IP; TLS verhindert Mitlesen im LAN; der OAuth-Callback
 läuft auf `localhost` des eigenen Rechners (keine eingehenden Ports nötig).
 Einzige Einschränkung: Wiki.js limitiert Passwort-Logins auf 5/Minute pro
 Absender-IP — durch die serverseitige Durchreichung teilt sich das Team
-faktisch einen Topf. Betrifft nur das **Formular** im seltenen
+faktisch einen Topf. Damit ein einzelner Absender ihn nicht leert, begrenzt
+der MCP-Server Formular-Logins vorher selbst (10 Versuche pro Client-IP und
+5 pro Benutzername je 15 Minuten). Betrifft nur das **Formular** im seltenen
 Freigabe-Moment (der Ein-Klick-SSO-Weg ruft den Passwort-Login gar nicht
 auf); im Extremfall 60 Sekunden warten.
 
@@ -176,10 +181,10 @@ auf); im Extremfall 60 Sekunden warten.
 | Baustein | Dateien | Zweck |
 |---|---|---|
 | OAuth-2.1-Layer | `lib/oauth/` (crypto, store, service, wiki-login, metadata, web) | Authorization-Code + PKCE, Dynamic Client Registration, Token-/Refresh-Verwaltung, Wiki.js-Credential-Exchange |
-| OAuth-Endpunkte | `app/oauth/*`, `app/.well-known/oauth-*` | Freigabeseite (SSO/Login/2FA), Token, DCR, Discovery (RFC 8414/9728) |
+| OAuth-Endpunkte | `app/oauth/*`, `app/.well-known/oauth-*` | Freigabeseite (SSO/Login/2FA), Token, DCR, Widerruf (RFC 7009), Discovery (RFC 8414/9728) |
 | Session-Store | sqlite via `node:sqlite` unter `MCP_DATA_DIR` | **null neue npm-Dependencies**; Tokens gehasht, JWTs verschlüsselt; Audit-Tabelle |
 | `/me`-Seite | `app/me/*` | Eigene Verbindungen ansehen/widerrufen (Ownership-geprüft, CSRF-geschützt) |
-| Tag-Guardrail | `lib/guardrails.ts` + Hooks in `lib/tools/pages.ts` | `WIKIJS_BLOCKED_TAGS`: Seiten für Agenten unsichtbar/unantastbar; schließt Wiki.js' Tag-Rule-Lücke (list/single prüfen Tags nicht); Sperr-Tags selbst vor Umbenennen/Löschen geschützt |
+| Tag-Guardrail | `lib/guardrails.ts` + Hooks in `lib/tools/pages/` und `lib/tools/comments.ts` | `WIKIJS_BLOCKED_TAGS`: Seiten für Agenten unsichtbar/unantastbar; schließt Wiki.js' Tag-Rule-Lücke (list/single prüfen Tags nicht); Sperr-Tags selbst vor Umbenennen/Löschen geschützt |
 | Rolle `wiki` | `config/roles.json`, `WIKIJS_OAUTH_ROLE` | Agenten-Schutz-Overlay für OAuth-Sessions (siehe §6) |
 | JWT-Renewal | `lib/wikijs/client.ts` (`new-jwt`-Header) | Wiki.js' rollierende Token-Erneuerung wird persistiert → Sessions bleiben ohne Re-Login frisch |
 | Packaging | Root-`Dockerfile` (Next standalone, Node 24), `docker-compose.yml` (db/wiki/mcp/caddy), `deploy/helm/wikijs-mcp`, CI für GitHub (ghcr) + GitLab (Registry + Helm) | Ein-Host-Appliance; MCP↔Wiki über internes Netz (kein Rate-Limit-/Blocking-Problem mehr wie bei Vercel) |
@@ -207,14 +212,24 @@ Refresh-Reuse-Detection; interne URLs aus Browser-Fehlermeldungen entfernt.
 - **Backup-Service:** täglicher `pg_dump` mit Retention als Compose-Sidecar
   (`BACKUP_INTERVAL_SECONDS`, `BACKUP_KEEP`; Restore-Kommando im Compose-Kommentar).
 
+**Härtung nach Audit und Re-Audit (Oktober 2026):** u. a. Login- und
+DCR-Rate-Limits, optionale Redirect-Host-Allowlist
+(`MCP_ALLOWED_REDIRECT_HOSTS`) und Warnhinweis auf der Freigabeseite,
+Freigabe nur per echtem Klick (Fetch-Metadata), `/oauth/revoke`, absolute
+Session-Höchstdauer, Massenlöschen mit Obergrenze und aufgelöster Vorschau,
+eigenes Gate für Seiten-Skripte (`wiki_page_scripts`), geschwärzte
+Vorschauen, Tag-Sperre auch für Render/Baum/Links/Kommentare. Einzelheiten
+und offene Punkte: [Audit](audits/2026-10-21-audit.md) ·
+[Re-Audit](audits/2026-10-21-reaudit.md).
+
 **Unverändert (Rückwärtskompatibilität):** stdio-Betrieb, BYOK-Header,
 `WIKIJS_PROFILES`-Handles samt Rollenleiter. Diese Legacy-Pfade sind
 **eingefroren** — im Container-Betrieb mit OAuth werden sie nicht benötigt,
 sind dort standardmäßig abgeschaltet (`WIKIJS_ALLOW_LEGACY`) und werden nicht
 weiterentwickelt.
 
-**Verifikation:** 102 Offline-Assertions (6 Suiten), 30 E2E-Assertions gegen
-den echten Stack (OAuth → Tool-Call als echter User → Guardrails → Widerruf),
+**Verifikation (Stand 2026-10-21):** 775 Offline-Assertions (19 Suiten), 38 E2E-Assertions und
+79 Live-Tool-Aufrufe gegen den echten Stack (OAuth → Tool-Call als echter User → Guardrails → Widerruf),
 Lasttest 1350 Requests / 0 Fehler.
 
 ---
@@ -234,7 +249,7 @@ Wiki.js prinzipbedingt nicht leisten kann:
 | Authentifizierung (Passwort, 2FA) | **Wiki.js** | `login`-Mutation, eigene Rate-Limits |
 | Destruktive Aktionen erst nach Rückfrage | **MCP-Server** | `confirm`-Gates der Rolle `wiki`: `delete` und `manage_*` liefern erst eine Dry-Run-Vorschau, ausgeführt wird nur mit `confirm:true` |
 | Seiten gezielt vor KI verbergen (Tag) | **MCP-Server** | `WIKIJS_BLOCKED_TAGS` (z. B. `kein-ki`) — inkl. Schreibverbot und Selbstschutz des Tags |
-| Session-Lebenszyklus & Widerruf | **MCP-Server** | Token-Ausgabe/-Rotation, 14-Tage-Idle-Ablauf, `/me` |
+| Session-Lebenszyklus & Widerruf | **MCP-Server** | Token-Ausgabe/-Rotation, 14-Tage-Idle-Ablauf, 30 Tage Höchstdauer, `/me`, `/oauth/revoke` |
 | Nachvollziehbarkeit | **MCP-Server** + Wiki.js | Audit-Log (Tool, Person, Ergebnis) + Wiki-Seitenhistorie mit echtem Namen |
 | Überlastschutz Richtung Wiki | **MCP-Server** | Concurrency-Gate (`WIKIJS_MAX_CONCURRENCY`) |
 
@@ -271,10 +286,11 @@ nur noch für Legacy-Handle-Zugänge (`WIKIJS_PROFILES`).
 
 - Ein-Klick-SSO setzt **gleiche Domain** für Wiki und MCP voraus (Appliance
   macht das automatisch); sonst erscheint das Login-Formular.
-- `tree`/`links`, Kommentar-Tools und `wiki_graphql` sind von der
-  **Tag**-Sperre ausgenommen (für harte Sperren Pfad-Rules nutzen);
-  `wiki_graphql` ist in allen Rollen außer `systemadmin`/`full` gesperrt
-  (auch in der OAuth-Rolle `wiki`).
+- Von der **Tag**-Sperre ausgenommen sind `wiki_comment_get`/`_update`/
+  `_delete` (per Kommentar-ID; Wiki.js liefert dort keine Seiten-ID) und
+  `wiki_graphql` (für harte Sperren Pfad-Rules nutzen); `wiki_graphql` ist in
+  allen Rollen außer `systemadmin`/`full` gesperrt (auch in der OAuth-Rolle
+  `wiki`).
 - Im Wiki keine Seiten unter `me/`, `oauth/`, `mcp`, `api/` anlegen
   (Pfade gehören dem MCP-Server, siehe Caddy-/Ingress-Routing).
 - claude.ai/ChatGPT (Web) erreichen kein `localhost` — Web-Clients erst nach

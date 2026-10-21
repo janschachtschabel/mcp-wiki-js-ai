@@ -4,9 +4,11 @@
 
 > Dieses Protokoll dokumentiert den Live-Lauf der **Tool-Handler** (Stand
 > 2026-06-17, damals 69 Tools; inzwischen 70 mit `wiki_asset_download`). Die
-> Handler sind seither unverändert. Die **aktuellen** Testzahlen (nach dem
-> OAuth-Umbau): **123 Offline-Assertions** (8 Suiten) + **36 OAuth-E2E**
-> (`npm test` + `npm run test:e2e`) — siehe [Root-README › Tests](../README.md#tests).
+> Handler wurden seither im Zuge der Audit-Umsetzung geändert (u. a.
+> Massenlöschen, Tag-Sperre, Upload-Prüfung); dieses Protokoll ist ein
+> historischer Lauf. Die **aktuellen** Testzahlen: **775 Offline-Assertions**
+> (19 Suiten) + **38 OAuth-E2E** + **79 Live-Tool-Aufrufe**
+> (`npm test` + `npm run test:e2e` + `npm run test:live`) — siehe [README › Tests](../README.md#tests).
 
 ## 1. Verdikt
 Alle Tools sind verifiziert — **live end-to-end** gegen ein echtes Wiki.js (inkl. `wiki_asset_upload` → rename → delete). **MCP-Code = release-ready.**

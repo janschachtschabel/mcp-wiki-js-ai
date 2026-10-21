@@ -11,7 +11,7 @@ Voraussetzung: Der Server ist auf Vercel deployt → Endpoint `https://<deploy>/
 
 **Zwei Wege, deinen Zugang zu übergeben:**
 - **Empfohlen — Profil-Handle:** Der Betreiber hat dich in `WIKIJS_PROFILES` angelegt; du bekommst einen **geheimen Handle** (`wzp_…`). Du sendest **nur den Handle** — der echte Wiki.js-Key bleibt serverseitig und gelangt nie zu Claude. Siehe [Profile & Handle](../README.md#mehrbenutzer-profile--handle-generierung).
-- **Direktes BYOK:** Du sendest deine **Wiki.js-URL + deinen echten API-Key** selbst (für Deployments ohne Profile).
+- **Direktes BYOK:** Du sendest deine **Wiki.js-URL + deinen echten API-Key** selbst (für Deployments ohne Profile). Die URL muss `WIKIJS_URL` des Servers entsprechen oder in `WIKIJS_ALLOWED_URLS` stehen; ohne beides werden interne Adressen (Loopback, private Netze, `localhost`) abgelehnt.
 
 > ℹ️ Claude **Code (CLI)** und **Cursor** können Custom-Header → Handle/Key bleibt aus der URL. **claude.ai (Web-Connector)** kann **keine** Header → dort kommt der Handle in die URL (`?token=`).
 
@@ -68,7 +68,7 @@ Die **Connector-Oberfläche** auf claude.ai (Web/Desktop) erlaubt **keine** Cust
      ```
      https://<deploy>/mcp?url=https://dein-wiki.example.org&token=DEIN_WIKIJS_API_KEY
      ```
-   - **Single-Tenant (Deploy hat `WIKIJS_URL`+`WIKIJS_TOKEN`):** einfach `https://<deploy>/mcp`.
+   - **Single-Tenant (Deploy hat `WIKIJS_URL`+`WIKIJS_TOKEN`, ohne `WIKIJS_PROFILES`/`WIKIJS_KEY_MAP`):** einfach `https://<deploy>/mcp`.
 4. **Advanced settings** leer lassen (kein OAuth nötig).
 5. **Add** → im Chat über das Connector-Menü aktivieren.
 

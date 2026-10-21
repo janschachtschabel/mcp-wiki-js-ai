@@ -44,6 +44,7 @@ docker run -d --name wikijs-mcp --restart unless-stopped \
 | `MCP_SESSION_SECRET` | schaltet OAuth ein; verschlüsselt den Session-Store in `/data` |
 | `WIKIJS_PERMISSION_PRESET` | im OAuth-Betrieb `full` lassen — die echten Rechte kommen aus Wiki.js |
 | `WIKIJS_BLOCKED_TAGS` | Seiten mit diesem Tag sind für KI unsichtbar/unantastbar (leer = aus) |
+| `MCP_ALLOWED_REDIRECT_HOSTS` | optional: Hostnamen (kommagetrennt), an die OAuth-Clients weiterleiten dürfen; Loopback immer erlaubt, leer = jeder https-Host |
 
 Der `-v mcp-data:/data`-Mount persistiert die KI-Sessions über Neustarts.
 
@@ -57,6 +58,9 @@ weiter zum Wiki:
 /.well-known/mcp.json
 ```
 Vorlage (Caddy): [deploy/caddy/Caddyfile](../../deploy/caddy/Caddyfile).
+Der Proxy muss `X-Forwarded-For` **anhängen** (nginx: `$proxy_add_x_forwarded_for`):
+die Login-Limits des MCP-Servers zählen pro rechtestem Eintrag. Fehlt er oder
+steht ein weiterer Proxy davor, teilen sich alle Nutzer einen IP-Topf.
 **Gleiche Domain wie das Wiki ist wichtig** — nur dann macht die bestehende
 Wiki-Sitzung die OAuth-Freigabe zum Ein-Klick (SSO).
 
@@ -73,7 +77,7 @@ Wiki-Sitzung die OAuth-Freigabe zum Ein-Klick (SSO).
 ### 6. Testen
 ```bash
 curl https://<eure-domain>/.well-known/oauth-authorization-server   # muss JSON liefern
-curl https://<eure-domain>/api/health                               # {"ok":true}
+curl https://<eure-domain>/api/health                               # {"ok":true,"store":"ok"}
 ```
 Dann einen Client verbinden:
 ```bash

@@ -16,6 +16,10 @@ Jedes Tool gehört zu einer **Kategorie**. Die Policy bildet jede Kategorie (und
 
 **Kategorien:** `read`, `write`, `delete`, `manage_users`, `manage_groups`, `manage_system`, `manage_auth`.
 
+- `confirm` ist eine Bremse, **keine menschliche Freigabe**: das Modell setzt `confirm: true` selbst. Jedes Tool hat das Feld, auch Lese-Tools (`read: confirm` funktioniert). Die Vorschau schwärzt Passwörter/Secrets/Tokens und kürzt `contentBase64`; beim Massenlöschen zeigt sie die tatsächlich betroffenen Seiten.
+- **Lese-Tools in `manage_*`** (z. B. `wiki_users_list`, `wiki_system_info`, `wiki_apikeys_list`) sind als `readOnlyHint` markiert und werden nicht auditiert; ihr Modus bleibt der ihrer Kategorie.
+- **Parameter-Gates:** `scriptJs`/`scriptCss` bei `wiki_page_create`/`_update` brauchen den Modus von `manage_system` — Policy-Schlüssel `wiki_page_scripts`, per Tool-Override steuerbar (z. B. `"tools":{"wiki_page_scripts":"block"}`). `groups` bei `wiki_user_create`/`_update` braucht den Modus von `wiki_group_assign_user`. Jeweils: `block` → Fehler, `confirm` → Vorschau.
+
 ## Zwei Ebenen
 1. **Deploy-Baseline (Env):** entscheidet, welche Tools überhaupt **registriert/sichtbar** sind. Geblockte Kategorien sind in `tools/list` unsichtbar (außer `WIKIJS_SHOW_BLOCKED=true`).
 2. **Pro-Request-Overlay (Header/URL):** kann pro Nutzer nur **verschärfen** (Call-Time). Was die Baseline blockt, kann ein Client nie freischalten.
@@ -56,7 +60,7 @@ Rollen sind in [`config/roles.json`](../config/roles.json) definiert — editier
 - **`wiki_graphql`** (rohes GraphQL, umgeht Kategorien und Tag-Sperre) ist per Tool-Override in **allen Rollen außer `systemadmin`/`full`** gesperrt. Freischalten nur über eine eigene Rolle mit `"tools":{"wiki_graphql":"confirm"}`.
 - **Globale Obergrenze** (`WIKIJS_PERMISSION_PRESET`): das **Maximum** + der **sichtbare** Tool-Satz. Auf die **höchste** verwendete Rolle setzen — Rollen wirken nur **innerhalb** davon.
 - **Deploy-weit feinjustieren** (`WIKIJS_POLICY`): `{"categories":{"delete":"allow"},"tools":{"wiki_graphql":"block"}}`.
-- **Pro Request verschärfen:** Header `X-Wikijs-Preset`/`X-Wikijs-Policy` bzw. URL `&preset=`/`&policy=` — nur **strenger**.
+- **Pro Request verschärfen:** Header `X-Wikijs-Preset`/`X-Wikijs-Policy` bzw. URL `&preset=`/`&policy=` — nur **strenger**. Beide wirken auch zusammen (und auch in OAuth-Sitzungen).
 
 > Reihenfolge: `block` > `confirm` > `allow`. Effektiv = strengster aus (Obergrenze, Rolle, Request). Echte Rechte = Schnittmenge aus Wiki.js-Key und Rolle.
 

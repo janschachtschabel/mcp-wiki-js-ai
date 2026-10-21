@@ -33,6 +33,9 @@ cp .env.example .env     # DOMAIN, POSTGRES_PASSWORD, MCP_SESSION_SECRET setzen
 docker compose up -d
 ```
 
+Ohne `DOMAIN` (oder ohne `MCP_SESSION_SECRET`) bricht `docker compose` mit einer
+klaren Meldung ab („DOMAIN fehlt — bitte .env anlegen“).
+
 Lokal testen ohne Domain/TLS (alles auf `http://localhost:8090`):
 
 ```bash
@@ -48,32 +51,42 @@ DB-Pool). Updates: neues Image ziehen, fertig.
 ## Ersteinrichtung (erster Admin, Startseite, Suche)
 
 Ein frisches Wiki.js startet im Setup-Modus (Admin-Konto anlegen, Startseite
-fehlt). Das Bootstrap-Skript erledigt alles in einem Rutsch — **idempotent**,
-kann jederzeit erneut laufen (Node ≥ 18 auf dem Host):
+fehlt). Der Compose-Dienst `bootstrap` erledigt alles in einem Rutsch —
+**idempotent**, kann jederzeit erneut laufen (kein Node auf dem Host nötig):
 
 ```bash
-WIKI_URL=https://wiki.example.org ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='sicheres-passwort' \
-  node deploy/scripts/bootstrap.mjs --locale=de
+ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='sicheres-passwort' \
+  docker compose run --rm bootstrap --locale=de
+# Lokaler Test-Stack: dieselben -f-Angaben wie beim Start
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml run --rm bootstrap --locale=de
 # Windows PowerShell:
-#   $env:WIKI_URL='https://wiki.example.org'; $env:ADMIN_EMAIL='admin@example.org'; $env:ADMIN_PASSWORD='...'
-#   node deploy\scripts\bootstrap.mjs --locale=de
+#   $env:ADMIN_EMAIL='admin@example.org'; $env:ADMIN_PASSWORD='...'
+#   docker compose run --rm bootstrap --locale=de
 ```
+
+**Warum nicht im Browser?** Bis zur Einrichtung legt bei Wiki.js der erste
+Aufruf von `/finalize` das Admin-Konto an — für jeden, der die Domain erreicht.
+Caddy beantwortet `/finalize` deshalb immer mit `403`; der Dienst `bootstrap`
+spricht im internen Docker-Netz direkt mit Wiki.js. Die Adresse auf `/ki-zugang`
+kommt aus `PUBLIC_BASE_URL` bzw. `https://<DOMAIN>` (lokal `http://localhost:8090`).
 
 `--demo` legt zusätzlich eine Gruppe „Team" + Testnutzer an und **verlangt
 dann `DEMO_PASSWORD`** (kein Default, sonst entstünde ein Konto mit öffentlich
 bekanntem Passwort). Nur für Test-Instanzen, nicht auf Produktiv-Wikis:
-`… ADMIN_PASSWORD='…' DEMO_PASSWORD='…' node deploy/scripts/bootstrap.mjs --demo`.
+`… ADMIN_PASSWORD='…' DEMO_PASSWORD='…' docker compose run --rm bootstrap --demo`.
 
 Das legt an: Admin-Konto, Startseite, die Anwender-Anleitung **`/ki-zugang`**
 (Connector-Adresse + Einrichtung pro KI-Programm), **PostgreSQL-Suchmaschine** (Wörterbuch
 passend zur Sprache — deutlich bessere Agenten-Suche als der Default), mit
 `--locale=de` die deutsche Oberfläche und mit `--demo` eine Gruppe „Team"
-(lesen/schreiben, kein Löschen) samt Testnutzer. Auf einem Server mit Domain
-**`WIKI_URL=https://wiki.example.org` voranstellen** — ohne gilt
-`http://localhost:8090` (nur der lokale Test-Stack), und die Adresse erscheint
-auch als Connector-URL auf `/ki-zugang`.
+(lesen/schreiben, kein Löschen) samt Testnutzer.
 
-Manuell ginge es auch (Browser: „Create Home Page"-Wizard, dann Administration
+Das Skript lässt sich auch direkt mit Node ≥ 18 starten
+(`WIKI_URL=https://wiki.example.org … node deploy/scripts/bootstrap.mjs`) — über
+die Domain aber nur für ein **bereits eingerichtetes** Wiki (etwa um `--locale`
+oder `--demo` nachzuholen), denn `/finalize` ist dort gesperrt.
+
+Die Schritte nach dem Admin-Konto gingen auch manuell (Browser: „Create Home Page"-Wizard, dann Administration
 → Search Engine / Locale / Groups) — Hinweis dabei: Hält der Wiki-Login im
 Browser nicht (nach Login wieder abgemeldet), blockiert meist ein
 Werbe-/Tracking-Blocker (z. B. Brave Shields) die Cookies der Domain.
@@ -95,7 +108,7 @@ MCP-Pfade auf dieselbe Domain legen → in Wiki.js eine „Team"-Gruppe (ohne
 
 | URL | Zweck |
 |---|---|
-| `https://<DOMAIN>` | Wiki.js (Ersteinrichtung beim ersten Start) |
+| `https://<DOMAIN>` | Wiki.js |
 | `https://<DOMAIN>/mcp` | MCP-Endpoint — die Connector-URL für alle Clients |
 | `https://<DOMAIN>/me` | Eigene KI-Zugänge ansehen / widerrufen |
 
@@ -133,8 +146,8 @@ von requarks/wiki) und `mcp2/` (Community-MCP-Server zum Vergleich).
 |---|---|---|
 | Zugriffsrechte | **Wiki.js** (Gruppen, Page-Rules — pro Person) | hart, serverseitig; gilt auch für KI-Sessions |
 | Bereichs-Sperre | Wiki.js: pfadbasierte **deny-Page-Rule** (z. B. `/intern/*`) | zuverlässig inkl. Suche |
-| Tag-Sperre | Tag `kein-ki` auf der Seite (+ `WIKIJS_BLOCKED_TAGS`) | MCP filtert Lesen/Suche und verweigert Schreiben/Löschen |
-| Agenten-Schutz | MCP-Rolle `wiki` (Default für OAuth-Sessions) | destruktive/Admin-Aktionen erst nach `confirm:true` (Dry-Run) |
+| Tag-Sperre | Tag `kein-ki` auf der Seite (+ `WIKIJS_BLOCKED_TAGS`) | MCP filtert Lesen/Suche/Baum/Links und verweigert Schreiben/Löschen; Ausnahme: Kommentare, die nur per Kommentar-ID angesprochen werden |
+| Agenten-Schutz | MCP-Rolle `wiki` (Default für OAuth-Sessions) | destruktive/Admin-Aktionen erst nach `confirm:true` (Dry-Run) — eine Bremse gegen Versehen, **keine** menschliche Freigabe: das Modell setzt `confirm` selbst |
 
 Wichtig: KI-Zugängen in Wiki.js **nie** `manage:system` geben — das umgeht dort
 alle Page-Rules. Und im Wiki keine Seiten unter `me/`, `oauth/`, `mcp`,
@@ -150,39 +163,20 @@ Chart — benötigte CI/CD-Variablen stehen im Kopf der
 [.gitlab-ci.yml](.gitlab-ci.yml). Beide Pipelines bleiben grün, solange die
 Registry-Variablen fehlen (Jobs werden übersprungen).
 
-## Veröffentlichen (GitHub / GitLab)
+## Repository & Veröffentlichen
 
-Der Baum ist publish-fertig vorbereitet: [.gitignore](.gitignore) schließt
-Secrets (`.env`), `node_modules/`, Build-Artefakte, Referenz-Ordner
-(`wiki/`, `mcp2/`) und persönliche Tooling-Config aus;
-[.gitattributes](.gitattributes) normalisiert Zeilenenden auf LF (wichtig, weil
-Container-Skripte in Linux laufen). Kurz gegenchecken, dass keine Secrets
-mitgehen: `git status` nach `git add .` darf **keine** `.env` zeigen.
+Das Projekt liegt als **ein** Repo auf GitHub:
+[github.com/janschachtschabel/mcp-wiki-js-ai](https://github.com/janschachtschabel/mcp-wiki-js-ai).
+`mcp-for-wiki-js/` ist darin ein normaler Ordner (keine eigene Historie, kein Submodule).
+[.gitignore](.gitignore) schließt Secrets (`.env`), `node_modules/`,
+Build-Artefakte und die Referenz-Ordner (`wiki/`, `mcp2/`) aus;
+[.gitattributes](.gitattributes) normalisiert Zeilenenden auf LF (Container-Skripte
+laufen unter Linux). Vor jedem Commit gilt: `git status` darf **keine** `.env` zeigen.
 
-`mcp-for-wiki-js/` trägt eine **eigene Git-Historie** (eingebettetes Repo) —
-das ist die einzige topologie-relevante Entscheidung:
-
-**Option A — ein Repo (empfohlen, am einfachsten für CI/Helm):**
-```bash
-rm -rf mcp-for-wiki-js/.git      # App-Historie verwerfen …
-# … ODER vorher übernehmen: git -C mcp-for-wiki-js log bleibt via `git subtree`/`git filter-repo` importierbar
-git init && git add . && git commit -m "chore: initial import"
-git remote add origin <deine-repo-url> && git push -u origin main
-```
-
-**Option B — zwei Repos + Submodule (nur bei getrennten Release-Zyklen):**
-```bash
-# mcp-for-wiki-js zuerst als eigenes Repo pushen (behält seine Historie), dann:
-git init
-git submodule add <mcp-repo-url> mcp-for-wiki-js
-git add . && git commit -m "chore: root deployment repo + mcp submodule"
-```
-
-Beide Topologien lassen `mcp-for-wiki-js/` am selben relativen Pfad — die
-CI-Pipelines ([.gitlab-ci.yml](.gitlab-ci.yml), [.github/](.github/)) und der
-[Dockerfile](Dockerfile)-Build-Context (`context: .`, kopiert `mcp-for-wiki-js/`)
-funktionieren unverändert. GitLab-Helm-Push braucht die CI/CD-Variablen aus dem
-Kopf der `.gitlab-ci.yml`.
+Ein Push nach `main` baut über [.github/workflows/](.github/workflows/) das Image
+`ghcr.io/janschachtschabel/mcp-wiki-js-ai`. Für ein firmeninternes GitLab dasselbe
+Repo spiegeln: [.gitlab-ci.yml](.gitlab-ci.yml) baut Image und Helm-Chart, sobald die
+CI/CD-Variablen aus ihrem Kopf gesetzt sind.
 
 ## Lizenz
 

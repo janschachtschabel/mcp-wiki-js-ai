@@ -81,7 +81,7 @@ Empfohlen: Administration → Search Engine → PostgreSQL (bessere Suche für K
 
 ### 5. Testen
 ```bash
-curl https://wiki.example.org/api/health                              # {"ok":true}
+curl https://wiki.example.org/api/health                              # {"ok":true,"store":"ok"}
 curl https://wiki.example.org/.well-known/oauth-authorization-server  # JSON
 ```
 
@@ -89,8 +89,7 @@ curl https://wiki.example.org/.well-known/oauth-authorization-server  # JSON
 
 ## Option B: Neuinstallation zusammen mit Wiki.js (Docker Compose)
 
-Voraussetzungen: Linux-Host mit Docker Compose, Ports 80/443 erreichbar, DNS-Eintrag auf den Host,
-Node ≥ 18 (nur für das Bootstrap-Skript).
+Voraussetzungen: Linux-Host mit Docker Compose, Ports 80/443 erreichbar, DNS-Eintrag auf den Host.
 
 ```bash
 git clone https://github.com/janschachtschabel/mcp-wiki-js-ai.git && cd mcp-wiki-js-ai
@@ -105,15 +104,23 @@ MCP_SESSION_SECRET=<openssl rand -base64 32>
 Starten und einrichten:
 ```bash
 docker compose up -d
-WIKI_URL=https://wiki.example.org ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='…' \
-  node deploy/scripts/bootstrap.mjs --locale=de
+ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='…' docker compose run --rm bootstrap --locale=de
 ```
-`WIKI_URL` ist die öffentliche Adresse (Pflicht auf dem Server). Das Bootstrap-Skript (idempotent)
-legt Admin-Konto, Startseite, die Anwender-Anleitung `/ki-zugang` (mit der Connector-Adresse),
-PostgreSQL-Suche und deutsche Oberfläche an. Danach Gruppe „Team" wie in Option A, Schritt 4 anlegen.
+Der Dienst `bootstrap` (Image `node:24-alpine`, startet nicht mit `up`) spricht im internen
+Docker-Netz direkt mit Wiki.js. Den Setup-Endpunkt `/finalize` beantwortet Caddy von außen immer mit
+`403` — bis zur Einrichtung kann also niemand über die Domain das erste Admin-Konto anlegen (auch der
+Browser-Wizard nicht). Die Connector-Adresse auf `/ki-zugang` kommt aus `PUBLIC_BASE_URL` bzw.
+`https://<DOMAIN>`. Das Skript (idempotent, jederzeit wiederholbar) legt Admin-Konto, Startseite, die
+Anwender-Anleitung `/ki-zugang`, PostgreSQL-Suche und deutsche Oberfläche an. Danach Gruppe „Team"
+wie in Option A, Schritt 4 anlegen.
 
 Lokal ohne Domain/TLS testen: `docker compose -f docker-compose.yml -f docker-compose.local.yml up -d`
-(erreichbar unter `http://localhost:8090`).
+(erreichbar unter `http://localhost:8090`), Einrichtung mit denselben zwei `-f`-Angaben vor
+`run --rm bootstrap`.
+
+Direkt mit Node auf dem Host (`WIKI_URL=https://… node deploy/scripts/bootstrap.mjs`) geht nur noch
+für ein **bereits eingerichtetes** Wiki (z. B. `--locale` oder `--demo` nachholen) — die Ersteinrichtung
+über die Domain scheitert an der `/finalize`-Sperre.
 
 **Betrieb**
 
@@ -128,7 +135,7 @@ Lokal ohne Domain/TLS testen: `docker compose -f docker-compose.yml -f docker-co
 
 ## Konfiguration (Umgebungsvariablen des MCP-Servers)
 
-| Variable | Zweck | Default |
+| Variable | Zweck | Default (Compose/Helm) |
 |---|---|---|
 | `WIKIJS_URL` | interne Adresse des Wiki.js (ohne `/graphql`) | – (Pflicht) |
 | `PUBLIC_BASE_URL` | öffentliche URL (OAuth-Issuer), muss zur Domain passen | – (Pflicht) |
@@ -137,10 +144,13 @@ Lokal ohne Domain/TLS testen: `docker compose -f docker-compose.yml -f docker-co
 | `WIKIJS_BLOCKED_TAGS` | Seiten mit diesen Tags sind für KI unsichtbar (leer = aus) | `kein-ki` |
 | `WIKIJS_AUDIT` | Audit-Log an/aus | `true` |
 | `WIKIJS_ALLOW_LEGACY` | zusätzlich alten Zugang per API-Key/Handle erlauben (nur für Altbestand) | `false` |
+| `MCP_ALLOWED_REDIRECT_HOSTS` | optional: Hostnamen (kommagetrennt), an die OAuth-Clients weiterleiten dürfen; Loopback immer erlaubt (Helm: `config.extraEnv`; Compose: in `.env`) | – (jeder https-Host) |
 
 Der Server prüft die Konfiguration beim Start und **startet bei Fehlern nicht** (z. B. Secret unter
 16 Zeichen, unbekannter Rollenname, ungültiges JSON in einer Variable). Die Ursache steht im Log
-(`docker compose logs mcp` bzw. `kubectl logs`) mit dem Präfix `[wikijs-mcp]`.
+(`docker compose logs mcp` bzw. `kubectl logs`) mit dem Präfix `[wikijs-mcp]`. Warnungen (z. B.
+`PUBLIC_BASE_URL` ohne `MCP_SESSION_SECRET` — OAuth ist dann aus) stehen ebenfalls dort, der Server
+startet trotzdem.
 
 ## Nutzung durch die Anwender
 
@@ -165,7 +175,8 @@ https://<domain>/mcp
 **Gut zu wissen:**
 
 - Es gibt keine separate Benutzerverwaltung für den MCP – Konto, Passwort und Rechte kommen allein aus Wiki.js.
-- Löschen und Admin-Aktionen führt die KI erst nach ausdrücklicher Bestätigung (`confirm`) aus.
+- Löschen und Admin-Aktionen liefern zuerst nur eine Vorschau; ausgeführt wird erst beim zweiten Aufruf mit `confirm`.
+  Das ist eine Bremse, keine menschliche Freigabe — die KI setzt `confirm` selbst. Was jemand darf, entscheidet Wiki.js.
 - Seiten mit dem Tag `kein-ki` sind für die KI unsichtbar und nicht änderbar.
 - Eigene KI-Verbindungen ansehen und jederzeit widerrufen: `https://<domain>/me`.
 - Rechteänderungen im Wiki (Gruppen, Page-Rules) gelten auch für die KI, da Wiki.js sie serverseitig durchsetzt.
@@ -182,6 +193,10 @@ https://<domain>/mcp
 | Sessions nach Neustart weg | `/data` ist kein persistentes Volume |
 | MCP-Container/Pod startet nicht (Exit 1) | Konfigurationsfehler – Log-Zeile `[wikijs-mcp] …` lesen (siehe oben) |
 | `413 Payload Too Large` | Anfrage an `/mcp` über 4 MB (z. B. großer Datei-Upload per KI) – Datei direkt im Wiki hochladen |
+| `docker compose` bricht mit „DOMAIN fehlt“ ab | `DOMAIN` in `.env` leer oder `.env` fehlt |
+| Login meldet „Zu viele Anmeldeversuche“ | Login-Limit: 10 Versuche pro IP bzw. 5 pro Benutzername in 15 Minuten |
+| Client-Registrierung liefert `429` | mehr als 20 Registrierungen pro IP und Stunde |
+| `/api/health` liefert `503` | OAuth-Session-Store (sqlite unter `/data`) antwortet nicht – Volume/Rechte prüfen |
 
 Vertiefung: [Integration in bestehendes Wiki](./integration-bestehendes-wiki.md) ·
 [Konzept & Rechtemodell](./konzept-ki-zugang.md) · [OAuth](./oauth.md)

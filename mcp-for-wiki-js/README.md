@@ -60,7 +60,7 @@ Deployment, Ersteinrichtung und Client-Verbindung stehen im
 Entwicklung des Servercodes.
 
 ```bash
-cd mcp-wikijs-mv
+cd mcp-for-wiki-js
 npm install
 npm run dev           # lokal als HTTP-Server: http://localhost:3030/mcp
 npm run stdio         # lokal als stdio-Server (Claude Desktop / Cursor), Creds aus .env
@@ -100,23 +100,26 @@ Im Mehrbenutzer-Modus liegen die echten Keys **als Env-Variable in Vercel** (Ver
 | Variable | Pflicht | Default | Zweck |
 |---|---|---|---|
 | `WIKIJS_URL` | nur Single-Tenant¹ | – | Basis-URL der Wiki.js-Instanz, z. B. `https://wiki.example.org` (ohne `/graphql`) |
-| `WIKIJS_TOKEN` | nur Single-Tenant¹ | – | Wiki.js-API-Key (Bearer). **Secret.** (Alias: `WIKIJS_API_KEY`) |
+| `WIKIJS_TOKEN` | nur Single-Tenant¹ | – | Wiki.js-API-Key (Bearer). **Secret.** (Alias: `WIKIJS_API_KEY`). Geht nur an `WIKIJS_URL`, nie an eine vom Aufrufer gewählte URL. Sind `WIKIJS_PROFILES` oder `WIKIJS_KEY_MAP` gesetzt, bekommen anonyme HTTP-Aufrufer ihn **nicht** |
 | `WIKIJS_PROFILES` | für Mehrbenutzer | – | JSON: geheimer Handle → `{ label, token, role, url? }`. **Secret.** Siehe [unten](#mehrbenutzer-profile--handle-generierung) |
 | `WIKIJS_PERMISSION_PRESET` | nein | `safe` | **Globale Obergrenze** (Ceiling-Rolle) — sichtbare Tools + Maximum. Rollen in `config/roles.json` |
 | `WIKIJS_POLICY` | nein | – | JSON-Feinjustierung deploy-weit pro Kategorie/Tool |
 | `WIKIJS_ROLES` | nein | – | JSON, das die **Rollen-Definitionen** zur Laufzeit überschreibt (Form wie `config/roles.json`) |
 | `WIKIJS_SHOW_BLOCKED` | nein | `false` | geblockte Tools als deaktivierte Stubs in `tools/list` zeigen |
-| `WIKIJS_ALLOWED_URLS` | nein | – | Kommaliste erlaubter Wiki-Origins für `X-Wikijs-Url`/`?url=`. Ohne Liste wird eine Client-URL nur akzeptiert, wenn kein `WIKIJS_URL` gesetzt ist (reiner Multi-Tenant-BYOK) oder sie `WIKIJS_URL` entspricht |
+| `WIKIJS_ALLOWED_URLS` | nein | – | Kommaliste erlaubter Wiki-Origins für `X-Wikijs-Url`/`?url=` (nur mit eigenem BYOK-Key; serverseitige Keys gehen immer nur an `WIKIJS_URL`). Ohne Liste wird eine Client-URL nur akzeptiert, wenn sie `WIKIJS_URL` entspricht oder kein `WIKIJS_URL` gesetzt ist (reiner Multi-Tenant-BYOK). Im reinen BYOK werden interne Ziele abgelehnt — IP-Literale (Loopback, private Netze, Link-Local, Multicast, reservierte Bereiche, auch IPv4 in IPv6 verpackt) und interne Namen (ohne Punkt, `localhost`, `*.local`, `*.internal`); vor **jedem** Request prüft der Server zusätzlich alle aufgelösten Adressen des Namens. Ein internes Wiki dort über diese Liste freigeben. Grenze: DNS-Rebinding zwischen Prüfung und Verbindungsaufbau ist nicht abgedeckt (Startwarnung „reines BYOK“) |
 | `WIKIJS_ALLOW_LEGACY` | nein | `false` | Nur mit OAuth relevant: `true` öffnet zusätzlich den Legacy-Weg (BYOK-Key/Handle per Header oder URL). Standardmäßig aus — der Legacy-Handler hat keine eigene Anmeldung |
-| `WIKIJS_KEY_MAP` | nein | – | Legacy-Map Handle→Token (nur Token; URL/Policy aus Env). Von `WIKIJS_PROFILES` abgelöst |
-| `WIKIJS_TIMEOUT_MS` | nein | `30000` | Timeout pro GraphQL-Request (AbortController) |
+| `WIKIJS_KEY_MAP` | nein | – | Legacy-Map Handle→Token (nur Token; Policy aus Env). Die Keys gehen nur an `WIKIJS_URL` (ohne `WIKIJS_URL` sind die Aliase unbrauchbar). Von `WIKIJS_PROFILES` abgelöst |
+| `WIKIJS_TIMEOUT_MS` | nein | `30000` | Timeout pro GraphQL-Request inkl. Lesen der Antwort (AbortController) |
 | `WIKIJS_MAX_CONCURRENCY` | nein | `8` | Max. parallele Upstream-Requests (Overload-Schutz; queued/sheddet bei Überlast) |
-| `WIKIJS_RETRIES` | nein | `2` | Retry nur bei Connection-Fehlern (sicher auch für Mutationen) |
+| `WIKIJS_RETRIES` | nein | `2` | Wiederholungen bei Verbindungsfehlern: Lesezugriffe immer, Mutationen nur, wenn der Request sicher nicht gesendet wurde. `0` = aus |
+| `WIKIJS_MAX_RESPONSE_BYTES` | nein | `16777216` (16 MiB) | Obergrenze für eine GraphQL-Antwort (min. `1024`); größere Antworten werden abgebrochen |
 | `WIKIJS_AUDIT` | nein | `true` | Audit-Log für write/delete/admin (`false` = aus; nie Secrets) |
 | `WIKIJS_MCP_VERBOSE` | nein | `false` | MCP-Request-Logging (`true`) |
 | `PUBLIC_BASE_URL` | nein | aus Headern | überschreibt die im Discovery-Dokument beworbene URL |
 
-¹ Im Mehrbenutzer-Modus liefern die `WIKIJS_PROFILES`-Einträge URL+Token; `WIKIJS_URL`/`WIKIJS_TOKEN` sind dann nur Fallback. Auf der **stdio**-Variante (lokal, ein Nutzer) sind `WIKIJS_URL` + `WIKIJS_TOKEN` Pflicht.
+¹ Im Mehrbenutzer-Modus liefern die `WIKIJS_PROFILES`-Einträge den Token; die URL kommt aus `WIKIJS_URL` (oder dem optionalen `url` im Profil). `WIKIJS_TOKEN` ist dann **kein** Fallback für Aufrufer ohne Handle. Auf der **stdio**-Variante (lokal, ein Nutzer) sind `WIKIJS_URL` + `WIKIJS_TOKEN` Pflicht; stdio nutzt immer `WIKIJS_TOKEN`.
+
+Ungültige Werte für `WIKIJS_TIMEOUT_MS`, `WIKIJS_MAX_CONCURRENCY`, `WIKIJS_RETRIES` und `WIKIJS_MAX_RESPONSE_BYTES` (keine ganze Zahl oder unter dem Minimum) fallen auf den Default zurück.
 
 ### Env in Vercel setzen
 **Dashboard:** Projekt → **Settings → Environment Variables** → pro Variable **Name** + **Value** → Environment **Production** (gern auch **Preview**) anhaken → **Save**.
@@ -132,6 +135,7 @@ vercel env add WIKIJS_PERMISSION_PRESET production
 ### Sicherheit
 - `WIKIJS_TOKEN`, `WIKIJS_PROFILES`, `WIKIJS_KEY_MAP` sind **Secrets** — als normale Env-Variable eintragen (Vercel verschlüsselt at-rest), **nie** ins Repo committen (`.env` ist in `.gitignore`).
 - **Scoped Keys** verwenden (read-only/gruppenbeschränkt) + sinnvolles `WIKIJS_PERMISSION_PRESET` → Defense-in-Depth.
+- **Reines BYOK** (weder `WIKIJS_URL` noch `WIKIJS_ALLOWED_URLS`, kein OAuth): Aufrufer bestimmen das Ziel-Wiki. Interne Ziele werden abgelehnt, die aufgelösten Adressen vor jedem Request geprüft; ein Name, der genau zwischen Prüfung und Verbindungsaufbau umschwenkt (DNS-Rebinding), kommt aber noch durch. Der Server warnt beim Start. Für eine harte Grenze `WIKIJS_URL` oder `WIKIJS_ALLOWED_URLS` setzen.
 - `maxDuration` der MCP-Function ist auf **60 s** gesetzt (läuft auf jedem Plan inkl. Hobby; in `app/[transport]/route.ts` erhöhbar auf Pro).
 
 ---
@@ -211,7 +215,7 @@ Eintrag aus `WIKIJS_PROFILES` entfernen → **Redeploy**. (Der Wiki.js-Key selbs
 | **Cursor** | ✅ | **Header** |
 | **Claude Desktop** (lokal) | – | **stdio** mit Env (oder Web-Connector) |
 
-> Bei `WIKIJS_PROFILES` schickt der Client **nur den Handle** als Token — keine URL nötig (die steckt im Profil). Ohne Profile (direktes BYOK) zusätzlich die Instanz-URL mitgeben (`?url=…` bzw. `X-Wikijs-Url`) — ist auf dem Server `WIKIJS_URL` gesetzt, muss die URL in `WIKIJS_ALLOWED_URLS` stehen.
+> Bei `WIKIJS_PROFILES` schickt der Client **nur den Handle** als Token — keine URL nötig (die steckt im Profil). Ohne Profile (direktes BYOK) zusätzlich die Instanz-URL mitgeben (`?url=…` bzw. `X-Wikijs-Url`) — ist auf dem Server `WIKIJS_URL` gesetzt, muss die URL ihr entsprechen oder in `WIKIJS_ALLOWED_URLS` stehen. Ohne beides (reiner BYOK) werden interne Adressen und Namen abgelehnt (Loopback, private Netze, `localhost`, `*.internal`, Namen ohne Punkt) — auch wenn erst die DNS-Auflösung eines öffentlich aussehenden Namens auf sie zeigt.
 
 ### ChatGPT (Developer Mode → Custom Connector)
 Voraussetzung: Plan **Plus/Pro/Business/Enterprise/Edu**; Server über **HTTPS** erreichbar (Vercel ✓).
@@ -290,6 +294,8 @@ Jedes Tool hat eine **Kategorie**; eine **Rolle** bildet jede Kategorie (und opt
 
 **Kategorien:** `read`, `write`, `delete`, `manage_users`, `manage_groups`, `manage_system`, `manage_auth`.
 
+> `confirm` ist eine **Bremse, keine menschliche Freigabe**: das Modell setzt `confirm: true` selbst. Alle Tools haben das Feld, auch Lese-Tools (`read: confirm` funktioniert). Die Vorschau schwärzt Passwörter/Secrets/Tokens und kürzt `contentBase64`.
+
 ### Rollen-Leiter (`config/roles.json`)
 Rollen sind in [`config/roles.json`](./config/roles.json) definiert — frei editierbar, mit `extends` (Vererbung) und **per-Tool**-Overrides. Default-Leiter:
 
@@ -310,7 +316,7 @@ Eigene Rolle anlegen: Eintrag in `config/roles.json` (oder `extends` einer beste
 ### Obergrenze, Zuweisung & Verschärfung
 - **Globale Obergrenze** (`WIKIJS_PERMISSION_PRESET`): die **maximale** Capability + der **sichtbare** Tool-Satz. Auf deine **höchste** verwendete Rolle setzen.
 - **Pro Person** (`role` im `WIKIJS_PROFILES`-Eintrag): die zugewiesene Rolle — wirkt **innerhalb** der Obergrenze.
-- **Pro Request** (Client): Header `X-Wikijs-Preset` / `X-Wikijs-Policy` bzw. URL `&preset=` / `&policy=` — nur **verschärfend**.
+- **Pro Request** (Client): Header `X-Wikijs-Preset` / `X-Wikijs-Policy` bzw. URL `&preset=` / `&policy=` — nur **verschärfend**. Beide wirken auch zusammen und auch in OAuth-Sitzungen.
 
 > **Sicherheitsmodell:** Rolle & Request-Overlay können nur **bis zur Obergrenze** reichen und nur **verschärfen**. Die **Sichtbarkeit** in `tools/list` bestimmt die Obergrenze (mcp-handler registriert global). Echte Rechte = Schnittmenge aus Wiki.js-Key und Rolle.
 
@@ -322,7 +328,7 @@ Eigene Rolle anlegen: Eintrag in `config/roles.json` (oder `extends` einer beste
 
 **Pages / Tags** `wiki_pages_search` (R) · `wiki_page_get` (R) · `wiki_pages_list` (R) · `wiki_pages_tree` (R) · `wiki_page_history` (R) · `wiki_page_version` (R) · `wiki_pages_links` (R) · `wiki_tags_list` (R) · `wiki_tags_search` (R) · `wiki_page_create` (W) · `wiki_page_update` (W, full **oder** `edits=[{find,replace}]`) · `wiki_page_move` (W) · `wiki_page_render` (W) · `wiki_page_restore` (W) · `wiki_page_convert` (W) · `wiki_tag_update` (W) · `wiki_page_delete` (D) · `wiki_pages_delete_batch` (D) · `wiki_pages_delete_tree` (D) · `wiki_tag_delete` (D) · `wiki_pages_purge_history` (D) · `wiki_pages_flush_cache` (S) · `wiki_pages_rebuild_tree` (S) · `wiki_pages_migrate_locale` (S)
 
-**Assets** `wiki_assets_list` (R) · `wiki_asset_folders` (R) · `wiki_asset_create_folder` (W) · `wiki_asset_rename` (W) · `wiki_asset_delete` (D) · `wiki_assets_flush_temp` (S)
+**Assets** `wiki_assets_list` (R) · `wiki_asset_folders` (R) · `wiki_asset_download` (R) · `wiki_asset_upload` (W) · `wiki_asset_create_folder` (W) · `wiki_asset_rename` (W) · `wiki_asset_delete` (D) · `wiki_assets_flush_temp` (S)
 
 **Comments** `wiki_comments_list` (R) · `wiki_comment_get` (R) · `wiki_comment_create` (W) · `wiki_comment_update` (W) · `wiki_comment_delete` (D)
 
@@ -334,6 +340,12 @@ Eigene Rolle anlegen: Eintrag in `config/roles.json` (oder `extends` einer beste
 
 **System / Auth / Escape-Hatch** `wiki_connection_status` (R) · `wiki_site_info` (R) · `wiki_site_config` (S) · `wiki_system_info` (S) · `wiki_system_flags` (S) · `wiki_apikeys_list` (A) · `wiki_apikey_create` (A) · `wiki_apikey_revoke` (A) · `wiki_auth_strategies` (A) · `wiki_auth_set_api_state` (A) · `wiki_graphql` (S, beliebige GraphQL-Operation)
 
+**Lese-Tools in `manage_*`** (`wiki_users_list`, `_search`, `wiki_user_get`, `wiki_users_last_logins`, `wiki_groups_list`, `wiki_group_get`, `wiki_site_config`, `wiki_system_info`, `wiki_system_flags`, `wiki_apikeys_list`, `wiki_auth_strategies`) tragen `readOnlyHint` und erzeugen keinen Audit-Eintrag; ihr Policy-Modus bleibt der ihrer Kategorie.
+
+**Parameter mit eigenem Gate:** `scriptJs`/`scriptCss` bei `wiki_page_create`/`_update` brauchen den Modus von `manage_system` (Policy-Schlüssel `wiki_page_scripts`, per Tool-Override steuerbar): `block` → Fehler, `confirm` → Vorschau. `groups` bei `wiki_user_create`/`_update` braucht den Modus von `wiki_group_assign_user`.
+
+**Massenlöschen** (`wiki_pages_delete_batch`, `wiki_pages_delete_tree`): `pathPattern` mit `*`/`?` innerhalb eines Pfadsegments, `**` über beliebige Tiefe (`drafts/*` = direkte Kinder, `drafts/**` = alles darunter). `locale` (Default `en`) gilt für `paths`, `pathPattern` und den Tree; `ids` gelten locale-übergreifend. Mehr als 50 Ziele nur mit `force: true`. Die `confirm`-Vorschau zeigt die tatsächlich betroffenen Seiten (Anzahl + bis zu 100 Pfade). Ergebnis-Pfade als `locale/pfad`; nicht gefundene `ids`/`paths` stehen in `notFound`.
+
 Mehr zu den Admin-Domänen (Theming/Storage/Mail/Search/…): [docs/admin-extension.md](./docs/admin-extension.md).
 
 ---
@@ -343,19 +355,25 @@ Mehr zu den Admin-Domänen (Theming/Storage/Mail/Search/…): [docs/admin-extens
 ```
 app/[transport]/route.ts           Streamable-HTTP-Endpoint /mcp via mcp-handler (+ URL-Param→Header)
 app/.well-known/mcp.json/route.ts  Discovery-Dokument
+app/oauth/*, app/me/*, app/api/health  OAuth-Endpunkte, Selbstverwaltung, Health (siehe docs/oauth.md)
 app/page.tsx                       Landing-Page = Verbindungsanleitung (echte Domain eingesetzt)
 bin/stdio.ts                       stdio-Entry für Desktop-Clients
 lib/
   meta.ts          Servername, Version, Instructions
-  context.ts       Pro-Request-Auth (Profile/Header/URL-Param/Env) + Policy-Overlays
+  context.ts       Pro-Request-Kontext (OAuth-Session oder Legacy-Credential) + Policy-Overlays
+  credentials.ts   Legacy-Credential-Auflösung (Profile/KEY_MAP/BYOK/Env)
+  caller-url.ts    Prüfung der Aufrufer-URL (Allowlist, interne Ziele im BYOK)
+  config-check.ts  Startprüfung der Env
+  guardrails.ts    Tag-Sperre (WIKIJS_BLOCKED_TAGS)
   permissions.ts   Policy-Engine (Presets, allow/confirm/block, gestapelte tighten-only Overlays)
-  register.ts      Zentrale Tool-Registrierung + Policy-Wrapper + Confirm-Gate
-  wikijs/client.ts fetch-basierter GraphQL-Client (Timeout, ohne Extra-Dependency)
+  register.ts      Zentrale Tool-Registrierung + Policy-Wrapper + Confirm-Gate + Audit
+  oauth/           OAuth-2.1-Layer (Store, Tokens, Login, Rate-Limits)
+  wikijs/client.ts fetch-basierter GraphQL-Client (Timeout, Retry, Antwort-Limit, ohne Extra-Dependency)
   wikijs/format.ts Ergebnis-/Fehler-Helfer, responseResult-Prüfung, Truncation
-  tools/*.ts       Tool-Definitionen je Domäne (deklarativ: Name, Kategorie, Zod-Schema, Handler)
+  tools/           Tool-Definitionen je Domäne (deklarativ: Name, Kategorie, Zod-Schema, Handler)
 config/roles.json    Rollen-Definitionen (editierbar; extends + per-Tool; Built-ins als Fallback)
 scripts/           gen-profile.mjs (Handle-Generator) · show-roles.ts · smoke*.mjs
-                   test-{policy,nav,semaphore,context}.ts (offline) · test-local-live.ts (live)
+                   test-*.ts (offline, `npm test`) · test-local-live.ts (live) · test-oauth-e2e.mjs (E2E)
 ```
 
 **Stack:** Next.js (App Router) · `mcp-handler` 2 · `@modelcontextprotocol/server` (MCP SDK v2) · `zod` 4. Stateless → Vercel-nativ.
@@ -365,16 +383,18 @@ scripts/           gen-profile.mjs (Handle-Generator) · show-roles.ts · smoke*
 ## Robustheit
 
 - **Auto-Preserve bei `wiki_page_update`** — aktuelle Seite wird vor dem Update geholt; nicht angegebene Felder (content, tags, …) bleiben erhalten (verhindert die Wiki.js-Falle, bei der ein Metadaten-Update den Inhalt löscht).
-- **Request-Timeout** — `WIKIJS_TIMEOUT_MS` (Default 30 s) per `AbortController`, kein hängender Serverless-Aufruf.
+- **Request-Timeout** — `WIKIJS_TIMEOUT_MS` (Default 30 s) per `AbortController`, deckt auch das Lesen der Antwort ab; kein hängender Serverless-Aufruf.
+- **Antwort-Limit** — `WIKIJS_MAX_RESPONSE_BYTES` (Default 16 MiB): größere GraphQL-Antworten werden abgebrochen statt gepuffert.
 - **Überlast-Schutz** — `WIKIJS_MAX_CONCURRENCY` (Default 8) cappt parallele Upstream-Requests; Überzahl wird kurz gequeued, bei anhaltender Last mit „busy" abgewiesen (Load-Shedding) statt in einen DB-Pool-Hang zu laufen.
-- **Retry bei Connection-Fehlern** — `WIKIJS_RETRIES` (Default 2): nur DNS/TCP/TLS-Fehler werden mit Backoff wiederholt (sicher auch für Mutationen, da der Request den Server nie erreichte) — nicht bei Timeouts/GraphQL-Fehlern.
+- **Retry bei Verbindungsfehlern** — `WIKIJS_RETRIES` (Default 2, `0` = aus) mit Backoff: Lesezugriffe bei jedem Verbindungsfehler, Mutationen nur, wenn der Request sicher nicht gesendet wurde (z. B. DNS-Fehler, Verbindung abgelehnt). Nie bei Timeouts, GraphQL-Fehlern oder HTTP-Status.
+- **Keine Redirects** — eine Weiterleitung auf `/graphql` bzw. den Upload-Endpunkt `/u` gilt als Fehler.
 - **Navigations-Guard** — `wiki_navigation_update_tree` verweigert destruktive Voll-Ersetzungen ohne `force` und liefert stets den `previous`-Snapshot als Rollback.
 - **Escape-Hatch abgesichert** — `wiki_graphql` gibt rohe Mutationen erst als Dry-Run zurück (echte Ausführung mit `confirm:true`).
-- **Audit-Log** — write/delete/admin-Aktionen strukturiert geloggt (Tool, Kategorie, Profil-Label, Outcome, ms; `WIKIJS_AUDIT`; nie Secrets).
+- **Audit-Log** — write/delete/admin-Aktionen strukturiert geloggt (Tool, Kategorie, Profil-Label, Outcome, ms; `WIKIJS_AUDIT`; nie Secrets). Lese-Tools (auch die lesenden `manage_*`-Tools) und Dry-Run-Vorschauen werden nicht geloggt; Ablehnungen durch Policy oder Tag-Sperre erscheinen als `blocked`.
 - **Strukturierte Ausgabe** — Tools liefern `structuredContent` zusätzlich zum Text (für MCP-Clients mit strukturiertem Tool-Output).
-- **Content-Truncation** — `wiki_page_get` kürzt sehr lange Inhalte (Default 100 000 Zeichen) mit Hinweis; `maxContentChars: 0` = voll.
-- **ID-oder-Pfad** — `wiki_page_get` / `_delete` / `_move` akzeptieren `id` **oder** `path`+`locale`.
-- **Graceful Shutdown** (stdio): SIGINT/SIGTERM, EPIPE ignoriert.
+- **Content-Truncation** — `wiki_page_get` kürzt sehr lange Inhalte (Default 100 000 Zeichen) mit Hinweis; `maxContentChars: 0` = voll. `wiki_page_create`/`_update` lehnen Inhalt ab, der diesen Kürzungshinweis enthält (sonst würde die Seite abgeschnitten).
+- **ID-oder-Pfad** — `wiki_page_get` / `_delete` / `_move` akzeptieren `id` **oder** `path`+`locale`. `wiki_page_get` meldet „nicht gefunden" als Fehler. `wiki_page_move` ohne `destinationLocale` behält die Locale der Quellseite.
+- **Graceful Shutdown** (stdio): SIGINT/SIGTERM, EPIPE ignoriert; jede andere unbehandelte Ausnahme beendet den Prozess mit Exit 1 (der Client sieht den Absturz).
 
 ---
 
@@ -382,7 +402,7 @@ scripts/           gen-profile.mjs (Handle-Generator) · show-roles.ts · smoke*
 
 ```bash
 npm run typecheck                  # TypeScript ohne Build
-npm test                           # Offline-Suite: 14 Suiten (policy/config/nav/semaphore/context/oauth/guardrails/routing/format/pages/route/limits/escalation/gate), 324 Assertions
+npm test                           # Offline-Suite: 19 Suiten (policy/config/nav/semaphore/context/oauth/store/oauth-routes/oauth-browser/guardrails/routing/format/pages/route/limits/escalation/gate/client/stdio), 775 Assertions
 npm run build                      # Production-Build (Next-standalone)
 
 # Live-Integrationstest: ALLE Tool-Handler gegen ein WEGWERF-/leeres Wiki.js
@@ -390,7 +410,7 @@ WIKIJS_URL=http://localhost:3000 WIKIJS_TOKEN=<key-oder-admin-jwt> npm run test:
 
 # OAuth-E2E gegen die laufende Appliance (Login → Code → Token → Tools →
 # Guardrails → /me inkl. Admin-Rendering-Gate). Braucht einen gestarteten
-# Stack + `bootstrap.mjs --demo` (siehe Skript-Kopf). 36 Assertions.
+# Stack + `docker compose run --rm bootstrap --demo` (siehe Skript-Kopf). 38 Assertions.
 npm run test:e2e                   # Basis/Creds via E2E_BASE / E2E_*_USER / E2E_*_PASS
 
 # E2E gegen ein Deployment (HTTP-Transport):
@@ -399,13 +419,13 @@ node scripts/smoke-urlauth.mjs  <url>   # URL-Parameter-Auth (?url=&token=&prese
 node scripts/probe-deploy.mjs   <url>   # Deploy ohne Creds prüfen (Env-Status)
 ```
 
-Vollständiges Per-Tool-Live-Ergebnis (alle 70 Tools): **[docs/TESTPROTOKOLL.md](./docs/TESTPROTOKOLL.md)**. Wegwerf-Wiki dafür: `docker compose -f docker-compose.test.yml up -d` (Setup-Automatisierung siehe Protokoll). Offline-Suite (324 Assertions) + OAuth-E2E (36) laufen in der CI: `.github/workflows/ci.yml`.
+Vollständiges Per-Tool-Live-Ergebnis (alle 70 Tools): **[docs/TESTPROTOKOLL.md](./docs/TESTPROTOKOLL.md)**. Wegwerf-Wiki dafür: `docker compose -f docker-compose.test.yml up -d` (Setup-Automatisierung siehe Protokoll). In der CI (`.github/workflows/ci.yml`) laufen Typecheck, Offline-Suite (775 Assertions) und Build. OAuth-E2E (38) und Live-Tool-Suite (79 Tool-Aufrufe) brauchen einen laufenden Stack und laufen lokal (`docker-compose.yml` + `docker-compose.local.yml`, siehe Skriptköpfe).
 
 ---
 
 ## Grenzen
 
-- **Datei-Upload** läuft in Wiki.js über einen Multipart-REST-Endpoint (`/u`, nicht GraphQL) — abgedeckt durch `wiki_asset_upload` (Base64-Eingabe); ebenso Ordner anlegen, Umbenennen und Löschen.
+- **Datei-Upload** läuft in Wiki.js über einen Multipart-REST-Endpoint (`/u`, nicht GraphQL) — abgedeckt durch `wiki_asset_upload` (Base64-Eingabe, streng geprüft; höchstens 4 MB Base64 = Body-Limit von `/mcp`, also rund 3 MB Datei); ebenso Ordner anlegen, Umbenennen und Löschen.
 - Manche Operationen verlangen in Wiki.js erhöhte Scopes (`manage:system`, `write:pages`, …). Fehlt dem Key die Berechtigung, kommt ein Wiki.js-Autorisierungsfehler — unabhängig von der hiesigen Policy.
 - `wiki_page_convert` md→html wird von Wiki.js abgelehnt (Server-Limit, nicht alle Editor-Kombinationen sind konvertierbar); das Tool meldet die Server-Antwort korrekt.
 

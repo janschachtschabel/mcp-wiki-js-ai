@@ -45,7 +45,7 @@ Full write-up: [docs/concept-ai-access.en.md](docs/concept-ai-access.en.md)
 npm install
 npm run dev        # HTTP dev server on :3030
 npm run stdio      # stdio transport (WIKIJS_URL/WIKIJS_TOKEN from env)
-npm test           # 108 offline assertions across 6 suites
+npm test           # 775 offline assertions across 19 suites
 npm run typecheck && npm run build
 ```
 
@@ -57,18 +57,28 @@ see the repo-root [README.en.md](../README.en.md) and `docker-compose.yml`.
 - **Confirm gates:** destructive/admin tools called without `confirm: true`
   return a dry-run preview instead of executing ("⚠️ Confirmation required …
   This was a DRY RUN"). The AI relays that question in the chat and repeats
-  the call with `confirm: true` after your go-ahead. A two-step brake —
-  hard permissions always come from Wiki.js itself.
+  the call with `confirm: true` after your go-ahead. A two-step brake, not
+  a human approval — the model sets `confirm` itself; hard permissions
+  always come from Wiki.js. Every tool accepts `confirm` (reads too); the
+  preview redacts passwords/secrets/tokens and shortens `contentBase64`.
 - **Tag guardrail:** pages tagged with any `WIKIJS_BLOCKED_TAGS` entry
   (e.g. `kein-ki`) are invisible and untouchable for agents — filtered from
   search/list/read (id- **and** path-based, robust against stale search
-  indexes), refused for update/move/delete, and the guardrail tags
-  themselves cannot be renamed/deleted by agents. Tags are set as normal
+  indexes), refused for render/update/move/delete, removed from tree/links,
+  and comments are checked for list/create; the guardrail tags themselves
+  cannot be renamed/deleted by agents. Limit: `wiki_comment_get`/`_update`/
+  `_delete` address a comment by its own id and stay unchecked (Wiki.js
+  returns no page id there). Tags are set as normal
   page tags in the wiki editor (page properties → tags).
+- **Page scripts:** `scriptJs`/`scriptCss` on page create/update need the
+  `manage_system` mode (policy key `wiki_page_scripts`).
 - **Audit log:** write/delete/admin actions are logged with the person's
-  label (and persisted when OAuth mode is on).
-- **Robustness:** upstream concurrency gate, request timeouts,
-  connection-only retries, content truncation.
+  label (and persisted when OAuth mode is on); read-only `manage_*` tools
+  are not logged, policy and tag-guardrail refusals appear as `blocked`.
+- **Robustness:** upstream concurrency gate, request timeouts, response size
+  cap (`WIKIJS_MAX_RESPONSE_BYTES`, default 16 MiB), retries on connection
+  failures (mutations only when the request was certainly not sent), content
+  truncation; bulk deletes above 50 pages need `force: true`.
 
 ## Environment (excerpt)
 
@@ -81,6 +91,7 @@ see the repo-root [README.en.md](../README.en.md) and `docker-compose.yml`.
 | `WIKIJS_PERMISSION_PRESET` | Global tool-visibility ceiling — keep `full` in OAuth mode |
 | `WIKIJS_BLOCKED_TAGS` | Comma-separated no-AI tags (empty = off) |
 | `MCP_DATA_DIR` | sqlite session store location (default `./data`, Docker `/data`) |
+| `MCP_ALLOWED_REDIRECT_HOSTS` | Optional comma-separated host names OAuth clients may redirect to (loopback always allowed; unset = any https host) |
 
 Complete reference incl. legacy multi-user handles (`WIKIJS_PROFILES`):
 [.env.example](.env.example) and the German [README.md](README.md).
@@ -88,12 +99,13 @@ Complete reference incl. legacy multi-user handles (`WIKIJS_PROFILES`):
 ## Tests
 
 ```bash
-npm test          # policy, navigation guard, semaphore, context, oauth, guardrails
+npm test          # 19 offline suites: policy, config, context, oauth + store + routes, gate, client, stdio, …
 npm run test:live # all tools against a throwaway wiki (docker-compose.test.yml)
 ```
 
-CI (GitHub + GitLab) runs typecheck, the offline suites and the production
-build on every push.
+CI runs typecheck, the offline suites and the production build — on GitHub for
+pushes to main, pull requests and release tags, on GitLab for main/develop. The
+OAuth E2E and live tool suites need a running stack and are run locally.
 
 ## License
 
