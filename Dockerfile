@@ -31,6 +31,9 @@ WORKDIR /app
 RUN mkdir -p /data && chown node:node /data
 COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
+# First-run setup script for Wiki.js (dependency-free Node). Lets self-contained
+# compose files (deploy/standalone) run the bootstrap without repository files.
+COPY --chown=node:node deploy/scripts/bootstrap.mjs ./bootstrap.mjs
 USER node
 EXPOSE 3000
 VOLUME /data

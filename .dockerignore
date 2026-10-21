@@ -3,6 +3,8 @@
 wiki/
 mcp2/
 deploy/
+# Exception: the bootstrap script ships in the image (self-contained compose variants run it from there).
+!deploy/scripts/bootstrap.mjs
 .github/
 .git/
 **/.git

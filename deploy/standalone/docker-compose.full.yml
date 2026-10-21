@@ -1,0 +1,227 @@
+# =============================================================================
+# Wiki.js + MCP-Server — eigenständiger Komplett-Stack (ohne Repo-Checkout)
+# =============================================================================
+# Für Umgebungen, die NUR diese eine Datei bekommen: "Compose from URL" in
+# Docker-Panels von Hostern oder Portainer-Stacks, oder ein vServer
+# mit nichts als dieser Datei. Nichts wird gebaut, keine Datei aus dem Repo
+# eingebunden:
+#   - MCP-Server als fertiges Image aus GHCR (öffentlich, ohne Login)
+#   - Caddy-Konfiguration steht unten im Dienst `caddy` (CADDYFILE)
+#   - Wiki.js wird nur über Umgebungsvariablen konfiguriert
+#   - Die Ersteinrichtung läuft beim ersten Start automatisch (Dienst
+#     `bootstrap`), sobald ADMIN_EMAIL und ADMIN_PASSWORD gesetzt sind
+#
+# Pflicht-Variablen (im Panel als Umgebungsvariablen oder in einer .env):
+#   DOMAIN             öffentliche Domain, z. B. wiki.example.org
+#   POSTGRES_PASSWORD  z. B. `openssl rand -base64 24`
+#   MCP_SESSION_SECRET mind. 16 Zeichen, z. B. `openssl rand -base64 32`
+# Für die Ersteinrichtung (danach ADMIN_PASSWORD wieder entfernen):
+#   ADMIN_EMAIL, ADMIN_PASSWORD
+#
+# Voraussetzungen: DNS-Eintrag der Domain zeigt auf den Server; Ports 80 und
+# 443 sind frei (Caddy holt das TLS-Zertifikat automatisch).
+#
+# Mit Repo-Checkout ist ../../docker-compose.yml die Variante zum Selbstbauen
+# (gleiche Dienste, Konfiguration aus deploy/). Änderungen am Routing dort
+# (deploy/caddy/Caddyfile) hier in CADDYFILE nachziehen.
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  db:
+    <<: *hardening
+    image: postgres:15-alpine
+    restart: unless-stopped
+    mem_limit: 512m
+    environment:
+      POSTGRES_DB: wiki
+      POSTGRES_USER: wikijs
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD fehlt}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks: [db]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wikijs -d wiki"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  wiki:
+    <<: *hardening
+    image: requarks/wiki:2
+    restart: unless-stopped
+    mem_limit: 1g
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_TYPE: postgres
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: wikijs
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: wiki
+    # Ohne eigene config.yml gilt der DB-Pool des Images (max. 10 Verbindungen);
+    # WIKIJS_MAX_CONCURRENCY beim MCP ist deshalb unten niedriger gesetzt.
+    networks: [default, db]
+
+  mcp:
+    <<: *hardening
+    image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
+    restart: unless-stopped
+    mem_limit: 512m
+    environment:
+      WIKIJS_URL: http://wiki:3000
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN:?DOMAIN fehlt}}
+      MCP_SESSION_SECRET: ${MCP_SESSION_SECRET:?MCP_SESSION_SECRET fehlt}
+      MCP_DATA_DIR: /data
+      WIKIJS_PERMISSION_PRESET: ${WIKIJS_PERMISSION_PRESET:-full}
+      WIKIJS_OAUTH_ROLE: ${WIKIJS_OAUTH_ROLE:-wiki}
+      WIKIJS_BLOCKED_TAGS: ${WIKIJS_BLOCKED_TAGS:-kein-ki}
+      WIKIJS_AUDIT: ${WIKIJS_AUDIT:-true}
+      WIKIJS_MAX_CONCURRENCY: ${WIKIJS_MAX_CONCURRENCY:-6}
+      MCP_ALLOWED_REDIRECT_HOSTS: ${MCP_ALLOWED_REDIRECT_HOSTS:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - mcp-data:/data
+    depends_on:
+      - wiki
+
+  # Ersteinrichtung bei jedem Start, idempotent (bereits erledigte Schritte
+  # werden übersprungen). Ohne ADMIN_EMAIL/ADMIN_PASSWORD beendet sie sich
+  # sofort. Läuft im internen Netz — /finalize ist über Caddy gesperrt.
+  bootstrap:
+    <<: *hardening
+    image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
+    restart: "no"
+    depends_on:
+      - wiki
+    environment:
+      WIKI_URL: http://wiki:3000
+      PUBLIC_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN:?DOMAIN fehlt}}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      DEMO_EMAIL: ${DEMO_EMAIL:-}
+      DEMO_NAME: ${DEMO_NAME:-}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+      BOOTSTRAP_ARGS: ${BOOTSTRAP_ARGS:---locale=de}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -z "$$ADMIN_EMAIL" ] || [ -z "$$ADMIN_PASSWORD" ]; then
+          echo "bootstrap: ADMIN_EMAIL/ADMIN_PASSWORD nicht gesetzt — übersprungen."
+          exit 0
+        fi
+        exec node /app/bootstrap.mjs $$BOOTSTRAP_ARGS
+
+  db-backup:
+    <<: *hardening
+    image: postgres:15-alpine
+    restart: unless-stopped
+    mem_limit: 256m
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+    volumes:
+      - db-backups:/backups
+      - mcp-data:/mcp-data
+    networks: [default, db]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache sqlite >/dev/null 2>&1 || true
+        while true; do
+          ts=$$(date +%Y%m%d-%H%M%S)
+          if pg_dump -h db -U wikijs -d wiki -F c -f "/backups/wiki-$$ts.dump"; then
+            echo "backup ok: wiki-$$ts.dump"
+            ls -1t /backups/wiki-*.dump 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
+          else
+            echo "backup FAILED (postgres) at $$ts" >&2
+          fi
+          if [ -f /mcp-data/mcp.sqlite ]; then
+            if sqlite3 /mcp-data/mcp.sqlite ".backup '/backups/mcp-$$ts.sqlite'"; then
+              echo "backup ok: mcp-$$ts.sqlite"
+              ls -1t /backups/mcp-*.sqlite 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
+            else
+              echo "backup FAILED (mcp sqlite) at $$ts" >&2
+            fi
+          fi
+          sleep "$$BACKUP_INTERVAL_SECONDS"
+        done
+
+  caddy:
+    <<: *hardening
+    image: caddy:2-alpine
+    restart: unless-stopped
+    mem_limit: 128m
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN fehlt}
+      # Inhalt = deploy/caddy/Caddyfile ($$ steht für ein wörtliches $).
+      CADDYFILE: |
+        {$$DOMAIN} {
+        	@hsts {
+        		protocol https
+        		not host localhost
+        	}
+        	header @hsts ?Strict-Transport-Security "max-age=31536000"
+
+        	@wikiSetup path /finalize /finalize/*
+        	handle @wikiSetup {
+        		respond "Setup only via the bootstrap service" 403
+        	}
+
+        	@mcp {
+        		path /mcp /mcp/* /oauth/* /me /me/* /api/health
+        		path /.well-known/oauth-authorization-server* /.well-known/oauth-protected-resource*
+        		path /.well-known/mcp.json /_next/*
+        	}
+        	handle @mcp {
+        		request_body {
+        			max_size 8MB
+        		}
+        		reverse_proxy mcp:3000
+        	}
+
+        	handle {
+        		header ?X-Content-Type-Options nosniff
+        		header ?Referrer-Policy strict-origin-when-cross-origin
+        		header ?X-Frame-Options SAMEORIGIN
+        		reverse_proxy wiki:3000
+        	}
+        }
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        printf '%s\n' "$$CADDYFILE" > /etc/caddy/Caddyfile
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - wiki
+      - mcp
+
+networks:
+  db:
+    internal: true
+
+volumes:
+  db-data:
+  db-backups:
+  mcp-data:
+  caddy-data:
+  caddy-config:

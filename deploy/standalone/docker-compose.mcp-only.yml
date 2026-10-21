@@ -1,0 +1,63 @@
+# =============================================================================
+# MCP-Server für ein BESTEHENDES Wiki.js — eigenständig (ohne Repo-Checkout)
+# =============================================================================
+# Für einen vServer, auf dem Wiki.js schon läuft (mit eigenem Reverse-Proxy).
+# Nur der MCP-Server kommt dazu; das Wiki bleibt unverändert. Funktioniert
+# auch als "Compose from URL" in Docker-Panels (nur diese Datei wird gebraucht).
+#
+# Pflicht-Variablen:
+#   WIKIJS_URL          wie der MCP-Server das Wiki erreicht (ohne /graphql):
+#                         - Wiki-Domain:        https://wiki.example.org
+#                         - Wiki auf dem Host:  http://host.docker.internal:3000
+#                       (internes Zertifikat? NODE_EXTRA_CA_CERTS, siehe README)
+#   PUBLIC_BASE_URL     öffentliche Adresse = Domain des Wikis,
+#                       z. B. https://wiki.example.org
+#   MCP_SESSION_SECRET  mind. 16 Zeichen, z. B. `openssl rand -base64 32`
+#
+# Danach im VORHANDENEN Reverse-Proxy auf der Wiki-Domain diese Pfade an
+# http://127.0.0.1:${MCP_PORT:-3100} weiterleiten (alles andere bleibt beim Wiki):
+#   /mcp  /oauth/  /me  /_next/  /api/health
+#   /.well-known/oauth-authorization-server  /.well-known/oauth-protected-resource
+#   /.well-known/mcp.json
+# Gleiche Domain wie das Wiki ist wichtig (Ein-Klick-Login über die Wiki-Sitzung).
+# Beispiele für nginx und Caddy: mcp-for-wiki-js/docs/installation-it.md.
+
+services:
+  mcp:
+    image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
+    restart: unless-stopped
+    mem_limit: 512m
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      # Nur lokal: der vorhandene Reverse-Proxy auf dem Host spricht den MCP an.
+      - "127.0.0.1:${MCP_PORT:-3100}:3000"
+    extra_hosts:
+      # Erlaubt WIKIJS_URL=http://host.docker.internal:<port>, wenn Wiki.js
+      # direkt auf dem Host bzw. mit veröffentlichtem Port läuft.
+      - "host.docker.internal:host-gateway"
+    environment:
+      WIKIJS_URL: ${WIKIJS_URL:?WIKIJS_URL fehlt}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL fehlt}
+      MCP_SESSION_SECRET: ${MCP_SESSION_SECRET:?MCP_SESSION_SECRET fehlt}
+      MCP_DATA_DIR: /data
+      WIKIJS_PERMISSION_PRESET: ${WIKIJS_PERMISSION_PRESET:-full}
+      WIKIJS_OAUTH_ROLE: ${WIKIJS_OAUTH_ROLE:-wiki}
+      WIKIJS_BLOCKED_TAGS: ${WIKIJS_BLOCKED_TAGS:-kein-ki}
+      WIKIJS_AUDIT: ${WIKIJS_AUDIT:-true}
+      # Der Wiki.js-DB-Pool ist ohne eigene Anpassung max. 10 — darunter bleiben.
+      WIKIJS_MAX_CONCURRENCY: ${WIKIJS_MAX_CONCURRENCY:-6}
+      MCP_ALLOWED_REDIRECT_HOSTS: ${MCP_ALLOWED_REDIRECT_HOSTS:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      # Sessions + Audit-Log (sqlite). Sichern: docker compose exec mcp \
+      #   node -e "new (require('node:sqlite').DatabaseSync)('/data/mcp.sqlite').exec(\"VACUUM INTO '/data/backup.sqlite'\")"
+      - mcp-data:/data
+
+volumes:
+  mcp-data:
