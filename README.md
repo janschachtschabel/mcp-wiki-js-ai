@@ -23,6 +23,9 @@ Cursor, …) über das **Model Context Protocol** sicher mitbenutzen können:
                    └────────────────────────────────────────────────────────────────────────┘
 ```
 
+> **Für die IT:** kompakte Anleitung für beide Wege (bestehendes Wiki per Helm/Kubernetes
+> oder Neuinstallation per Docker Compose): [installation-it.md](mcp-for-wiki-js/docs/installation-it.md).
+
 ## Quick-Start (Docker Compose)
 
 ```bash

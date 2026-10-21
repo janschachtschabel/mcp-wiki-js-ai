@@ -25,6 +25,10 @@ Cursor, …) can use safely through the **Model Context Protocol**:
                    └───────────────────────────────────────────────────────────────────────┘
 ```
 
+> **For IT:** compact guide covering both paths (existing wiki via Helm/Kubernetes, or fresh
+> install via Docker Compose, plus end-user usage; German):
+> [installation-it.md](mcp-for-wiki-js/docs/installation-it.md).
+
 ## Quick start (Docker Compose)
 
 ```bash
