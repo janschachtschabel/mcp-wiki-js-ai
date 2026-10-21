@@ -74,6 +74,7 @@ kommt aus `PUBLIC_BASE_URL` bzw. `https://<DOMAIN>` (lokal `http://localhost:809
 dann `DEMO_PASSWORD`** (kein Default, sonst entstünde ein Konto mit öffentlich
 bekanntem Passwort). Nur für Test-Instanzen, nicht auf Produktiv-Wikis:
 `… ADMIN_PASSWORD='…' DEMO_PASSWORD='…' docker compose run --rm bootstrap --demo`.
+Optional: `DEMO_EMAIL` (Default `test@team.local`) und `DEMO_NAME` (Default `Test-Zugang`).
 
 Das legt an: Admin-Konto, Startseite, die Anwender-Anleitung **`/ki-zugang`**
 (Connector-Adresse + Einrichtung pro KI-Programm), **PostgreSQL-Suchmaschine** (Wörterbuch
@@ -82,7 +83,8 @@ passend zur Sprache — deutlich bessere Agenten-Suche als der Default), mit
 (lesen/schreiben, kein Löschen) samt Testnutzer.
 
 Das Skript lässt sich auch direkt mit Node ≥ 18 starten
-(`WIKI_URL=https://wiki.example.org … node deploy/scripts/bootstrap.mjs`) — über
+(`WIKI_URL=https://wiki.example.org … node deploy/scripts/bootstrap.mjs`; `PUBLIC_URL`
+setzt dabei eine abweichende Connector-Adresse für `/ki-zugang`, Default `WIKI_URL`) — über
 die Domain aber nur für ein **bereits eingerichtetes** Wiki (etwa um `--locale`
 oder `--demo` nachzuholen), denn `/finalize` ist dort gesperrt.
 

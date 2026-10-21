@@ -76,14 +76,16 @@ engine** (dictionary matching the locale — much better agent search than the
 default), and with `--locale=de` the German UI.
 
 The script can also run directly with Node ≥ 18
-(`WIKI_URL=https://wiki.example.org … node deploy/scripts/bootstrap.mjs`) — but
+(`WIKI_URL=https://wiki.example.org … node deploy/scripts/bootstrap.mjs`; `PUBLIC_URL`
+sets a different connector URL for `/ki-zugang`, default `WIKI_URL`) — but
 through the domain only for an **already set-up** wiki (e.g. to add `--locale`
 or `--demo` later), since `/finalize` is blocked there.
 
 `--demo` additionally creates a "Team" group (read/write, no delete) plus a
 test user and then **requires `DEMO_PASSWORD`** (no default — a committed one
-would ship a publicly-known write-capable account). Test instances only, never
-a production wiki.
+would ship a publicly-known write-capable account). Optional: `DEMO_EMAIL`
+(default `test@team.local`) and `DEMO_NAME` (default `Test-Zugang`). Test
+instances only, never a production wiki.
 
 Tip if a manual browser login won't stick (logged out again after signing
 in): an ad/tracking blocker (e.g. Brave Shields) is usually blocking the

@@ -133,6 +133,22 @@ für ein **bereits eingerichtetes** Wiki (z. B. `--locale` oder `--demo` nachhol
 
 ---
 
+## Adressen: `WIKIJS_URL` und `PUBLIC_BASE_URL`
+
+Der MCP-Server kennt zwei Adressen — beide sind frei konfigurierbar, eine IP ist nie nötig:
+
+| Variable | Wofür | Beispiele |
+|---|---|---|
+| `WIKIJS_URL` | Wie der MCP-Server das Wiki **intern** erreicht (GraphQL) | `http://wiki:3000` (Compose), `http://<service>.<namespace>.svc:3000` (Kubernetes), oder die Domain `https://wiki.example.org` |
+| `PUBLIC_BASE_URL` | Unter welcher **öffentlichen** Adresse Nutzer und KI-Clients den MCP erreichen | `https://wiki.example.org` — dieselbe Domain wie das Wiki |
+
+Liegen Wiki und MCP im selben Docker-Netz bzw. Cluster, ist die interne Adresse die robustere Wahl
+(kein Umweg über Proxy und Zertifikat). Läuft das Wiki woanders, die Domain eintragen. Hat die Domain
+ein **firmeninternes Zertifikat**, muss Node die Zertifizierungsstelle kennen: PEM-Datei in den
+Container mounten und `NODE_EXTRA_CA_CERTS=/pfad/ca.pem` setzen (Compose: per Override-Datei mit
+`volumes` + `environment`). Im Helm-Chart ist das Einhängen eigener Dateien derzeit nicht vorgesehen —
+dort die interne Service-Adresse per `http://` verwenden.
+
 ## Konfiguration (Umgebungsvariablen des MCP-Servers)
 
 | Variable | Zweck | Default (Compose/Helm) |
@@ -144,7 +160,37 @@ für ein **bereits eingerichtetes** Wiki (z. B. `--locale` oder `--demo` nachhol
 | `WIKIJS_BLOCKED_TAGS` | Seiten mit diesen Tags sind für KI unsichtbar (leer = aus) | `kein-ki` |
 | `WIKIJS_AUDIT` | Audit-Log an/aus | `true` |
 | `WIKIJS_ALLOW_LEGACY` | zusätzlich alten Zugang per API-Key/Handle erlauben (nur für Altbestand) | `false` |
+| `WIKIJS_OAUTH_ROLE` | Agenten-Schutzrolle für OAuth-Sitzungen (Bestätigung vor Löschen/Admin) | `wiki` |
+| `WIKIJS_MAX_CONCURRENCY` | max. parallele Anfragen an Wiki.js (unter dem DB-Pool halten) | `12` (Compose) / `8` |
+| `NODE_EXTRA_CA_CERTS` | zusätzliche Zertifizierungsstelle, wenn `WIKIJS_URL` ein internes Zertifikat hat | – |
+| `TZ` | Zeitzone der Zeitangaben auf `/me` | `UTC` |
 | `MCP_ALLOWED_REDIRECT_HOSTS` | optional: Hostnamen (kommagetrennt), an die OAuth-Clients weiterleiten dürfen; Loopback immer erlaubt (Helm: `config.extraEnv`; Compose: in `.env`) | – (jeder https-Host) |
+
+Alle weiteren Variablen (Legacy-Betrieb, Limits, Diagnose): vollständige Referenz in der
+[Server-README](../README.md#vollständige-env-referenz).
+
+### Nur Option B: Variablen der Compose-`.env`
+
+| Variable | Zweck | Default |
+|---|---|---|
+| `DOMAIN` | öffentliche Domain des Stacks (Caddy holt dafür das TLS-Zertifikat) | – (Pflicht) |
+| `POSTGRES_PASSWORD` | Passwort der Wiki.js-Datenbank | – (Pflicht) |
+| `MCP_SESSION_SECRET` | siehe oben | – (Pflicht) |
+| `PUBLIC_BASE_URL` | abweichende öffentliche Adresse | `https://$DOMAIN` |
+| `WIKIJS_DB_POOL_MIN` / `WIKIJS_DB_POOL_MAX` | Verbindungspool von Wiki.js | `2` / `20` |
+| `BACKUP_INTERVAL_SECONDS` / `BACKUP_KEEP` | Backup-Intervall und Anzahl aufbewahrter Stände | `86400` / `7` |
+| `MCP_IMAGE` | fertiges Image statt lokalem Build | `wikijs-mcp:local` |
+
+### Nur Option B: Parameter des Bootstraps (`docker compose run --rm bootstrap …`)
+
+| Parameter | Zweck |
+|---|---|
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | erstes Admin-Konto (Pflicht, aus Shell oder `.env`) |
+| `--locale=de` | Standardsprache setzen und vorhandene Seiten migrieren |
+| `--demo` | zusätzlich Gruppe „Team“ + Testnutzer — nur für Test-Instanzen; braucht `DEMO_PASSWORD` (optional `DEMO_EMAIL`, Default `test@team.local`, und `DEMO_NAME`) |
+
+Die öffentliche Adresse für die Seite `/ki-zugang` nimmt der Dienst automatisch aus `PUBLIC_BASE_URL`
+bzw. `https://$DOMAIN`.
 
 Der Server prüft die Konfiguration beim Start und **startet bei Fehlern nicht** (z. B. Secret unter
 16 Zeichen, unbekannter Rollenname, ungültiges JSON in einer Variable). Die Ursache steht im Log

@@ -99,10 +99,11 @@ Im Mehrbenutzer-Modus liegen die echten Keys **als Env-Variable in Vercel** (Ver
 
 | Variable | Pflicht | Default | Zweck |
 |---|---|---|---|
-| `WIKIJS_URL` | nur Single-Tenant¹ | – | Basis-URL der Wiki.js-Instanz, z. B. `https://wiki.example.org` (ohne `/graphql`) |
+| `WIKIJS_URL` | ja (OAuth, Single-Tenant)¹ | – | Adresse, unter der der MCP-Server das Wiki erreicht (ohne `/graphql`). Hostname/Domain oder IP, intern oder öffentlich: z. B. `http://wiki:3000` (Docker), `http://wiki.ns.svc:3000` (Kubernetes) oder `https://wiki.example.org`. Für Domains mit firmeninternem Zertifikat siehe `NODE_EXTRA_CA_CERTS` |
+| `WIKIJS_BASE_URL` | nein | – | Alias für `WIKIJS_URL` (ältere Konfigurationen) |
 | `WIKIJS_TOKEN` | nur Single-Tenant¹ | – | Wiki.js-API-Key (Bearer). **Secret.** (Alias: `WIKIJS_API_KEY`). Geht nur an `WIKIJS_URL`, nie an eine vom Aufrufer gewählte URL. Sind `WIKIJS_PROFILES` oder `WIKIJS_KEY_MAP` gesetzt, bekommen anonyme HTTP-Aufrufer ihn **nicht** |
 | `WIKIJS_PROFILES` | für Mehrbenutzer | – | JSON: geheimer Handle → `{ label, token, role, url? }`. **Secret.** Siehe [unten](#mehrbenutzer-profile--handle-generierung) |
-| `WIKIJS_PERMISSION_PRESET` | nein | `safe` | **Globale Obergrenze** (Ceiling-Rolle) — sichtbare Tools + Maximum. Rollen in `config/roles.json` |
+| `WIKIJS_PERMISSION_PRESET` | nein | `safe` (Compose/Helm: `full`) | **Globale Obergrenze** (Ceiling-Rolle) — sichtbare Tools + Maximum. Rollen in `config/roles.json` |
 | `WIKIJS_POLICY` | nein | – | JSON-Feinjustierung deploy-weit pro Kategorie/Tool |
 | `WIKIJS_ROLES` | nein | – | JSON, das die **Rollen-Definitionen** zur Laufzeit überschreibt (Form wie `config/roles.json`) |
 | `WIKIJS_SHOW_BLOCKED` | nein | `false` | geblockte Tools als deaktivierte Stubs in `tools/list` zeigen |
@@ -110,12 +111,18 @@ Im Mehrbenutzer-Modus liegen die echten Keys **als Env-Variable in Vercel** (Ver
 | `WIKIJS_ALLOW_LEGACY` | nein | `false` | Nur mit OAuth relevant: `true` öffnet zusätzlich den Legacy-Weg (BYOK-Key/Handle per Header oder URL). Standardmäßig aus — der Legacy-Handler hat keine eigene Anmeldung |
 | `WIKIJS_KEY_MAP` | nein | – | Legacy-Map Handle→Token (nur Token; Policy aus Env). Die Keys gehen nur an `WIKIJS_URL` (ohne `WIKIJS_URL` sind die Aliase unbrauchbar). Von `WIKIJS_PROFILES` abgelöst |
 | `WIKIJS_TIMEOUT_MS` | nein | `30000` | Timeout pro GraphQL-Request inkl. Lesen der Antwort (AbortController) |
-| `WIKIJS_MAX_CONCURRENCY` | nein | `8` | Max. parallele Upstream-Requests (Overload-Schutz; queued/sheddet bei Überlast) |
+| `WIKIJS_MAX_CONCURRENCY` | nein | `8` (Compose: `12`) | Max. parallele Upstream-Requests (Overload-Schutz; queued/sheddet bei Überlast) |
 | `WIKIJS_RETRIES` | nein | `2` | Wiederholungen bei Verbindungsfehlern: Lesezugriffe immer, Mutationen nur, wenn der Request sicher nicht gesendet wurde. `0` = aus |
 | `WIKIJS_MAX_RESPONSE_BYTES` | nein | `16777216` (16 MiB) | Obergrenze für eine GraphQL-Antwort (min. `1024`); größere Antworten werden abgebrochen |
 | `WIKIJS_AUDIT` | nein | `true` | Audit-Log für write/delete/admin (`false` = aus; nie Secrets) |
 | `WIKIJS_MCP_VERBOSE` | nein | `false` | MCP-Request-Logging (`true`) |
-| `PUBLIC_BASE_URL` | nein | aus Headern | überschreibt die im Discovery-Dokument beworbene URL |
+| `PUBLIC_BASE_URL` | mit OAuth hinter Proxy: ja | aus `X-Forwarded-*` | Öffentliche Adresse des MCP-Servers (OAuth-Issuer, Connector-URL, Discovery) — dieselbe Domain wie das Wiki, damit die Wiki-Sitzung den Login zum Ein-Klick macht |
+| `MCP_SESSION_SECRET` | für OAuth | – | Schaltet OAuth ein (Login = Wiki.js-Login) und verschlüsselt den Session-Store. Mind. 16 Zeichen, sonst startet der Server nicht. **Secret** |
+| `MCP_DATA_DIR` | nein | `./data` (Docker: `/data`) | Ablage des Session-Stores und Audit-Logs (sqlite) — muss ein persistentes Volume sein |
+| `WIKIJS_OAUTH_ROLE` | nein | `wiki` | Agenten-Schutzrolle für OAuth-Sitzungen (Rolle aus `config/roles.json`); die eigentlichen Rechte kommen aus Wiki.js |
+| `MCP_ALLOWED_REDIRECT_HOSTS` | nein | – (jeder https-Host) | Kommaliste von Hostnamen, an die OAuth-Clients weiterleiten dürfen (z. B. `claude.ai,chatgpt.com`); Loopback ist immer erlaubt |
+| `NODE_EXTRA_CA_CERTS` | nein | – | Node-Standardvariable: Pfad zu einer PEM-Datei mit zusätzlichen Zertifizierungsstellen. Nötig, wenn `WIKIJS_URL` eine Domain mit firmeninternem Zertifikat ist (Datei in den Container mounten) |
+| `TZ` | nein | `UTC` (Container) | Zeitzone der Zeitangaben auf `/me`, z. B. `Europe/Berlin` |
 
 ¹ Im Mehrbenutzer-Modus liefern die `WIKIJS_PROFILES`-Einträge den Token; die URL kommt aus `WIKIJS_URL` (oder dem optionalen `url` im Profil). `WIKIJS_TOKEN` ist dann **kein** Fallback für Aufrufer ohne Handle. Auf der **stdio**-Variante (lokal, ein Nutzer) sind `WIKIJS_URL` + `WIKIJS_TOKEN` Pflicht; stdio nutzt immer `WIKIJS_TOKEN`.
 

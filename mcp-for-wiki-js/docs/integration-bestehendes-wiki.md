@@ -39,8 +39,9 @@ docker run -d --name wikijs-mcp --restart unless-stopped \
 
 | Env | Zweck |
 |---|---|
-| `WIKIJS_URL` | interne Adresse des Wiki-Containers (über das Docker-Netz, kein externer Traffic) |
+| `WIKIJS_URL` | Adresse, unter der der MCP-Server das Wiki erreicht: am besten intern über das Docker-Netz (`http://<wiki-container>:3000`, kein externer Traffic), alternativ die Domain des Wikis (`https://wiki.example.org`) |
 | `PUBLIC_BASE_URL` | **öffentliche** Basis-URL (OAuth-Issuer) — muss zur Domain passen; hinter Proxy Pflicht |
+| `NODE_EXTRA_CA_CERTS` | nur wenn `WIKIJS_URL` eine Domain mit firmeninternem Zertifikat ist: Pfad zur gemounteten CA-PEM-Datei |
 | `MCP_SESSION_SECRET` | schaltet OAuth ein; verschlüsselt den Session-Store in `/data` |
 | `WIKIJS_PERMISSION_PRESET` | im OAuth-Betrieb `full` lassen — die echten Rechte kommen aus Wiki.js |
 | `WIKIJS_BLOCKED_TAGS` | Seiten mit diesem Tag sind für KI unsichtbar/unantastbar (leer = aus) |
