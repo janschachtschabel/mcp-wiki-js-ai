@@ -45,10 +45,18 @@ function ensureSecret(file, content, mode) {
 
 /** Accept "wiki.example.org", "https://wiki.example.org/" or ":80"; undefined when empty. */
 function parseDomain(raw) {
-  const value = (raw ?? '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  const value = (raw ?? '').trim();
   if (!value) return undefined;
+  // Strict on purpose, no silent repair: in docker-compose.yml the Traefik labels
+  // take DOMAIN verbatim (Host(`…`)), so "https://…" would work here but leave
+  // Traefik without a route and without a certificate.
   if (!/^(:\d{1,5}|[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?)$/i.test(value)) {
-    console.error(`DOMAIN="${raw}" ist kein gültiger Hostname (Beispiel: wiki.example.org).`);
+    const host = value.replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, '');
+    console.error(
+      `DOMAIN="${raw}" ist kein reiner Hostname. Bitte nur den Namen eintragen, ohne https:// und ohne Pfad` +
+        (host && host !== value ? ` — also DOMAIN=${host}` : ' (Beispiel: wiki.example.org)') +
+        ', und neu bereitstellen.',
+    );
     process.exit(1);
   }
   return value;
