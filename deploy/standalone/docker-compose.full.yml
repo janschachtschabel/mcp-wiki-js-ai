@@ -21,22 +21,22 @@
 # Voraussetzungen: DNS-Eintrag der Domain zeigt auf den Server; Ports 80 und
 # 443 sind frei (Caddy holt das TLS-Zertifikat automatisch).
 #
+# Bewusst ohne Tabs und ohne YAML-Anker (<<:), damit auch einfache Web-Editoren
+# von Docker-Panels die Datei lesen können.
+#
 # Mit Repo-Checkout ist ../../docker-compose.yml die Variante zum Selbstbauen
 # (gleiche Dienste, Konfiguration aus deploy/). Änderungen am Routing dort
 # (deploy/caddy/Caddyfile) hier in CADDYFILE nachziehen.
 
-x-hardening: &hardening
-  security_opt:
-    - no-new-privileges:true
-  logging:
-    driver: json-file
-    options:
-      max-size: "10m"
-      max-file: "3"
-
 services:
   db:
-    <<: *hardening
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     image: postgres:15-alpine
     restart: unless-stopped
     mem_limit: 512m
@@ -54,7 +54,13 @@ services:
       retries: 5
 
   wiki:
-    <<: *hardening
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     image: requarks/wiki:2
     restart: unless-stopped
     mem_limit: 1g
@@ -73,7 +79,13 @@ services:
     networks: [default, db]
 
   mcp:
-    <<: *hardening
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
     restart: unless-stopped
     mem_limit: 512m
@@ -98,7 +110,13 @@ services:
   # werden übersprungen). Ohne ADMIN_EMAIL/ADMIN_PASSWORD beendet sie sich
   # sofort. Läuft im internen Netz — /finalize ist über Caddy gesperrt.
   bootstrap:
-    <<: *hardening
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
     restart: "no"
     depends_on:
@@ -122,7 +140,13 @@ services:
         exec node /app/bootstrap.mjs $$BOOTSTRAP_ARGS
 
   db-backup:
-    <<: *hardening
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     image: postgres:15-alpine
     restart: unless-stopped
     mem_limit: 256m
@@ -161,7 +185,13 @@ services:
         done
 
   caddy:
-    <<: *hardening
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     image: caddy:2-alpine
     restart: unless-stopped
     mem_limit: 128m
@@ -173,35 +203,35 @@ services:
       # Inhalt = deploy/caddy/Caddyfile ($$ steht für ein wörtliches $).
       CADDYFILE: |
         {$$DOMAIN} {
-        	@hsts {
-        		protocol https
-        		not host localhost
-        	}
-        	header @hsts ?Strict-Transport-Security "max-age=31536000"
+            @hsts {
+                protocol https
+                not host localhost
+            }
+            header @hsts ?Strict-Transport-Security "max-age=31536000"
 
-        	@wikiSetup path /finalize /finalize/*
-        	handle @wikiSetup {
-        		respond "Setup only via the bootstrap service" 403
-        	}
+            @wikiSetup path /finalize /finalize/*
+            handle @wikiSetup {
+                respond "Setup only via the bootstrap service" 403
+            }
 
-        	@mcp {
-        		path /mcp /mcp/* /oauth/* /me /me/* /api/health
-        		path /.well-known/oauth-authorization-server* /.well-known/oauth-protected-resource*
-        		path /.well-known/mcp.json /_next/*
-        	}
-        	handle @mcp {
-        		request_body {
-        			max_size 8MB
-        		}
-        		reverse_proxy mcp:3000
-        	}
+            @mcp {
+                path /mcp /mcp/* /oauth/* /me /me/* /api/health
+                path /.well-known/oauth-authorization-server* /.well-known/oauth-protected-resource*
+                path /.well-known/mcp.json /_next/*
+            }
+            handle @mcp {
+                request_body {
+                    max_size 8MB
+                }
+                reverse_proxy mcp:3000
+            }
 
-        	handle {
-        		header ?X-Content-Type-Options nosniff
-        		header ?Referrer-Policy strict-origin-when-cross-origin
-        		header ?X-Frame-Options SAMEORIGIN
-        		reverse_proxy wiki:3000
-        	}
+            handle {
+                header ?X-Content-Type-Options nosniff
+                header ?Referrer-Policy strict-origin-when-cross-origin
+                header ?X-Frame-Options SAMEORIGIN
+                reverse_proxy wiki:3000
+            }
         }
     entrypoint: ["/bin/sh", "-c"]
     command:
