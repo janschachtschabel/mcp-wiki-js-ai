@@ -53,9 +53,11 @@ Variablen lassen sich erst bearbeiten, wenn das Projekt existiert — daher zwei
 | `BOOTSTRAP_ARGS` | optional, z. B. `--locale=en` (Deutsch ist voreingestellt) oder `--demo` |
 
 Traefik routet die MCP-Pfade an den MCP-Server, alles andere an Wiki.js, und sperrt den Setup-Endpunkt
-`/finalize`. Die Defaults passen zur Traefik-Vorlage von Hostinger (Netzwerk `traefik-proxy`,
-Entrypoint `websecure`, Zertifikats-Resolver `letsencrypt`); bei anderem Traefik `TRAEFIK_NETWORK`,
-`TRAEFIK_ENTRYPOINT`, `TRAEFIK_CERTRESOLVER` setzen. Ergebnis der Einrichtung: Log des Containers
+`/finalize`. Die Datei setzt kein vorhandenes Docker-Netz voraus: Sie legt ihr eigenes Netz
+`wikijs-web` an, das ein Traefik im Host-Modus (wie bei Hostinger) direkt erreicht. Entrypoint
+`websecure` und Zertifikats-Resolver `letsencrypt` passen zu Hostingers Traefik; bei anderem Traefik
+`TRAEFIK_ENTRYPOINT`, `TRAEFIK_CERTRESOLVER` und — läuft Traefik in einem eigenen Docker-Netz —
+`TRAEFIK_NETWORK` (Name dieses Netzes) setzen. Ergebnis der Einrichtung: Log des Containers
 `bootstrap`. Danach in Wiki.js die Gruppe „Team“ ohne `manage:system` anlegen; Anwender verbinden
 sich mit `https://<DOMAIN>/mcp`.
 

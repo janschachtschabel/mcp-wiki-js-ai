@@ -16,8 +16,10 @@
 #        ADMIN_PASSWORD  nach der Einrichtung wieder entfernen
 #
 # Traefik-Anbindung (Defaults = Traefik-Vorlage im Hostinger Docker Manager):
-#   TRAEFIK_NETWORK=traefik-proxy  TRAEFIK_ENTRYPOINT=websecure
-#   TRAEFIK_CERTRESOLVER=letsencrypt
+#   TRAEFIK_ENTRYPOINT=websecure  TRAEFIK_CERTRESOLVER=letsencrypt
+#   TRAEFIK_NETWORK=wikijs-web — nur ändern, wenn Traefik in einem eigenen
+#   Docker-Netz läuft (dann dessen Namen, z. B. traefik-proxy); im Host-Modus
+#   erreicht Traefik das Netz des Stacks direkt.
 # Traefik routet die MCP-Pfade an den MCP-Server, alles andere an Wiki.js, und
 # sperrt den Setup-Endpunkt /finalize (Ersteinrichtung nur über bootstrap).
 #
@@ -101,10 +103,9 @@ services:
     networks:
       - default
       - db
-      - proxy
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik-proxy}"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-wikijs-web}"
       - "traefik.http.routers.wikijs-wiki.rule=Host(`${DOMAIN:-}`)"
       - "traefik.http.routers.wikijs-wiki.priority=1"
       - "traefik.http.routers.wikijs-wiki.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
@@ -153,12 +154,9 @@ services:
     volumes:
       - mcp-data:/data
       - stack-secrets:/stack/secrets:ro
-    networks:
-      - default
-      - proxy
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik-proxy}"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-wikijs-web}"
       # MCP-Pfade (wie @mcp in deploy/caddy/Caddyfile) gehen an den MCP-Server.
       - "traefik.http.routers.wikijs-mcp.rule=Host(`${DOMAIN:-}`) && (Path(`/mcp`) || PathPrefix(`/mcp/`) || PathPrefix(`/oauth/`) || Path(`/me`) || PathPrefix(`/me/`) || Path(`/api/health`) || PathPrefix(`/_next/`) || PathPrefix(`/.well-known/oauth-authorization-server`) || PathPrefix(`/.well-known/oauth-protected-resource`) || Path(`/.well-known/mcp.json`))"
       - "traefik.http.routers.wikijs-mcp.priority=100"
@@ -256,11 +254,13 @@ services:
         done
 
 networks:
+  # Eigenes Netz mit festem Namen, über das Traefik Wiki.js und den MCP-Server
+  # erreicht (Label traefik.docker.network). Wird angelegt, falls es fehlt;
+  # gibt es schon ein Netz dieses Namens (z. B. das von Traefik), wird es genutzt.
+  default:
+    name: ${TRAEFIK_NETWORK:-wikijs-web}
   db:
     internal: true
-  proxy:
-    external: true
-    name: ${TRAEFIK_NETWORK:-traefik-proxy}
 
 volumes:
   stack-secrets:

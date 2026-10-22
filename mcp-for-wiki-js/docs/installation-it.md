@@ -197,12 +197,13 @@ ADMIN_PASSWORD=…                       # nach der Einrichtung wieder leeren
 Traefik übernimmt HTTPS und Zertifikat. Per Labels gehen die MCP-Pfade (`/mcp`, `/oauth/…`, `/me`,
 `/_next/…`, `/api/health`, `/.well-known/oauth-*`, `/.well-known/mcp.json`) an den MCP-Server, alles
 andere an Wiki.js; `/finalize` geht an den MCP-Server und endet dort mit 404, sodass niemand über die
-Domain das erste Admin-Konto anlegen kann. Die Defaults passen zur Traefik-Vorlage im Hostinger Docker
-Manager; ein anderer Traefik braucht ggf. andere Namen:
+Domain das erste Admin-Konto anlegen kann. Die Datei setzt kein vorhandenes Docker-Netz voraus: Sie
+legt ihr eigenes Netz an, das ein Traefik im Host-Modus (so bei Hostinger) direkt erreicht. Die
+Defaults passen zu Hostingers Traefik; ein anderer Traefik braucht ggf. andere Namen:
 
 | Variable | Default | Bedeutung |
 |---|---|---|
-| `TRAEFIK_NETWORK` | `traefik-proxy` | Docker-Netz, über das Traefik die Container erreicht (muss existieren) |
+| `TRAEFIK_NETWORK` | `wikijs-web` | Netz des Stacks, über das Traefik die Container erreicht; wird angelegt. Nur ändern, wenn Traefik in einem eigenen Docker-Netz läuft (dann dessen Namen, z. B. `traefik-proxy`) |
 | `TRAEFIK_ENTRYPOINT` | `websecure` | HTTPS-Entrypoint von Traefik |
 | `TRAEFIK_CERTRESOLVER` | `letsencrypt` | Zertifikats-Resolver von Traefik |
 
@@ -331,7 +332,7 @@ Option C: V1 = `docker-compose.yml` (Traefik), V2 = `deploy/standalone/full`, V3
 | `WIKIJS_DB_POOL_MIN` / `WIKIJS_DB_POOL_MAX` | Verbindungspool von Wiki.js (nur V3) | `2` / `20` |
 | `BACKUP_INTERVAL_SECONDS` / `BACKUP_KEEP` | Backup-Intervall und Anzahl aufbewahrter Stände | `86400` / `7` |
 | `MCP_IMAGE` | Image des MCP-Servers (V3: fertiges Image statt lokalem Build) | V1/V2 und Option B: `ghcr.io/janschachtschabel/mcp-wiki-js-ai:main` · V3: `wikijs-mcp:local` |
-| `TRAEFIK_NETWORK` / `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERTRESOLVER` | Traefik-Anbindung (nur V1) | `traefik-proxy` / `websecure` / `letsencrypt` |
+| `TRAEFIK_NETWORK` / `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERTRESOLVER` | Traefik-Anbindung (nur V1) | `wikijs-web` / `websecure` / `letsencrypt` |
 | `HTTP_PORT` / `HTTPS_PORT` | Host-Ports von Caddy (nur V2; für Let's Encrypt bei 80/443 lassen) | `80` / `443` |
 | `MCP_PORT` | lokaler Port des MCP für den vorhandenen Proxy (nur Option B, bindet an `127.0.0.1`) | `3100` |
 
@@ -396,7 +397,7 @@ https://<domain>/mcp
 | MCP-Container/Pod startet nicht (Exit 1) | Konfigurationsfehler – Log-Zeile `[wikijs-mcp] …` lesen (siehe oben) |
 | `413 Payload Too Large` | Anfrage an `/mcp` über 4 MB (z. B. großer Datei-Upload per KI) – Datei direkt im Wiki hochladen |
 | `docker compose` bricht mit „DOMAIN fehlt“ ab | nur `docker-compose.build.yml`: `DOMAIN` in `.env` leer oder `.env` fehlt |
-| Docker-Panel meldet „Docker project not found“ / „Projekt nicht gefunden“ | Die erste Bereitstellung ist gescheitert, das Panel legt das Projekt dann nicht an. Panels mit GitHub-Import nehmen nur die `docker-compose.yml` im Hauptordner (Option C, Variante 1) und brauchen dafür einen laufenden Traefik mit Netzwerk `traefik-proxy`. Projektordner prüfen (z. B. `/docker/<projekt>/`, Datei `.build.log`) |
+| Docker-Panel meldet „Docker project not found“ / „Projekt nicht gefunden“ | Die erste Bereitstellung ist gescheitert, das Panel legt das Projekt dann nicht an. Panels mit GitHub-Import nehmen nur die `docker-compose.yml` im Hauptordner (Option C, Variante 1) und einen laufenden Traefik. Ursache steht im Projektordner (z. B. `/docker/<projekt>/.build.log`); `network … declared as external, but could not be found` kam von einer älteren Fassung — neu importieren |
 | Panel-Projekt läuft, Domain liefert 404 oder kein Zertifikat | `DOMAIN` in der `.env` leer, DNS zeigt nicht auf den Server, oder Traefik nutzt andere Namen – `TRAEFIK_NETWORK`, `TRAEFIK_ENTRYPOINT`, `TRAEFIK_CERTRESOLVER` anpassen (Log des Traefik-Containers) |
 | Ports 80/443 belegt (`docker compose` meldet „address already in use“) | Auf dem Server läuft schon ein Proxy (z. B. Traefik eines Panels) – Variante 1 statt 2/3 nehmen, oder MCP nach Option B ergänzen |
 | Docker-Panel: „YAML-Datei kann nicht verarbeitet werden“ | Datei neu importieren (die aktuellen Dateien enthalten keine Tabs und keine YAML-Anker); hilft das nicht, per SSH mit `docker compose up -d` starten |

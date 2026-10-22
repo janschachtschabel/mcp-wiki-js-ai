@@ -56,9 +56,11 @@ Variables can only be edited once the project exists — hence two steps:
 | `BOOTSTRAP_ARGS` | optional, e.g. `--locale=en` (German is the default) or `--demo` |
 
 Traefik routes the MCP paths to the MCP server and everything else to Wiki.js, and blocks the setup
-endpoint `/finalize`. The defaults match Hostinger's Traefik template (network `traefik-proxy`,
-entrypoint `websecure`, certificate resolver `letsencrypt`); for another Traefik set
-`TRAEFIK_NETWORK`, `TRAEFIK_ENTRYPOINT`, `TRAEFIK_CERTRESOLVER`. Setup result: log of the `bootstrap`
+endpoint `/finalize`. The file needs no pre-existing Docker network: it creates its own network
+`wikijs-web`, which a Traefik in host mode (as on Hostinger) reaches directly. Entrypoint `websecure`
+and certificate resolver `letsencrypt` match Hostinger's Traefik; for another Traefik set
+`TRAEFIK_ENTRYPOINT`, `TRAEFIK_CERTRESOLVER` and — if Traefik runs in its own Docker network —
+`TRAEFIK_NETWORK` (that network's name). Setup result: log of the `bootstrap`
 container. Then create a "Team" group in Wiki.js without `manage:system`; users connect with
 `https://<DOMAIN>/mcp`.
 
