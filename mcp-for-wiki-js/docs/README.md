@@ -14,11 +14,10 @@ frühere Vercel/Handle-Betrieb funktioniert weiter, ist aber eingefroren
 |---|---|
 | [**Konzept & Rechtemodell**](./konzept-ki-zugang.md) (🇬🇧 [EN](./concept-ai-access.en.md)) | Vorgehensweise für Nutzer & Admins, Umbauten, wer welche Rechte steuert — **hier anfangen** |
 | [OAuth-Technik](./oauth.md) | Aktivierung, Flow (Code+PKCE, DCR), Session-Store, Guardrails, Grenzen |
-| [**Installation – Kurzanleitung für die IT**](./installation-it.md) | Beide Wege kompakt: bestehendes Wiki (Kubernetes/Helm) oder Neuinstallation (Docker Compose) |
-| [**Integration in bestehendes Wiki.js**](./integration-bestehendes-wiki.md) | MCP neben eine laufende Wiki.js-Installation hängen — Schritt für Schritt |
+| [**Installation – Anleitung für die IT**](./installation-it.md) (🇬🇧 [EN](./installation-it.en.md)) | Alle Einsatzfälle: (A) Wiki + MCP komplett — Docker-Panel mit Traefik, eigener Server, selbst bauen; (B) MCP zu bestehendem Wiki unter gleicher Adresse — Traefik, nginx/Caddy/Apache, Kubernetes; (C) nur MCP. Mit allen Umgebungsvariablen und Fehlerbehebung |
 | [Root-README](../../README.md) (🇬🇧 [EN](../../README.en.md)) | Deployment (Compose/Helm), Ersteinrichtung (Bootstrap), Client verbinden |
 | [Audit 2026-10-21](./audits/2026-10-21-audit.md) · [Re-Audit](./audits/2026-10-21-reaudit.md) | Sicherheits- und Code-Audits mit Befunden, Umsetzungsstand und Roadmap |
-| [**Architektur-Grafik**](./architektur.png) · [interaktiv](./architektur.html) | Gesamtbild: Clients → Caddy → MCP-Server (OAuth, Policy-Gate, Tools) → Wiki.js → PostgreSQL, mit Netz- und Container-Grenzen |
+| [**Architektur-Grafik**](./architektur.png) · [interaktiv](./architektur.html) | Gesamtbild: Clients → Reverse-Proxy → MCP-Server (OAuth, Policy-Gate, Tools) → Wiki.js → PostgreSQL, mit Netz- und Container-Grenzen |
 | [**Nächste Ausbaustufe**](./naechste-ausbaustufe.md) | Offene Umbauten (Tests/CI, React 19, Store/Audit) und bekannte Grenzen als TODO-Liste |
 
 **Kurzfassung Verbinden:** MCP-URL `https://<host>/mcp` im Client eintragen

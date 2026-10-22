@@ -15,53 +15,43 @@ Cursor, …) über das **Model Context Protocol** sicher mitbenutzen können:
   Aktionen und eine **Tag-Sperre** (`kein-ki`), die Seiten für KI unsichtbar macht.
 - **Selbstverwaltung unter `/me`**: eigene KI-Verbindungen ansehen & widerrufen.
 
-![Architektur: KI-Clients und Browser → Caddy (eine Domain) → MCP-Server (OAuth, Policy-Gate, Tools, GraphQL-Client) → Wiki.js → PostgreSQL im internen Netz](mcp-for-wiki-js/docs/architektur.png)
+![Architektur: KI-Clients und Browser → Reverse-Proxy (eine Domain) → MCP-Server (OAuth, Policy-Gate, Tools, GraphQL-Client) → Wiki.js → PostgreSQL im internen Netz](mcp-for-wiki-js/docs/architektur.png)
 
 Interaktive Fassung mit Quellenverweisen je Komponente: [docs/architektur.html](mcp-for-wiki-js/docs/architektur.html)
 (lokal im Browser öffnen; Quelle zum Weiterbearbeiten mit archify: [architektur.archify.json](mcp-for-wiki-js/docs/architektur.archify.json)).
 
-> **Für die IT:** kompakte Anleitung für alle Wege (bestehendes Wiki per Helm/Kubernetes, bestehendes
-> Wiki auf einem Server mit Docker, Neuinstallation per Docker Compose): [installation-it.md](mcp-for-wiki-js/docs/installation-it.md).
+## Installation: welcher Fall?
 
-## Quick-Start: welche Compose-Datei?
+| Fall | Ausgangslage | Weg | Datei |
+|---|---|---|---|
+| **A: Komplett** | noch kein Wiki | **A1** Docker-Panel des Hosters (Import aus dem Git-Repo, Traefik läuft schon) | [`docker-compose.yml`](docker-compose.yml) |
+| | | **A2** eigener Server ohne Reverse-Proxy | [`deploy/standalone/full/`](deploy/standalone/full/docker-compose.yml) |
+| | | **A3** selbst bauen (Repo-Checkout) | [`docker-compose.build.yml`](docker-compose.build.yml) |
+| **B: MCP zum bestehenden Wiki** | Wiki.js läuft schon; MCP unter **derselben Adresse** | **B1** vor dem Wiki steht Traefik | [`deploy/standalone/mcp-only/`](deploy/standalone/mcp-only/docker-compose.yml) + `TRAEFIK_ENABLE=true` |
+| | | **B2** vor dem Wiki steht nginx, Caddy, Apache … | [`deploy/standalone/mcp-only/`](deploy/standalone/mcp-only/docker-compose.yml) + Pfad-Regeln |
+| | | **B3** Kubernetes | [Helm-Chart](deploy/helm/wikijs-mcp/README.md) |
+| **C: Nur MCP** | Wiki läuft woanders, Proxy der Wiki-Domain nicht änderbar | **C1** MCP unter eigener Adresse | [`deploy/standalone/mcp-only/`](deploy/standalone/mcp-only/docker-compose.yml) |
+| | | **C2** lokal auf dem eigenen Rechner (stdio) | [Server-README](mcp-for-wiki-js/README.md#claude-desktop-lokal-stdio) |
 
-| Situation | Datei | HTTPS über |
-|---|---|---|
-| Docker-Panel mit Import aus GitHub (z. B. Hostinger Docker Manager), Traefik läuft schon | [`docker-compose.yml`](docker-compose.yml) (Hauptordner) | vorhandenen Traefik |
-| Eigener Server ohne Reverse-Proxy, ohne Repo-Checkout | [`deploy/standalone/full/docker-compose.yml`](deploy/standalone/full/docker-compose.yml) | eigenen Caddy (Ports 80/443) |
-| Wiki.js läuft schon, nur der MCP kommt dazu | [`deploy/standalone/mcp-only/docker-compose.yml`](deploy/standalone/mcp-only/docker-compose.yml) | vorhandenen Proxy |
-| Image selbst bauen / entwickeln (Repo-Checkout) | [`docker-compose.build.yml`](docker-compose.build.yml) | eigenen Caddy (Ports 80/443) |
+Alle Compose-Dateien außer A3 nutzen das fertige Image `ghcr.io/janschachtschabel/mcp-wiki-js-ai:main`,
+brauchen **keine Pflicht-Variablen** und erzeugen Datenbank-Passwort und `MCP_SESSION_SECRET` beim
+ersten Start selbst (Volume `stack-secrets`). **Ausführliche Anleitung mit allen Varianten,
+Proxy-Beispielen und Variablen: [docs/installation-it.md](mcp-for-wiki-js/docs/installation-it.md).**
 
-Die ersten beiden nutzen das fertige Image aus GHCR, brauchen **keine Pflicht-Variablen** und erzeugen
-Postgres-Passwort und `MCP_SESSION_SECRET` beim ersten Start selbst (Volume `stack-secrets`, gehört
-zur Datensicherung). Die Ersteinrichtung (Admin-Konto, Startseite, `/ki-zugang`, Suche, Sprache) läuft
-dort automatisch, sobald `DOMAIN`, `ADMIN_EMAIL` und `ADMIN_PASSWORD` gesetzt sind.
+### A1: Docker-Panel mit Traefik
 
-### Docker-Panel mit Traefik (z. B. Hostinger Docker Manager)
+Für Panels, die ein Projekt direkt aus dem Git-Repository bauen. Sie lesen nur die
+`docker-compose.yml` im Hauptordner, kopieren `.env.example` als `.env` und erlauben Variablen erst
+nach der ersten erfolgreichen Bereitstellung. Auf dem Server läuft ihr Traefik auf 80/443.
 
-Solche Panels lesen nur die `docker-compose.yml` im Hauptordner und kopieren `.env.example` als `.env`.
-Variablen lassen sich erst bearbeiten, wenn das Projekt existiert — daher zwei Schritte:
+1. *Compose from URL* (o. ä.) mit `https://github.com/janschachtschabel/mcp-wiki-js-ai` — ohne
+   Variablen bereitstellen.
+2. Projekt bearbeiten, in der `.env` `DOMAIN` (nur Hostname, kein `https://`), `ADMIN_EMAIL` und
+   `ADMIN_PASSWORD` setzen, neu bereitstellen. Die Ersteinrichtung läuft automatisch.
+3. `ADMIN_PASSWORD` wieder leeren, neu bereitstellen; im Wiki eine Gruppe „Team“ ohne
+   `manage:system` anlegen.
 
-1. **Compose from URL** mit `https://github.com/janschachtschabel/mcp-wiki-js-ai`, ohne Variablen
-   bereitstellen.
-2. Projekt bearbeiten, in der `.env` setzen und neu bereitstellen:
-
-| Variable | Wert |
-|---|---|
-| `DOMAIN` | nur der Hostname, z. B. `wiki.example.org` (DNS-A-Eintrag zeigt auf den Server) |
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | erstes Admin-Konto; `ADMIN_PASSWORD` nach der Einrichtung wieder leeren |
-| `BOOTSTRAP_ARGS` | optional, z. B. `--locale=en` (Deutsch ist voreingestellt) oder `--demo` |
-
-Traefik routet die MCP-Pfade an den MCP-Server, alles andere an Wiki.js, und sperrt den Setup-Endpunkt
-`/finalize`. Die Datei setzt kein vorhandenes Docker-Netz voraus: Sie legt ihr eigenes Netz
-`wikijs-web` an, das ein Traefik im Host-Modus (wie bei Hostinger) direkt erreicht. Entrypoint
-`websecure` und Zertifikats-Resolver `letsencrypt` passen zu Hostingers Traefik; bei anderem Traefik
-`TRAEFIK_ENTRYPOINT`, `TRAEFIK_CERTRESOLVER` und — läuft Traefik in einem eigenen Docker-Netz —
-`TRAEFIK_NETWORK` (Name dieses Netzes) setzen. Ergebnis der Einrichtung: Log des Containers
-`bootstrap`. Danach in Wiki.js die Gruppe „Team“ ohne `manage:system` anlegen; Anwender verbinden
-sich mit `https://<DOMAIN>/mcp`.
-
-### Eigener Server ohne Proxy (eine Datei, kein Repo)
+### A2: Eigener Server ohne Proxy
 
 ```bash
 mkdir wikijs && cd wikijs
@@ -69,130 +59,99 @@ curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/janschachtschab
 printf 'DOMAIN=wiki.example.org\nADMIN_EMAIL=admin@example.org\nADMIN_PASSWORD=...\n' > .env
 docker compose up -d
 ```
+Ein mitgelieferter Caddy belegt 80/443 und holt das Zertifikat.
 
-Ports 80/443 müssen frei sein (Caddy holt das Zertifikat). Ohne `DOMAIN` zeigt die Seite „noch nicht
-eingerichtet“. In Docker-Panels ohne Traefik geht auch der GitHub-Link auf diese Datei bzw.
-Repository + Pfad `deploy/standalone/full`.
-
-### Selbst bauen (Repo-Checkout)
+### A3: Selbst bauen
 
 ```bash
 cp .env.example .env     # COMPOSE_FILE=docker-compose.build.yml, DOMAIN, POSTGRES_PASSWORD, MCP_SESSION_SECRET
-docker compose up -d     # baut das MCP-Image, Caddy holt TLS
+docker compose up -d
+ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='…' docker compose run --rm bootstrap --locale=de
 ```
+Lokal ohne Domain: `docker compose -f docker-compose.build.yml -f docker-compose.local.yml up -d`
+(`http://localhost:8090`).
 
-Mit `COMPOSE_FILE` in der `.env` gelten alle `docker compose …`-Befehle ohne `-f`. Ohne `DOMAIN` (oder
-ohne `MCP_SESSION_SECRET`) bricht `docker compose` mit einer klaren Meldung ab. Lokal testen ohne
-Domain/TLS (alles auf `http://localhost:8090`):
+### B: MCP zum bestehenden Wiki.js
 
 ```bash
-docker compose -f docker-compose.build.yml -f docker-compose.local.yml up -d
+mkdir wikijs-mcp && cd wikijs-mcp
+curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/janschachtschabel/mcp-wiki-js-ai/main/deploy/standalone/mcp-only/docker-compose.yml
+printf 'DOMAIN=wiki.example.org\nWIKIJS_URL=https://wiki.example.org\n' > .env
+docker compose up -d
 ```
+Dann entweder **B1** `TRAEFIK_ENABLE=true` ergänzen (Traefik routet die MCP-Pfade per Label) oder
+**B2** im vorhandenen Proxy die MCP-Pfade an `127.0.0.1:3100` geben — Beispiele für nginx, Caddy und
+Apache in der [Anleitung](mcp-for-wiki-js/docs/installation-it.md#b2-vor-dem-wiki-steht-nginx-caddy-apache-o-ä).
+Kubernetes (**B3**): [Helm-Chart](deploy/helm/wikijs-mcp/README.md).
 
-**Wiki.js selbst gehört nicht ins Repo:** Es läuft aus dem offiziellen Image
-`requarks/wiki:2`, das Compose beim ersten Start automatisch zieht — hier liegt
-nur der MCP-Server, die Deploy-Konfiguration und (für `docker-compose.build.yml`)
-eine gemountete Wiki-Config ([deploy/wiki/config.yml](deploy/wiki/config.yml),
-unverändert bis auf den DB-Pool). Updates: neues Image ziehen, fertig.
+### C: Nur MCP
 
-## Ersteinrichtung (erster Admin, Startseite, Suche)
+**C1:** dieselbe Datei wie bei B mit eigener Adresse (`DOMAIN=mcp.example.org`,
+`WIKIJS_URL=https://wiki.example.org`) und einem Proxy mit TLS davor. Anwender tragen
+`https://mcp.example.org/mcp` ein; die Freigabe fragt die Wiki-Zugangsdaten dann per Formular ab.
+**C2:** eine Person startet den Server lokal über stdio mit eigenem Wiki.js-API-Key —
+[Server-README](mcp-for-wiki-js/README.md#claude-desktop-lokal-stdio).
 
-Bei `docker-compose.yml` und `deploy/standalone/full` läuft die Ersteinrichtung automatisch (siehe
-oben). Mit `docker-compose.build.yml` startet ein frisches Wiki.js im Setup-Modus (Admin-Konto
-anlegen, Startseite fehlt); der Compose-Dienst `bootstrap` erledigt alles in einem Rutsch —
-**idempotent**, kann jederzeit erneut laufen (kein Node auf dem Host nötig):
+## Wichtigste Umgebungsvariablen
 
-```bash
-ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='sicheres-passwort' \
-  docker compose run --rm bootstrap --locale=de
-# Lokaler Test-Stack: dieselben -f-Angaben wie beim Start
-#   docker compose -f docker-compose.build.yml -f docker-compose.local.yml run --rm bootstrap --locale=de
-# Windows PowerShell:
-#   $env:ADMIN_EMAIL='admin@example.org'; $env:ADMIN_PASSWORD='...'
-#   docker compose run --rm bootstrap --locale=de
-```
+| Variable | Bedeutung | Gilt für |
+|---|---|---|
+| `DOMAIN` | Hostname von Wiki/MCP, **ohne** `https://` | alle Compose-Dateien |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | erstes Admin-Konto (danach Passwort leeren) | A |
+| `BOOTSTRAP_ARGS` | `--locale=en` (statt Deutsch), `--demo` (Testgruppe + Testnutzer) | A1, A2 |
+| `WIKIJS_URL` | wie der MCP das vorhandene Wiki erreicht | B, C1 |
+| `TRAEFIK_ENABLE` | Traefik-Labels einschalten | B1, C1 |
+| `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERTRESOLVER` / `TRAEFIK_NETWORK` | Namen im vorhandenen Traefik (Defaults `websecure` / `letsencrypt` / eigenes Netz) | A1, B1, C1 |
+| `WIKIJS_BLOCKED_TAGS` | Tags, die Seiten für die KI sperren (Default `kein-ki`) | alle |
+| `MCP_ALLOWED_REDIRECT_HOSTS` | erlaubte OAuth-Rückleitungen, z. B. `claude.ai,chatgpt.com` | alle |
+| `MCP_IMAGE` | anderes Image oder Release-Tag | alle |
 
-**Warum nicht im Browser?** Bis zur Einrichtung legt bei Wiki.js der erste
-Aufruf von `/finalize` das Admin-Konto an — für jeden, der die Domain erreicht.
-Caddy bzw. Traefik sperren `/finalize` deshalb von außen; der Dienst `bootstrap`
-spricht im internen Docker-Netz direkt mit Wiki.js. Die Adresse auf `/ki-zugang`
-kommt aus `PUBLIC_BASE_URL` bzw. `https://<DOMAIN>` (lokal `http://localhost:8090`).
+Vollständige Tabellen je Datei: [Anleitung, Umgebungsvariablen](mcp-for-wiki-js/docs/installation-it.md#umgebungsvariablen) ·
+alle Server-Variablen: [Server-README](mcp-for-wiki-js/README.md#vollständige-env-referenz) ·
+kommentierte Vorlage: [`.env.example`](.env.example).
 
-`--demo` legt zusätzlich eine Gruppe „Team" + Testnutzer an und **verlangt
-dann `DEMO_PASSWORD`** (kein Default, sonst entstünde ein Konto mit öffentlich
-bekanntem Passwort). Nur für Test-Instanzen, nicht auf Produktiv-Wikis:
-`… ADMIN_PASSWORD='…' DEMO_PASSWORD='…' docker compose run --rm bootstrap --demo`.
-Optional: `DEMO_EMAIL` (Default `test@team.local`) und `DEMO_NAME` (Default `Test-Zugang`).
-
-Das legt an: Admin-Konto, Startseite, die Anwender-Anleitung **`/ki-zugang`**
-(Connector-Adresse + Einrichtung pro KI-Programm), **PostgreSQL-Suchmaschine** (Wörterbuch
-passend zur Sprache — deutlich bessere Agenten-Suche als der Default), mit
-`--locale=de` die deutsche Oberfläche und mit `--demo` eine Gruppe „Team"
-(lesen/schreiben, kein Löschen) samt Testnutzer.
-
-Das Skript lässt sich auch direkt mit Node ≥ 18 starten
-(`WIKI_URL=https://wiki.example.org … node deploy/scripts/bootstrap.mjs`; `PUBLIC_URL`
-setzt dabei eine abweichende Connector-Adresse für `/ki-zugang`, Default `WIKI_URL`) — über
-die Domain aber nur für ein **bereits eingerichtetes** Wiki (etwa um `--locale`
-oder `--demo` nachzuholen), denn `/finalize` ist dort gesperrt.
-
-Die Schritte nach dem Admin-Konto gingen auch manuell (Browser: „Create Home Page"-Wizard, dann Administration
-→ Search Engine / Locale / Groups) — Hinweis dabei: Hält der Wiki-Login im
-Browser nicht (nach Login wieder abgemeldet), blockiert meist ein
-Werbe-/Tracking-Blocker (z. B. Brave Shields) die Cookies der Domain.
-
-Danach Nutzer anlegen: Administration → Groups (Gruppe mit `read:pages`,
-`write:pages`, … — **ohne** `manage:system`) → Users. Mehr im
-[Konzept-Dokument](mcp-for-wiki-js/docs/konzept-ki-zugang.md).
-
-## Bestehendes Wiki.js? Nur den MCP-Server ergänzen
-
-Läuft bei euch schon ein Wiki.js-2.x-Container, braucht ihr nur den MCP-Server
-daneben (das Wiki bleibt unangetastet — kein Fork, keine Migration): Image
-bauen → Container ins selbe Docker-Netz (`WIKIJS_URL=http://<wiki>:3000` +
-`MCP_SESSION_SECRET` + `PUBLIC_BASE_URL`) → im **vorhandenen** Reverse-Proxy die
-MCP-Pfade auf dieselbe Domain legen → in Wiki.js eine „Team"-Gruppe (ohne
-`manage:system`) anlegen.
-
-**→ Schritt-für-Schritt-Anleitung: [docs/integration-bestehendes-wiki.md](mcp-for-wiki-js/docs/integration-bestehendes-wiki.md).**
-Läuft das Wiki auf einem vServer mit eigenem Proxy: fertige Compose-Datei
-[`deploy/standalone/mcp-only/docker-compose.yml`](deploy/standalone/mcp-only/docker-compose.yml) plus
-nginx-/Caddy-Beispiele in der [IT-Anleitung, Option B](mcp-for-wiki-js/docs/installation-it.md#option-b-bestehendes-wikijs-auf-einem-server-mit-docker-vserver).
+## Nutzung
 
 | URL | Zweck |
 |---|---|
 | `https://<DOMAIN>` | Wiki.js |
 | `https://<DOMAIN>/mcp` | MCP-Endpoint — die Connector-URL für alle Clients |
-| `https://<DOMAIN>/me` | Eigene KI-Zugänge ansehen / widerrufen |
-
-Clients verbinden (Beispiele):
+| `https://<DOMAIN>/me` | eigene KI-Zugänge ansehen / widerrufen |
+| `https://<DOMAIN>/ki-zugang` | Anleitung für Anwender (legt die Ersteinrichtung an) |
 
 ```bash
 # Claude Code
 claude mcp add --transport http wiki https://<DOMAIN>/mcp   # dann: /mcp → Authenticate
 
-# claude.ai / Claude Desktop:  Settings → Connectors → Add custom connector → URL
-# ChatGPT / Codex:             Connector mit der URL anlegen → OAuth-Login startet automatisch
+# claude.ai / Claude Desktop:  Einstellungen → Connectors → Add custom connector → URL
+# ChatGPT / Cursor u. a.:      MCP-Server bzw. Connector mit der URL anlegen → Wiki-Login startet automatisch
 ```
 
-**Update:** `docker compose pull && docker compose up -d` (Docker-Panel: neu bereitstellen; mit
-`docker-compose.build.yml` zusätzlich `docker compose build --pull mcp`) — Wiki.js läuft aus dem
-offiziellen Image und bleibt unabhängig updatebar.
+## Betrieb
+
+- **Update:** `docker compose pull && docker compose up -d` bzw. im Panel neu bereitstellen
+  (A3 zusätzlich `docker compose build --pull mcp`). Wiki.js läuft aus dem offiziellen Image
+  `requarks/wiki:2` und bleibt unabhängig updatebar.
+- **Backup:** Fall A sichert täglich Postgres und MCP-SQLite ins Volume `db-backups` — off-host
+  kopieren. Zusätzlich die Volumes `stack-secrets` und `mcp-data` sichern.
+- **Ersteinrichtung** (`deploy/scripts/bootstrap.mjs`, idempotent): legt Admin-Konto, Startseite,
+  `/ki-zugang`, PostgreSQL-Suche und Sprache an. Der Setup-Assistent von Wiki.js (`/finalize`) ist von
+  außen gesperrt, damit niemand vor der Einrichtung das erste Admin-Konto übernimmt.
 
 ## Repo-Layout
 
 | Pfad | Inhalt |
 |---|---|
-| [`mcp-for-wiki-js/`](mcp-for-wiki-js/) | Der MCP-Server (Next.js/TypeScript): 70 Tools über die Wiki.js-GraphQL-API, OAuth-Layer, Rechte-Engine, Tests. Details: [README](mcp-for-wiki-js/README.md) · [Konzept & Rechtemodell (deutsch)](mcp-for-wiki-js/docs/konzept-ki-zugang.md) · [OAuth-Doku](mcp-for-wiki-js/docs/oauth.md) |
-| [`Dockerfile`](Dockerfile) | Production-Image des MCP-Servers (Next.js standalone, Node 24) |
-| [`docker-compose.yml`](docker-compose.yml) | Komplett-Stack hinter vorhandenem Traefik (Docker-Panels): Postgres + Wiki.js + MCP + Backup, fertiges Image, Geheimnisse automatisch |
-| [`deploy/standalone/`](deploy/standalone/) | Ohne Repo-Checkout: `full/` Komplett-Stack mit eigenem Caddy (80/443), `mcp-only/` nur MCP neben bestehendem Wiki |
-| [`docker-compose.build.yml`](docker-compose.build.yml) | Komplett-Stack zum Selbstbauen: Postgres + Wiki.js + MCP (lokaler Build) + Caddy (Auto-HTTPS) + Backup; `docker-compose.local.yml` für lokale Tests |
+| [`mcp-for-wiki-js/`](mcp-for-wiki-js/) | Der MCP-Server (Next.js/TypeScript): 70 Tools über die Wiki.js-GraphQL-API, OAuth-Layer, Rechte-Engine, Tests. Details: [README](mcp-for-wiki-js/README.md) · [Konzept & Rechtemodell](mcp-for-wiki-js/docs/konzept-ki-zugang.md) · [OAuth-Doku](mcp-for-wiki-js/docs/oauth.md) |
+| [`docker-compose.yml`](docker-compose.yml) | A1: Komplett-Stack hinter vorhandenem Traefik (Docker-Panels) |
+| [`deploy/standalone/full/`](deploy/standalone/full/) | A2: Komplett-Stack mit eigenem Caddy (80/443) |
+| [`deploy/standalone/mcp-only/`](deploy/standalone/mcp-only/) | B1/B2/C1: nur der MCP-Server, optional mit Traefik-Labels |
+| [`docker-compose.build.yml`](docker-compose.build.yml) | A3: Komplett-Stack zum Selbstbauen; `docker-compose.local.yml` für lokale Tests |
+| [`deploy/helm/wikijs-mcp/`](deploy/helm/wikijs-mcp/) | B3: Helm-Chart für Kubernetes |
 | [`deploy/scripts/`](deploy/scripts/) | `bootstrap.mjs` (Ersteinrichtung), `standalone-init.mjs` (Geheimnisse, Caddyfile) — beide auch im Image |
-| [`deploy/caddy/`](deploy/caddy/) | Reverse-Proxy-Routing (eine Domain für Wiki & MCP → Ein-Klick-SSO) |
-| [`deploy/helm/wikijs-mcp/`](deploy/helm/wikijs-mcp/) | Helm-Chart für Kubernetes (MCP-Server; Wiki.js läuft separat) |
-| [`.github/workflows/`](.github/workflows/) | GitHub-CI: Typecheck/Tests/Build + Image → ghcr.io |
-| [`.gitlab-ci.yml`](.gitlab-ci.yml) | GitLab-CI: gleiche Checks + Image → Firmen-Registry + Helm-Chart-Push |
+| [`deploy/caddy/`](deploy/caddy/), [`deploy/wiki/`](deploy/wiki/) | Caddy-Routing (eine Domain für Wiki & MCP), Wiki.js-Konfiguration für A3 |
+| [`Dockerfile`](Dockerfile) | Production-Image des MCP-Servers (Next.js standalone, Node 24) |
+| [`.github/workflows/`](.github/workflows/), [`.gitlab-ci.yml`](.gitlab-ci.yml) | CI: Typecheck/Tests/Build + Image → ghcr.io bzw. Firmen-Registry + Helm-Chart |
 
 Nicht Teil des Repos (per `.gitignore` ausgeschlossen): `wiki/` (Referenz-Clone
 von requarks/wiki) und `mcp2/` (Community-MCP-Server zum Vergleich).
@@ -208,7 +167,7 @@ von requarks/wiki) und `mcp2/` (Community-MCP-Server zum Vergleich).
 
 Wichtig: KI-Zugängen in Wiki.js **nie** `manage:system` geben — das umgeht dort
 alle Page-Rules. Und im Wiki keine Seiten unter `me/`, `oauth/`, `mcp`,
-`api/` anlegen (Pfade gehören dem MCP-Server, siehe Caddy/Ingress-Routing).
+`api/` anlegen (diese Pfade gehören dem MCP-Server).
 
 ## Kubernetes / GitLab
 

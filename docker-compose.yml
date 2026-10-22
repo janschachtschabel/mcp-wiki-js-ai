@@ -15,7 +15,8 @@
 #        ADMIN_EMAIL     erstes Admin-Konto, wird dann automatisch angelegt
 #        ADMIN_PASSWORD  nach der Einrichtung wieder entfernen
 #
-# Traefik-Anbindung (Defaults = Traefik-Vorlage im Hostinger Docker Manager):
+# Traefik-Anbindung (Defaults = üblicher Panel-Traefik im Host-Modus mit HTTPS-Eingang
+# websecure und Zertifikatsdienst letsencrypt):
 #   TRAEFIK_ENTRYPOINT=websecure  TRAEFIK_CERTRESOLVER=letsencrypt
 #   TRAEFIK_NETWORK=wikijs-web — nur ändern, wenn Traefik in einem eigenen
 #   Docker-Netz läuft (dann dessen Namen, z. B. traefik-proxy); im Host-Modus
