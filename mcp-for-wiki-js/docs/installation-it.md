@@ -220,7 +220,7 @@ POSTGRES_PASSWORD=<openssl rand -base64 24>
 MCP_SESSION_SECRET=<openssl rand -base64 32>   # mind. 16 Zeichen
 ADMIN_EMAIL=admin@example.org          # nur für die Ersteinrichtung
 ADMIN_PASSWORD=…                       # nach dem ersten Start wieder entfernen
-# BOOTSTRAP_ARGS=--locale=de           # Default; mit --demo zusätzlich Gruppe „Team“ + Testnutzer
+# BOOTSTRAP_ARGS=--demo                # optional; Deutsch ist voreingestellt, --locale=en überschreibt
 ```
 Beim Start richtet der Dienst `bootstrap` das Wiki ein (Admin-Konto, Startseite, `/ki-zugang`,
 PostgreSQL-Suche, Sprache) und beendet sich dann. Das Ergebnis steht im Log des Containers `bootstrap`
@@ -290,7 +290,7 @@ Alle weiteren Variablen (Legacy-Betrieb, Limits, Diagnose): vollständige Refere
 | `DOMAIN` | öffentliche Domain des Stacks (Caddy holt dafür das TLS-Zertifikat) | – (Pflicht) |
 | `POSTGRES_PASSWORD` | Passwort der Wiki.js-Datenbank | – (Pflicht) |
 | `MCP_SESSION_SECRET` | siehe oben | – (Pflicht) |
-| `PUBLIC_BASE_URL` | abweichende öffentliche Adresse | `https://$DOMAIN` |
+| `PUBLIC_BASE_URL` | abweichende öffentliche Adresse (nur Variante 1; Variante 2 nutzt immer `https://$DOMAIN`) | `https://$DOMAIN` |
 | `WIKIJS_DB_POOL_MIN` / `WIKIJS_DB_POOL_MAX` | Verbindungspool von Wiki.js (nur Variante 1) | `2` / `20` |
 | `BACKUP_INTERVAL_SECONDS` / `BACKUP_KEEP` | Backup-Intervall und Anzahl aufbewahrter Stände | `86400` / `7` |
 | `MCP_IMAGE` | Image des MCP-Servers (Variante 1: fertiges Image statt lokalem Build) | `wikijs-mcp:local` (Variante 1) / `ghcr.io/janschachtschabel/mcp-wiki-js-ai:main` (Variante 2, Option B) |
@@ -304,7 +304,8 @@ Alle weiteren Variablen (Legacy-Betrieb, Limits, Diagnose): vollständige Refere
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | erstes Admin-Konto (Pflicht, aus Shell oder `.env`) |
 | `--locale=de` | Standardsprache setzen und vorhandene Seiten migrieren |
 | `--demo` | zusätzlich Gruppe „Team“ + Testnutzer — nur für Test-Instanzen; braucht `DEMO_PASSWORD` (optional `DEMO_EMAIL`, Default `test@team.local`, und `DEMO_NAME`) |
-| `BOOTSTRAP_ARGS` | nur Variante 2: die Parameter oben als Variable, Default `--locale=de` (z. B. `--locale=de --demo`) |
+| `BOOTSTRAP_ARGS` | zusätzliche Parameter als Variable, durch Leerzeichen getrennt; gewinnen gegen die Kommandozeile. Variante 2 startet mit `--locale=de`, `BOOTSTRAP_ARGS=--demo` ergänzt, `--locale=en` überschreibt |
+| `--if-configured` | ohne `ADMIN_EMAIL`/`ADMIN_PASSWORD` still beenden statt Fehler (so in Variante 2 gesetzt) |
 
 Die öffentliche Adresse für die Seite `/ki-zugang` nimmt der Dienst automatisch aus `PUBLIC_BASE_URL`
 bzw. `https://$DOMAIN`.
@@ -358,6 +359,7 @@ https://<domain>/mcp
 | `413 Payload Too Large` | Anfrage an `/mcp` über 4 MB (z. B. großer Datei-Upload per KI) – Datei direkt im Wiki hochladen |
 | `docker compose` bricht mit „DOMAIN fehlt“ ab | `DOMAIN` in `.env` leer oder `.env` fehlt |
 | Docker-Panel meldet beim Compose-Import „nicht gefunden“ | Repo-`docker-compose.yml` braucht Build und Repo-Dateien – `deploy/standalone/docker-compose.full.yml` bzw. `…mcp-only.yml` nehmen (Option C Variante 2 / Option B) |
+| Docker-Panel: „YAML-Datei kann nicht verarbeitet werden“ | ältere Fassung der Standalone-Datei (mit Tabs/YAML-Ankern) im Cache – Datei neu importieren; hilft das nicht, per SSH mit `docker compose up -d` starten |
 | Bootstrap meldet „Admin-Login schlägt fehl“ | Wiki ist schon eingerichtet, `ADMIN_PASSWORD` passt nicht mehr – Variable entfernen |
 | Login meldet „Zu viele Anmeldeversuche“ | Login-Limit: 10 Versuche pro IP bzw. 5 pro Benutzername in 15 Minuten |
 | Client-Registrierung liefert `429` | mehr als 20 Registrierungen pro IP und Stunde |

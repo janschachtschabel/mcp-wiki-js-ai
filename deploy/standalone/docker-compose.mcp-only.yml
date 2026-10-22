@@ -42,9 +42,9 @@ services:
       # direkt auf dem Host bzw. mit veröffentlichtem Port läuft.
       - "host.docker.internal:host-gateway"
     environment:
-      WIKIJS_URL: ${WIKIJS_URL:?WIKIJS_URL fehlt}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL fehlt}
-      MCP_SESSION_SECRET: ${MCP_SESSION_SECRET:?MCP_SESSION_SECRET fehlt}
+      WIKIJS_URL: ${WIKIJS_URL:?required}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?required}
+      MCP_SESSION_SECRET: ${MCP_SESSION_SECRET:?required}
       MCP_DATA_DIR: /data
       WIKIJS_PERMISSION_PRESET: ${WIKIJS_PERMISSION_PRESET:-full}
       WIKIJS_OAUTH_ROLE: ${WIKIJS_OAUTH_ROLE:-wiki}

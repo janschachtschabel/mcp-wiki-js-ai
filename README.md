@@ -68,7 +68,7 @@ Variablen im Panel (bzw. in einer `.env` daneben):
 | `POSTGRES_PASSWORD` | zufällig, z. B. `openssl rand -base64 24` |
 | `MCP_SESSION_SECRET` | zufällig, mind. 16 Zeichen, z. B. `openssl rand -base64 32` |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | erstes Admin-Konto; `ADMIN_PASSWORD` nach dem ersten Start wieder entfernen |
-| `BOOTSTRAP_ARGS` | optional, Default `--locale=de` |
+| `BOOTSTRAP_ARGS` | optional: zusätzliche Parameter der Ersteinrichtung, z. B. `--locale=en` (Deutsch ist voreingestellt) oder `--demo` |
 
 Voraussetzungen: DNS-A-Eintrag der Domain zeigt auf den Server, Ports 80/443 sind frei. Die
 Ersteinrichtung läuft beim Start automatisch (Log des Containers `bootstrap`). Danach in Wiki.js die

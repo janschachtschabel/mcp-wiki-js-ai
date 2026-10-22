@@ -71,7 +71,7 @@ Variables in the panel (or in a `.env` next to the file):
 | `POSTGRES_PASSWORD` | random, e.g. `openssl rand -base64 24` |
 | `MCP_SESSION_SECRET` | random, at least 16 characters, e.g. `openssl rand -base64 32` |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | first admin account; remove `ADMIN_PASSWORD` after the first start |
-| `BOOTSTRAP_ARGS` | optional, default `--locale=de` |
+| `BOOTSTRAP_ARGS` | optional: extra first-run setup flags, e.g. `--locale=en` (German is the default) or `--demo` |
 
 Prerequisites: the domain's DNS A record points to the server, ports 80/443 are free. First-run setup
 runs automatically on start (log of the `bootstrap` container). Afterwards create a "Team" group in

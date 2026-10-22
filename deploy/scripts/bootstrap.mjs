@@ -31,14 +31,24 @@
  *      ADMIN_EMAIL, ADMIN_PASSWORD,
  *      DEMO_EMAIL/DEMO_NAME (nur mit --demo, haben Defaults),
  *      DEMO_PASSWORD (Pflicht mit --demo).
+ *      BOOTSTRAP_ARGS zusätzliche Parameter, durch Leerzeichen getrennt (für
+ *                 Compose-Dateien ohne Shell, z. B. "--locale=en --demo");
+ *                 sie stehen hinter den Kommandozeilen-Parametern und gewinnen.
+ *
+ * --if-configured  ohne ADMIN_EMAIL/ADMIN_PASSWORD still beenden (Exit 0) statt
+ *                  mit Fehler — für den automatischen Start in
+ *                  deploy/standalone/docker-compose.full.yml.
  */
 
 const WIKI_URL = (process.env.WIKI_URL || 'http://localhost:8090').replace(/\/+$/, '');
 const PUBLIC_URL = (process.env.PUBLIC_URL || WIKI_URL).replace(/\/+$/, '');
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
-const WITH_DEMO = process.argv.includes('--demo');
-const LOCALE = (process.argv.find((a) => a.startsWith('--locale=')) ?? '').split('=')[1];
+const ARGS = [...process.argv.slice(2), ...(process.env.BOOTSTRAP_ARGS ?? '').split(/\s+/).filter(Boolean)];
+const WITH_DEMO = ARGS.includes('--demo');
+const IF_CONFIGURED = ARGS.includes('--if-configured');
+// Last one wins, so BOOTSTRAP_ARGS can override a --locale default from the command line.
+const LOCALE = (ARGS.findLast((a) => a.startsWith('--locale=')) ?? '').split('=')[1];
 
 // No hardcoded default password: a committed default would ship a
 // write-capable, publicly-known account into any wiki this runs against.
@@ -53,6 +63,10 @@ const TEAM_PERMS = [
   'read:comments', 'write:comments', 'read:source', 'read:history',
 ];
 
+if ((!ADMIN_EMAIL || !ADMIN_PASSWORD) && IF_CONFIGURED) {
+  console.log('• ADMIN_EMAIL/ADMIN_PASSWORD nicht gesetzt — Ersteinrichtung übersprungen.');
+  process.exit(0);
+}
 if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
   console.error('ADMIN_EMAIL und ADMIN_PASSWORD müssen als Umgebungsvariablen gesetzt sein.');
   process.exit(1);
