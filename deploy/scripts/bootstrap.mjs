@@ -35,8 +35,9 @@
  *                 Compose-Dateien ohne Shell, z. B. "--locale=en --demo");
  *                 sie stehen hinter den Kommandozeilen-Parametern und gewinnen.
  *
- * --if-configured  ohne ADMIN_EMAIL/ADMIN_PASSWORD still beenden (Exit 0) statt
- *                  mit Fehler — für den automatischen Start in
+ * --if-configured  ohne ADMIN_EMAIL/ADMIN_PASSWORD oder ohne PUBLIC_URL still
+ *                  beenden (Exit 0) statt mit Fehler bzw. statt WIKI_URL als
+ *                  öffentliche Adresse zu nehmen — für den automatischen Start in
  *                  deploy/standalone/full/docker-compose.yml.
  */
 
@@ -65,6 +66,12 @@ const TEAM_PERMS = [
 
 if ((!ADMIN_EMAIL || !ADMIN_PASSWORD) && IF_CONFIGURED) {
   console.log('• ADMIN_EMAIL/ADMIN_PASSWORD nicht gesetzt — Ersteinrichtung übersprungen.');
+  process.exit(0);
+}
+// The address goes into /ki-zugang and is never corrected by re-runs, so the
+// automatic start waits for a real public address instead of using WIKI_URL.
+if (!process.env.PUBLIC_URL && IF_CONFIGURED) {
+  console.log('• Keine öffentliche Adresse (DOMAIN) gesetzt — Ersteinrichtung übersprungen.');
   process.exit(0);
 }
 if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {

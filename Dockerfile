@@ -28,12 +28,16 @@ ENV NODE_ENV=production \
     PORT=3000 \
     MCP_DATA_DIR=/data
 WORKDIR /app
-RUN mkdir -p /data && chown node:node /data
+# /stack/*: volumes of deploy/standalone/full (generated secrets, Caddyfile) —
+# created here so fresh named volumes inherit the node owner.
+RUN mkdir -p /data /stack/secrets /stack/caddy && chown -R node:node /data /stack
 COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
-# First-run setup script for Wiki.js (dependency-free Node). Lets self-contained
-# compose files (deploy/standalone) run the bootstrap without repository files.
-COPY --chown=node:node deploy/scripts/bootstrap.mjs ./bootstrap.mjs
+# First-run setup script for Wiki.js, init step and Caddyfile template (all
+# dependency-free) — the self-contained compose files in deploy/standalone run
+# them from the image instead of from repository files.
+COPY --chown=node:node deploy/scripts/bootstrap.mjs deploy/scripts/standalone-init.mjs ./
+COPY --chown=node:node deploy/caddy/Caddyfile ./Caddyfile
 USER node
 EXPOSE 3000
 VOLUME /data

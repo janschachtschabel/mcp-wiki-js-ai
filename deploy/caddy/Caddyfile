@@ -29,7 +29,7 @@
 	# too) is covered; /finalize/* covers the trailing-slash variant.
 	@wikiSetup path /finalize /finalize/*
 	handle @wikiSetup {
-		respond "Setup only via: docker compose run --rm bootstrap" 403
+		respond "Setup only via the bootstrap service" 403
 	}
 
 	# Repeated `path` lines in one matcher block are merged (any match wins).

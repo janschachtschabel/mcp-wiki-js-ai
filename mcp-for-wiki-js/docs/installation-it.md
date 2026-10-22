@@ -203,10 +203,9 @@ Die Repo-Datei `docker-compose.yml` im Hauptordner baut das MCP-Image auf dem Se
 aus `deploy/` ein. Für Docker-Panels mit Compose-Import per URL und Server ohne Repo gibt es
 [`deploy/standalone/full/docker-compose.yml`](../../deploy/standalone/full/docker-compose.yml)
 (eigener Ordner, Standardname — Panels erkennen nur `docker-compose.yml` bzw. `compose.yml`):
-gleiche Dienste, fertiges Image aus GHCR, Caddy-Konfiguration in der Datei selbst, Ersteinrichtung
-automatisch beim Start.
+gleiche Dienste, fertiges Image aus GHCR, keine Pflicht-Variablen, Ersteinrichtung automatisch.
 
-- **Docker-Panel:** als Compose-Quelle diese URL angeben und die Variablen im Panel eintragen:
+- **Docker-Panel:** als Compose-Quelle diese URL angeben:
   `https://github.com/janschachtschabel/mcp-wiki-js-ai/blob/main/deploy/standalone/full/docker-compose.yml`  
   Verlangt das Panel Repository und Pfad getrennt: `https://github.com/janschachtschabel/mcp-wiki-js-ai`
   und Pfad `deploy/standalone/full`.
@@ -217,24 +216,33 @@ automatisch beim Start.
 Vorher: Der DNS-A-Eintrag der Domain zeigt auf die IP des Servers, und die Ports 80/443 sind auf dem
 Server frei. Caddy holt dann das HTTPS-Zertifikat automatisch.
 
-Variablen (Pflicht: die ersten drei; im Panel einzeln eintragen oder als `.env`):
+**Ablauf im Panel (zwei Schritte).** Manche Panels erlauben Variablen erst, wenn das Projekt existiert,
+und legen es nur an, wenn die erste Bereitstellung klappt. Deshalb startet die Datei ohne jede Variable:
+
+1. **Bereitstellen ohne Variablen.** Der Dienst `init` erzeugt beim ersten Start ein zufälliges
+   Postgres-Passwort und `MCP_SESSION_SECRET` (Volume `stack-secrets`, bleiben über Neustarts erhalten).
+   Ohne `DOMAIN` zeigt die Seite (Port 80) „noch nicht eingerichtet“.
+2. **Projekt bearbeiten, Variablen setzen, neu bereitstellen:**
 ```
 DOMAIN=wiki.example.org                # nur der Hostname, ohne https:// und ohne Pfad
-POSTGRES_PASSWORD=<openssl rand -base64 24>
-MCP_SESSION_SECRET=<openssl rand -base64 32>   # mind. 16 Zeichen
 ADMIN_EMAIL=admin@example.org          # nur für die Ersteinrichtung
-ADMIN_PASSWORD=…                       # nach dem ersten Start wieder entfernen
+ADMIN_PASSWORD=…                       # nach der Einrichtung wieder entfernen
 # BOOTSTRAP_ARGS=--demo                # optional; Deutsch ist voreingestellt, --locale=en überschreibt
 ```
-Beim Start richtet der Dienst `bootstrap` das Wiki ein (Admin-Konto, Startseite, `/ki-zugang`,
-PostgreSQL-Suche, Sprache) und beendet sich dann. Das Ergebnis steht im Log des Containers `bootstrap`
-(`docker compose logs bootstrap`). Ohne `ADMIN_EMAIL`/`ADMIN_PASSWORD` überspringt er sich. Er ist
-idempotent, ein erneuter Start ändert ein eingerichtetes Wiki nicht. Unterschiede zu Variante 1: Wiki.js
-nutzt seinen eingebauten DB-Pool (max. 10 Verbindungen, daher `WIKIJS_MAX_CONCURRENCY` Default `6`),
-und Updates brauchen keinen Build (`docker compose pull && docker compose up -d`).
+Mit einer `.env` neben der Datei geht beides in einem Schritt.
+
+Beim Start schreibt `init` die Caddy-Konfiguration für `DOMAIN` (Vorlage: `deploy/caddy/Caddyfile`,
+im Image enthalten), dann richtet der Dienst `bootstrap` das Wiki ein (Admin-Konto, Startseite,
+`/ki-zugang`, PostgreSQL-Suche, Sprache) und beendet sich. Das Ergebnis steht im Log des Containers
+`bootstrap`. Fehlen `DOMAIN`, `ADMIN_EMAIL` oder `ADMIN_PASSWORD`, überspringt er sich. Er ist
+idempotent, ein erneuter Start ändert ein eingerichtetes Wiki nicht. Unterschiede zu Variante 1:
+Geheimnisse werden erzeugt statt gesetzt, Wiki.js nutzt seinen eingebauten DB-Pool (max. 10
+Verbindungen, daher `WIKIJS_MAX_CONCURRENCY` Default `6`), und Updates brauchen keinen Build
+(`docker compose pull && docker compose up -d`). Das Volume `stack-secrets` gehört zur Datensicherung:
+Ohne das Postgres-Passwort darin startet Wiki.js nach einem Restore nicht.
 
 Danach:
-1. `ADMIN_PASSWORD` im Panel bzw. in der `.env` entfernen.
+1. `ADMIN_PASSWORD` im Panel bzw. in der `.env` entfernen und neu bereitstellen.
 2. Im Wiki unter Administration → Groups die Gruppe „Team“ anlegen, wie in Option A, Schritt 4
    (**ohne** `manage:system`), und Nutzer zuordnen.
 3. Testen wie in Option A, Schritt 5 (`https://<DOMAIN>/api/health`).
@@ -291,9 +299,9 @@ Alle weiteren Variablen (Legacy-Betrieb, Limits, Diagnose): vollständige Refere
 
 | Variable | Zweck | Default |
 |---|---|---|
-| `DOMAIN` | öffentliche Domain des Stacks (Caddy holt dafür das TLS-Zertifikat) | – (Pflicht) |
-| `POSTGRES_PASSWORD` | Passwort der Wiki.js-Datenbank | – (Pflicht) |
-| `MCP_SESSION_SECRET` | siehe oben | – (Pflicht) |
+| `DOMAIN` | öffentliche Domain des Stacks (Caddy holt dafür das TLS-Zertifikat) | – (Pflicht; Variante 2: anfangs leer erlaubt, dann Hinweisseite) |
+| `POSTGRES_PASSWORD` | Passwort der Wiki.js-Datenbank | – (Pflicht in Variante 1; Variante 2 erzeugt es selbst) |
+| `MCP_SESSION_SECRET` | siehe oben | – (Pflicht in Variante 1 und Option B; Variante 2 erzeugt es selbst) |
 | `PUBLIC_BASE_URL` | abweichende öffentliche Adresse (nur Variante 1; Variante 2 nutzt immer `https://$DOMAIN`) | `https://$DOMAIN` |
 | `WIKIJS_DB_POOL_MIN` / `WIKIJS_DB_POOL_MAX` | Verbindungspool von Wiki.js (nur Variante 1) | `2` / `20` |
 | `BACKUP_INTERVAL_SECONDS` / `BACKUP_KEEP` | Backup-Intervall und Anzahl aufbewahrter Stände | `86400` / `7` |
@@ -309,7 +317,7 @@ Alle weiteren Variablen (Legacy-Betrieb, Limits, Diagnose): vollständige Refere
 | `--locale=de` | Standardsprache setzen und vorhandene Seiten migrieren |
 | `--demo` | zusätzlich Gruppe „Team“ + Testnutzer — nur für Test-Instanzen; braucht `DEMO_PASSWORD` (optional `DEMO_EMAIL`, Default `test@team.local`, und `DEMO_NAME`) |
 | `BOOTSTRAP_ARGS` | zusätzliche Parameter als Variable, durch Leerzeichen getrennt; gewinnen gegen die Kommandozeile. Variante 2 startet mit `--locale=de`, `BOOTSTRAP_ARGS=--demo` ergänzt, `--locale=en` überschreibt |
-| `--if-configured` | ohne `ADMIN_EMAIL`/`ADMIN_PASSWORD` still beenden statt Fehler (so in Variante 2 gesetzt) |
+| `--if-configured` | ohne `ADMIN_EMAIL`/`ADMIN_PASSWORD` oder ohne `PUBLIC_URL` still beenden statt Fehler (so in Variante 2 gesetzt) |
 
 Die öffentliche Adresse für die Seite `/ki-zugang` nimmt der Dienst automatisch aus `PUBLIC_BASE_URL`
 bzw. `https://$DOMAIN`.
@@ -362,7 +370,7 @@ https://<domain>/mcp
 | MCP-Container/Pod startet nicht (Exit 1) | Konfigurationsfehler – Log-Zeile `[wikijs-mcp] …` lesen (siehe oben) |
 | `413 Payload Too Large` | Anfrage an `/mcp` über 4 MB (z. B. großer Datei-Upload per KI) – Datei direkt im Wiki hochladen |
 | `docker compose` bricht mit „DOMAIN fehlt“ ab | `DOMAIN` in `.env` leer oder `.env` fehlt |
-| Docker-Panel meldet beim Compose-Import „Projekt nicht gefunden“ | Panels erkennen nur Dateien namens `docker-compose.yml`/`compose.yml` – Ordner `deploy/standalone/full` bzw. `deploy/standalone/mcp-only` angeben (Option C Variante 2 / Option B) |
+| Docker-Panel meldet „Docker project not found“ / „Projekt nicht gefunden“ | Die erste Bereitstellung ist gescheitert (Panel legt das Projekt dann nicht an). Ursachen: Datei heißt nicht `docker-compose.yml`/`compose.yml` (Ordner `deploy/standalone/full` bzw. `…/mcp-only` angeben) oder Pflicht-Variablen fehlen (nur `mcp-only`; `full` startet ohne) |
 | Docker-Panel: „YAML-Datei kann nicht verarbeitet werden“ | ältere Fassung der Standalone-Datei (mit Tabs/YAML-Ankern) im Cache – Datei neu importieren; hilft das nicht, per SSH mit `docker compose up -d` starten |
 | Bootstrap meldet „Admin-Login schlägt fehl“ | Wiki ist schon eingerichtet, `ADMIN_PASSWORD` passt nicht mehr – Variable entfernen |
 | Login meldet „Zu viele Anmeldeversuche“ | Login-Limit: 10 Versuche pro IP bzw. 5 pro Benutzername in 15 Minuten |

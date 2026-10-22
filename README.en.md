@@ -69,14 +69,17 @@ If the panel asks for repository and path separately: repository
 recognise files named `docker-compose.yml` or `compose.yml`. For `curl` use the raw file:
 `https://raw.githubusercontent.com/janschachtschabel/mcp-wiki-js-ai/main/deploy/standalone/full/docker-compose.yml`.
 
-Variables in the panel (or in a `.env` next to the file):
+**Two steps**, because some panels only allow variables after the first deployment:
+
+1. **Deploy without variables.** Nothing is required: the `init` service generates the Postgres
+   password and `MCP_SESSION_SECRET` on first start and keeps them in the `stack-secrets` volume. The
+   page then shows "not set up yet".
+2. **Edit the project, set these variables, redeploy** (with a `.env` both steps are one):
 
 | Variable | Value |
 |---|---|
 | `DOMAIN` | hostname only, e.g. `wiki.example.org` (no `https://`) |
-| `POSTGRES_PASSWORD` | random, e.g. `openssl rand -base64 24` |
-| `MCP_SESSION_SECRET` | random, at least 16 characters, e.g. `openssl rand -base64 32` |
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | first admin account; remove `ADMIN_PASSWORD` after the first start |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | first admin account; remove `ADMIN_PASSWORD` after setup |
 | `BOOTSTRAP_ARGS` | optional: extra first-run setup flags, e.g. `--locale=en` (German is the default) or `--demo` |
 
 Prerequisites: the domain's DNS A record points to the server, ports 80/443 are free. First-run setup

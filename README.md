@@ -66,19 +66,23 @@ Verlangt das Panel Repository und Pfad getrennt: Repository
 nur Dateien namens `docker-compose.yml` oder `compose.yml`. Für `curl` die Rohfassung nehmen:
 `https://raw.githubusercontent.com/janschachtschabel/mcp-wiki-js-ai/main/deploy/standalone/full/docker-compose.yml`.
 
-Variablen im Panel (bzw. in einer `.env` daneben):
+**In zwei Schritten**, weil manche Panels Variablen erst nach der ersten Bereitstellung erlauben:
+
+1. **Ohne Variablen bereitstellen.** Die Datei braucht keine Pflichtwerte: Postgres-Passwort und
+   `MCP_SESSION_SECRET` erzeugt der Dienst `init` beim ersten Start selbst und behält sie im Volume
+   `stack-secrets`. Die Seite zeigt dann „noch nicht eingerichtet“.
+2. **Projekt bearbeiten, Variablen setzen, neu bereitstellen:**
 
 | Variable | Wert |
 |---|---|
 | `DOMAIN` | nur der Hostname, z. B. `wiki.example.org` (ohne `https://`) |
-| `POSTGRES_PASSWORD` | zufällig, z. B. `openssl rand -base64 24` |
-| `MCP_SESSION_SECRET` | zufällig, mind. 16 Zeichen, z. B. `openssl rand -base64 32` |
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | erstes Admin-Konto; `ADMIN_PASSWORD` nach dem ersten Start wieder entfernen |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | erstes Admin-Konto; `ADMIN_PASSWORD` nach der Einrichtung wieder entfernen |
 | `BOOTSTRAP_ARGS` | optional: zusätzliche Parameter der Ersteinrichtung, z. B. `--locale=en` (Deutsch ist voreingestellt) oder `--demo` |
 
 Voraussetzungen: DNS-A-Eintrag der Domain zeigt auf den Server, Ports 80/443 sind frei. Die
-Ersteinrichtung läuft beim Start automatisch (Log des Containers `bootstrap`). Danach in Wiki.js die
+Ersteinrichtung läuft dann automatisch (Log des Containers `bootstrap`). Danach in Wiki.js die
 Gruppe „Team“ ohne `manage:system` anlegen; Anwender verbinden sich mit `https://<DOMAIN>/mcp`.
+Mit `.env` statt Panel geht beides in einem Schritt.
 Läuft auf dem Server schon ein Wiki.js, stattdessen
 [`deploy/standalone/mcp-only/docker-compose.yml`](deploy/standalone/mcp-only/docker-compose.yml) plus
 Proxy-Einträge ([IT-Anleitung, Option B](mcp-for-wiki-js/docs/installation-it.md#option-b-bestehendes-wikijs-auf-einem-server-mit-docker-vserver)).
