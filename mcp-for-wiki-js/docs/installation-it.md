@@ -122,21 +122,56 @@ Domain/TLS testen: `docker compose -f docker-compose.build.yml -f docker-compose
 
 ### A4: Kubernetes (Helm-Chart `wikijs-stack`)
 
-Postgres, Wiki.js, MCP-Server, Ingress (eine Domain), Ersteinrichtung als Job und tägliches Backup als
-CronJob in einem Release:
+Ein Release bringt PostgreSQL (mit NetworkPolicy: nur Wiki und Backup dürfen zugreifen), Wiki.js, den
+MCP-Server, den Ingress für **eine** Domain (MCP-Pfade → MCP, `/finalize` gesperrt, alles andere →
+Wiki.js), die Ersteinrichtung als Job und ein tägliches Datenbank-Backup als CronJob. Voraussetzungen:
+ein Ingress-Controller (z. B. nginx oder Traefik), eine Standard-StorageClass, ein DNS-Eintrag der
+Domain auf den Ingress und ein TLS-Zertifikat (vorhandenes Secret oder cert-manager).
+
+1. **Repo holen und Admin-Passwort als Secret anlegen** (so steht es nicht in der Helm-Historie):
+   ```bash
+   git clone https://github.com/janschachtschabel/mcp-wiki-js-ai.git && cd mcp-wiki-js-ai
+   kubectl create namespace wiki
+   kubectl -n wiki create secret generic wiki-admin --from-literal=ADMIN_PASSWORD='…'
+   ```
+2. **Werte-Datei anlegen:** `cp deploy/helm/wikijs-stack/values-example.yaml values-wiki.yaml` und die
+   Platzhalter ersetzen — mindestens `domain` (nur Hostname) und `admin.email`; außerdem
+   `ingress.className` (`nginx`/`traefik`) und `ingress.tls.secretName`. Mit cert-manager zusätzlich
+   unter `ingress.wikiAnnotations` z. B. `cert-manager.io/cluster-issuer: letsencrypt`.
+3. **Installieren:**
+   ```bash
+   helm install wiki ./deploy/helm/wikijs-stack -n wiki -f values-wiki.yaml
+   ```
+   Ohne Werte-Datei geht auch:
+   ```bash
+   helm install wiki ./deploy/helm/wikijs-stack -n wiki --set domain=wiki.example.org --set admin.email=admin@example.org --set admin.existingSecret=wiki-admin
+   ```
+4. **Einrichtung verfolgen und prüfen:**
+   ```bash
+   kubectl -n wiki get pods
+   kubectl -n wiki logs job/wiki-bootstrap-1 -f
+   curl https://wiki.example.org/api/health
+   ```
+   Der Job endet mit „Fertig“; `/api/health` liefert `{"ok":true,"store":"ok"}`.
+5. **Aufräumen:** Das Secret `wiki-admin` kann danach gelöscht und `admin.*` geleert werden; jede
+   weitere Revision prüft die Einrichtung nur noch (idempotent).
+
+**Geheimnisse:** Datenbank-Passwort und `MCP_SESSION_SECRET` erzeugt das Chart einmalig im Secret
+`<release>-secrets` und behält sie bei Upgrades und bei `helm uninstall`. Bei GitOps-Werkzeugen
+(Argo CD, Flux) und `helm template` funktioniert das nicht — dort das Secret vorab anlegen und als
+`secrets.existingSecret` angeben:
 ```bash
-kubectl create namespace wiki
-kubectl -n wiki create secret generic wiki-admin --from-literal=ADMIN_PASSWORD='…'
-helm install wiki ./deploy/helm/wikijs-stack -n wiki   --set domain=wiki.example.org   --set admin.email=admin@example.org --set admin.existingSecret=wiki-admin
+kubectl -n wiki create secret generic wiki-secrets --from-literal=POSTGRES_PASSWORD="$(openssl rand -base64 24)" --from-literal=MCP_SESSION_SECRET="$(openssl rand -base64 32)"
 ```
-Datenbank-Passwort und `MCP_SESSION_SECRET` erzeugt das Chart einmalig und behält sie (bei GitOps-Werkzeugen
-wie Argo CD stattdessen `secrets.existingSecret`). Vorlage mit allen üblichen Einstellungen:
-[`values-example.yaml`](../../deploy/helm/wikijs-stack/values-example.yaml) · Details und Werte:
+
+**Eigene Registry/Spiegel:** `images.mcp`, `images.wiki`, `images.postgres` (Repository und Tag) und
+`images.pullSecrets` setzen. Alle Werte: [Helm-Werte](#helm-charts-a4-b3) und
 [Chart-README](../../deploy/helm/wikijs-stack/README.md).
 
 ### Nach der Einrichtung
 
-1. Bei A1/A2 `ADMIN_PASSWORD` leeren und neu bereitstellen (das Konto bleibt).
+1. Bei A1/A2 `ADMIN_PASSWORD` leeren und neu bereitstellen (das Konto bleibt); bei A4 das Secret
+   `wiki-admin` löschen und `admin.*` leeren.
 2. Im Wiki unter Administration → Gruppen eine Gruppe „Team“ anlegen: Seiten, Dateien und Kommentare
    lesen/schreiben, dazu `read:source` und `read:history` — **ohne** `manage:system`.
 3. Nutzer anlegen (Administration → Benutzer) und der Gruppe zuordnen. Ohne eingerichteten Mailserver
@@ -269,7 +304,8 @@ docker run -d --name wikijs-mcp --restart unless-stopped --network <netz-des-wik
    ```
 3. **Deployen:** `helm install wikijs-mcp deploy/helm/wikijs-mcp -n <namespace> -f values-prod.yaml`
 
-Das Chart legt auf der Wiki-Domain einen Ingress nur für die MCP-Pfade an; `replicaCount` bleibt
+Das Chart legt auf der Wiki-Domain einen Ingress nur für die MCP-Pfade an (`Exact` für Einzelpfade, `Prefix`
+nur mit `/` am Ende, Traefik-Priorität 100 — so bleiben Wiki-Seiten wie `/meeting` beim Wiki); `replicaCount` bleibt
 **1** (Sessions liegen in einer SQLite-Datei auf dem PVC). Eigenes Image: im Repo-Root
 `docker build -t <registry>/<pfad>:<tag> .` und pushen. Details: [Helm-README](../../deploy/helm/wikijs-mcp/README.md).
 
@@ -370,6 +406,28 @@ interne Service-Adresse per `http://` nehmen.
 | `TRAEFIK_ENABLE` | `true` = Traefik-Labels aktiv (B1, C1 mit Traefik) | `false` |
 | `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERTRESOLVER` / `TRAEFIK_NETWORK` | wie bei A1 | `websecure` / `letsencrypt` / `wikijs-mcp-web` |
 
+### Helm-Charts (A4, B3)
+
+Werte für `helm install … -f <datei>` bzw. `--set`. Vollständig kommentiert in den `values.yaml` der Charts.
+
+| Wert | Chart | Bedeutung | Default |
+|---|---|---|---|
+| `domain` | wikijs-stack | Hostname von Wiki und MCP, ohne `https://` (Pflicht) | – |
+| `admin.email`, `admin.existingSecret` | wikijs-stack | erstes Admin-Konto; Secret mit Schlüssel `ADMIN_PASSWORD`. Ohne beides keine Ersteinrichtung | – |
+| `bootstrap.args`, `bootstrap.demoPasswordSecret`, `bootstrap.demoEmail` | wikijs-stack | Parameter der Ersteinrichtung (`--locale=en`, `--demo`) | `--locale=de` |
+| `secrets.existingSecret` | wikijs-stack | eigenes Secret mit `POSTGRES_PASSWORD` und `MCP_SESSION_SECRET` — Pflicht bei GitOps/`helm template` | leer = Chart erzeugt sie |
+| `images.mcp.tag` / `image.tag` | stack / mcp | Tag des MCP-Images; für Produktion ein Release-Tag | `main` |
+| `images.*.repository`, `images.pullSecrets` / `global.image.*` | stack / mcp | eigene Registry oder Spiegel | GHCR bzw. Docker Hub |
+| `ingress.className` / `global.cluster.ingress.ingressClassName` | stack / mcp | Ingress-Klasse | `nginx` |
+| `ingress.tls.*` / `ingress.tls` | stack / mcp | TLS-Secret für die Domain | stack: an, `<release>-tls` |
+| `ingress.wikiAnnotations` | wikijs-stack | z. B. cert-manager-Issuer (nur am Wiki-Ingress) | – |
+| `ingress.mcpPaths` / `ingress.paths` | stack / mcp | Pfade des MCP-Servers (`Exact`/`Prefix`; Strings gelten als `Prefix`) | siehe `values.yaml` |
+| `config.wikijs.url`, `config.oauth.publicBaseUrl`, `config.existingSecret`, `ingress.hosts` | wikijs-mcp | Wiki-Adresse, öffentliche Adresse, Secret mit `MCP_SESSION_SECRET`, Domain | – (Pflicht) |
+| `mcp.config.*` / `config.policy.*`, `config.oauth.role`, `config.extraEnv` | stack / mcp | `blockedTags`, Schutzrolle, Redirect-Hosts, Zeitzone, weitere Variablen | wie Compose |
+| `postgres.persistence.size`, `mcp.persistence.size` / `persistence.size` | stack / mcp | Speichergrößen | `5Gi`, `1Gi` |
+| `backup.schedule`, `backup.keep`, `backup.persistence.size` | wikijs-stack | Zeitplan und Anzahl der `pg_dump`-Sicherungen | `30 2 * * *`, `7`, `5Gi` |
+| `publicBaseUrl` | wikijs-stack | nur für Tests ohne TLS oder mit anderem Port | `https://<domain>` |
+
 Alle weiteren Variablen des Servers (Legacy-Zugang mit API-Keys, Limits, Diagnose):
 [vollständige Referenz in der Server-README](../README.md#vollständige-env-referenz). Der Server
 prüft die Konfiguration beim Start und **startet bei Fehlern nicht**; die Ursache steht im Log mit dem
@@ -402,10 +460,12 @@ steht bei Fall A bereits im Wiki unter `/ki-zugang`.
 | Aufgabe | Wie |
 |---|---|
 | Update | `docker compose pull && docker compose up -d` bzw. im Panel neu bereitstellen (A3 zusätzlich `docker compose build --pull mcp`). `:main` folgt dem Hauptzweig; feste Stände per `MCP_IMAGE` mit Release-Tag |
-| Logs | `docker compose logs -f <dienst>` bzw. im Panel; nützlich: `init`, `bootstrap`, `mcp` |
+| Update (Kubernetes) | `helm upgrade wiki ./deploy/helm/wikijs-stack -n wiki -f values-wiki.yaml` (B3 entsprechend mit `wikijs-mcp`); mit Tag `main` zieht jeder Neustart das aktuelle Image, z. B. `kubectl -n wiki rollout restart statefulset/wiki-mcp` |
+| Logs | `docker compose logs -f <dienst>` bzw. im Panel; nützlich: `init`, `bootstrap`, `mcp`. Kubernetes: `kubectl -n wiki logs statefulset/wiki-mcp`, `… job/wiki-bootstrap-<revision>` |
 | Backup | Fall A: automatisch täglich ins Volume `db-backups` — **off-host kopieren**. Immer mitsichern: Volumes `stack-secrets` (Passwörter; ohne sie startet Wiki.js nach einem Restore nicht) und `mcp-data` (Sessions, Audit-Log) |
 | Domain später ändern | `DOMAIN` ändern und neu bereitstellen; im Wiki zusätzlich die Site-URL (Administration → Allgemein) und die Seite `/ki-zugang` anpassen; KI-Programme neu verbinden |
-| Alles löschen | `docker compose down -v` (**löscht alle Daten**) |
+| Backup (Kubernetes, A4) | CronJob schreibt täglich nach PVC `<release>-backups` — aus dem Cluster kopieren; mitsichern: Secret `<release>-secrets` und die MCP-PVC. Restore: `kubectl -n wiki exec -i wiki-postgres-0 -- pg_restore -U wikijs -d wiki --clean < wiki-<datum>.dump` |
+| Alles löschen | `docker compose down -v` (**löscht alle Daten**). Kubernetes: `helm uninstall wiki -n wiki` lässt Secret `<release>-secrets` und die Backup-PVC stehen; PVCs der Datenbank und des MCP mit `kubectl -n wiki delete pvc …` entfernen |
 
 ---
 
@@ -428,6 +488,9 @@ steht bei Fall A bereits im Wiki unter `/ki-zugang`.
 | Client-Registrierung liefert `429` | mehr als 20 Registrierungen pro IP und Stunde |
 | `/api/health` liefert `503` | Session-Speicher (SQLite unter `/data`) nicht erreichbar — Volume/Rechte prüfen |
 | Sessions nach Neustart weg | `/data` bzw. `stack-secrets` sind keine dauerhaften Volumes |
+| Kubernetes: Wiki-Seiten wie `/meeting` landen beim MCP, oder `/me` beim Wiki | ältere Chart-Fassung mit `Prefix`-Pfaden ohne Traefik-Priorität — Chart aktualisieren (`Exact`-Pfade + `traefik.ingress.kubernetes.io/router.priority`) |
+| Kubernetes: Pods `wiki` starten neu, Log „password authentication failed“ | Datenbank mit anderem Passwort angelegt als im Secret — Secret `<release>-secrets` nicht löschen/neu erzeugen; bei GitOps `secrets.existingSecret` nutzen |
+| Kubernetes: Ersteinrichtung fehlt | `admin.email` oder `admin.existingSecret` nicht gesetzt — setzen und `helm upgrade` (der Job läuft pro Revision) |
 | `413 Payload Too Large` | Anfrage über 4 MB (z. B. große Datei per KI) — Datei direkt im Wiki hochladen |
 
 Vertiefung: [Konzept & Rechtemodell](./konzept-ki-zugang.md) · [OAuth](./oauth.md) ·

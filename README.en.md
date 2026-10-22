@@ -36,9 +36,6 @@ Interactive version with per-component source links (German labels): [docs/archi
 | **C: MCP only** | wiki runs elsewhere, its proxy cannot be changed | **C1** MCP under its own address | [`deploy/standalone/mcp-only/`](deploy/standalone/mcp-only/docker-compose.yml) |
 | | | **C2** locally on your own machine (stdio) | [server README](mcp-for-wiki-js/README.en.md) |
 
-Full stack on Kubernetes (**A4**): `helm install wiki ./deploy/helm/wikijs-stack --set domain=… --set admin.email=… --set admin.existingSecret=…`
-— template: [`values-example.yaml`](deploy/helm/wikijs-stack/values-example.yaml).
-
 All compose files except A3 use the published image `ghcr.io/janschachtschabel/mcp-wiki-js-ai:main`,
 need **no required variables** and generate the database password and `MCP_SESSION_SECRET` on first
 start (volume `stack-secrets`). **Full guide with every path, proxy examples and variables:
@@ -77,6 +74,20 @@ ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='…' docker compose run --rm boots
 Locally without a domain: `docker compose -f docker-compose.build.yml -f docker-compose.local.yml up -d`
 (`http://localhost:8090`).
 
+### A4: Kubernetes (Helm)
+
+```bash
+kubectl create namespace wiki
+kubectl -n wiki create secret generic wiki-admin --from-literal=ADMIN_PASSWORD='…'
+cp deploy/helm/wikijs-stack/values-example.yaml values-wiki.yaml     # adjust domain, admin.email, ingress/TLS
+helm install wiki ./deploy/helm/wikijs-stack -n wiki -f values-wiki.yaml
+kubectl -n wiki logs job/wiki-bootstrap-1 -f                         # follow first-run setup
+```
+Postgres, Wiki.js, MCP, Ingress (one domain), first-run setup and a daily backup in one release; the
+chart generates the database password and session secret itself (with GitOps: `secrets.existingSecret`).
+Details: [chart README](deploy/helm/wikijs-stack/README.md) ·
+[guide A4](mcp-for-wiki-js/docs/installation-it.en.md#a4-kubernetes-helm-chart-wikijs-stack).
+
 ### B: Add MCP to an existing Wiki.js
 
 ```bash
@@ -88,7 +99,9 @@ docker compose up -d
 Then either **B1** add `TRAEFIK_ENABLE=true` (Traefik routes the MCP paths via labels) or **B2**
 point the MCP paths of your existing proxy to `127.0.0.1:3100` — examples for nginx, Caddy and Apache
 in the [guide](mcp-for-wiki-js/docs/installation-it.en.md#b2-nginx-caddy-apache-or-similar-in-front-of-the-wiki).
-Kubernetes (**B3**): [Helm chart](deploy/helm/wikijs-mcp/README.md).
+Kubernetes (**B3**): Helm chart [`wikijs-mcp`](deploy/helm/wikijs-mcp/README.md) with
+[`values-prod.example.yaml`](deploy/helm/wikijs-mcp/values-prod.example.yaml) —
+[guide B3](mcp-for-wiki-js/docs/installation-it.en.md#b3-wikijs-runs-in-kubernetes).
 
 ### C: MCP only
 
@@ -136,7 +149,7 @@ claude mcp add --transport http wiki https://<DOMAIN>/mcp   # then: /mcp → Aut
 ## Operations
 
 - **Update:** `docker compose pull && docker compose up -d` or redeploy in the panel (A3 also
-  `docker compose build --pull mcp`). Wiki.js runs from the official `requarks/wiki:2` image and can be
+  `docker compose build --pull mcp`; Kubernetes: `helm upgrade … -f values-wiki.yaml`). Wiki.js runs from the official `requarks/wiki:2` image and can be
   updated independently.
 - **Backup:** case A backs up Postgres and the MCP SQLite daily into the `db-backups` volume — copy it
   off-host. Also back up the `stack-secrets` and `mcp-data` volumes.
@@ -190,10 +203,11 @@ bypasses all page rules there.
 
 ## Kubernetes / GitLab
 
-The [Helm chart](deploy/helm/wikijs-mcp/README.md) deploys only the MCP
-server (StatefulSet + small PVC for the session store); Wiki.js runs as its
-own deployment and is wired up via `config.wikijs.url`. The GitLab pipeline
-builds the image and packages/pushes the chart — the required CI/CD
+Two Helm charts: [`wikijs-stack`](deploy/helm/wikijs-stack/README.md) (case A4) brings Postgres,
+Wiki.js, the MCP server, ingress, first-run setup and backup; [`wikijs-mcp`](deploy/helm/wikijs-mcp/README.md)
+(case B3) deploys only the MCP server (StatefulSet + small PVC for the session store) next to an
+existing Wiki.js, wired up via `config.wikijs.url`. The GitLab pipeline builds the image, packages/pushes
+`wikijs-mcp` and lints `wikijs-stack` — the required CI/CD
 variables are listed at the top of [.gitlab-ci.yml](.gitlab-ci.yml). Both
 pipelines stay green while the registry variables are absent (jobs are
 skipped).
