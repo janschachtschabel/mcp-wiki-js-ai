@@ -243,7 +243,7 @@ async function main() {
   };
   const meLogin = await meLoginAs(ADMIN);
   const meCookie2 = meCookieOf(meLogin);
-  check('/me/login sets session cookie', meLogin.status === 303 && meCookie2.startsWith('mcp_me='));
+  check('/me/login sets session cookie', meLogin.status === 303 && /^(__Host-)?mcp_me=/.test(meCookie2));
   const meForm = await formPage(`${BASE}/me`, meCookie2);
   const mePage = meForm.html;
   check('/me lists the E2E client session', mePage.includes('E2E Test Client'));

@@ -41,6 +41,14 @@ die bewusst zurückgestellt wurden.
   Backup-Fehlern (bisher nur Log-Zeile).
 - [ ] **Abhängigkeiten aktuell halten:** Renovate/Dependabot für die per SHA gepinnten Actions,
   Base-Images per Digest; GitLab-CI-Images ebenfalls pinnen.
+- [ ] **Routing-Drift prüfen:** Die MCP-Pfade stehen zweimal — in `deploy/caddy/Caddyfile` und in den
+  Traefik-Labels der Hauptordner-`docker-compose.yml`. Ein Test in der CI, der beide Listen vergleicht,
+  verhindert, dass eine Variante einen neuen Pfad nicht routet.
+- [ ] **`mcp-only` ohne Pflicht-Variablen:** Die Variante für ein bestehendes Wiki braucht weiterhin
+  `WIKIJS_URL`, `PUBLIC_BASE_URL` und `MCP_SESSION_SECRET` und scheitert deshalb beim Panel-Import
+  (Projekt entsteht nicht). Secret wie im Komplett-Stack per `init` erzeugen, Rest nachträglich setzen.
+- [ ] **Traefik-Router-Namen** (`wikijs-wiki`, `wikijs-mcp`, `wikijs-setup`) konfigurierbar machen,
+  damit mehrere Instanzen hinter einem Traefik laufen können.
 
 ## 4. Bewusste Entscheidungen (kein Handlungsbedarf, zur Erinnerung)
 

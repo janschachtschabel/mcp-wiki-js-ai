@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Init-Schritt für deploy/standalone/full/docker-compose.yml — läuft bei jedem
+ * Init-Schritt für docker-compose.yml und deploy/standalone/full — läuft bei jedem
  * Start vor Postgres, Wiki.js, MCP und Caddy und beendet sich dann.
  *
  *   1. Geheimnisse beim ERSTEN Start zufällig erzeugen und im Volume behalten
@@ -97,4 +97,4 @@ if (domain) {
 }
 writeAtomic(path.join(CADDY_DIR, 'Caddyfile'), caddyfile, 0o644);
 
-log(domain ? `Domain: ${domain}${publicUrl ? `  ·  öffentliche Adresse: ${publicUrl}` : ''}` : 'DOMAIN nicht gesetzt — Caddy zeigt eine Hinweisseite.');
+log(domain ? `Domain: ${domain}${publicUrl ? `  ·  öffentliche Adresse: ${publicUrl}` : ''}` : 'DOMAIN nicht gesetzt — noch keine öffentliche Adresse (Caddy-Variante: Hinweisseite).');

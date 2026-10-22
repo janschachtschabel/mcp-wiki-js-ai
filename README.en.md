@@ -25,84 +25,94 @@ Interactive version with per-component source links (German labels): [docs/archi
 > **For IT:** compact guide covering all paths (existing wiki via Helm/Kubernetes, existing wiki on a
 > server with Docker, or fresh install via Docker Compose, plus end-user usage; German):
 > [installation-it.md](mcp-for-wiki-js/docs/installation-it.md).
->
-> **Without a repo checkout** (compose import by URL in Docker panels, vServers): self-contained files in
-> [`deploy/standalone/`](deploy/standalone/) — `full/docker-compose.yml` (full stack, first-run setup runs
-> automatically) and `mcp-only/docker-compose.yml` (MCP only, next to an existing wiki). Each sits in its
-> own folder and is named `docker-compose.yml`, because Docker panels only recognise that name (or
-> `compose.yml`).
 
-## Quick start (Docker Compose)
+## Quick start: which compose file?
+
+| Situation | File | HTTPS via |
+|---|---|---|
+| Docker panel importing from GitHub (e.g. Hostinger Docker Manager), Traefik already running | [`docker-compose.yml`](docker-compose.yml) (repo root) | existing Traefik |
+| Own server without a reverse proxy, no repo checkout | [`deploy/standalone/full/docker-compose.yml`](deploy/standalone/full/docker-compose.yml) | own Caddy (ports 80/443) |
+| Wiki.js already running, add only the MCP server | [`deploy/standalone/mcp-only/docker-compose.yml`](deploy/standalone/mcp-only/docker-compose.yml) | existing proxy |
+| Build the image yourself / development (repo checkout) | [`docker-compose.build.yml`](docker-compose.build.yml) | own Caddy (ports 80/443) |
+
+The first two use the published image from GHCR, need **no required variables** and generate the
+Postgres password and `MCP_SESSION_SECRET` on first start (volume `stack-secrets` — include it in
+backups). First-run setup (admin account, home page, `/ki-zugang`, search, language) runs there
+automatically once `DOMAIN`, `ADMIN_EMAIL` and `ADMIN_PASSWORD` are set.
+
+### Docker panel with Traefik (e.g. Hostinger Docker Manager)
+
+Such panels read only the `docker-compose.yml` in the repo root and copy `.env.example` to `.env`.
+Variables can only be edited once the project exists — hence two steps:
+
+1. **Compose from URL** with `https://github.com/janschachtschabel/mcp-wiki-js-ai`, deploy without
+   variables.
+2. Edit the project, set these in `.env`, redeploy:
+
+| Variable | Value |
+|---|---|
+| `DOMAIN` | hostname only, e.g. `wiki.example.org` (DNS A record points to the server) |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | first admin account; clear `ADMIN_PASSWORD` after setup |
+| `BOOTSTRAP_ARGS` | optional, e.g. `--locale=en` (German is the default) or `--demo` |
+
+Traefik routes the MCP paths to the MCP server and everything else to Wiki.js, and blocks the setup
+endpoint `/finalize`. The defaults match Hostinger's Traefik template (network `traefik-proxy`,
+entrypoint `websecure`, certificate resolver `letsencrypt`); for another Traefik set
+`TRAEFIK_NETWORK`, `TRAEFIK_ENTRYPOINT`, `TRAEFIK_CERTRESOLVER`. Setup result: log of the `bootstrap`
+container. Then create a "Team" group in Wiki.js without `manage:system`; users connect with
+`https://<DOMAIN>/mcp`.
+
+### Own server without a proxy (one file, no repo)
 
 ```bash
-cp .env.example .env     # set DOMAIN, POSTGRES_PASSWORD, MCP_SESSION_SECRET
-docker compose up -d     # Caddy obtains TLS automatically
+mkdir wikijs && cd wikijs
+curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/janschachtschabel/mcp-wiki-js-ai/main/deploy/standalone/full/docker-compose.yml
+printf 'DOMAIN=wiki.example.org\nADMIN_EMAIL=admin@example.org\nADMIN_PASSWORD=...\n' > .env
+docker compose up -d
 ```
 
-Without `DOMAIN` (or `MCP_SESSION_SECRET`), `docker compose` stops with a clear
-message ("DOMAIN fehlt — bitte .env anlegen").
+Ports 80/443 must be free (Caddy obtains the certificate). Without `DOMAIN` the page shows "not set up
+yet". Docker panels without Traefik can also use the GitHub link to this file, or repository + path
+`deploy/standalone/full`.
 
-Local testing without a domain/TLS (everything on `http://localhost:8090`):
+### Build it yourself (repo checkout)
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+cp .env.example .env     # COMPOSE_FILE=docker-compose.build.yml, DOMAIN, POSTGRES_PASSWORD, MCP_SESSION_SECRET
+docker compose up -d     # builds the MCP image, Caddy obtains TLS
+```
+
+With `COMPOSE_FILE` in `.env`, every `docker compose …` command works without `-f`. Without `DOMAIN`
+(or `MCP_SESSION_SECRET`), `docker compose` stops with a clear message. Local testing without a
+domain/TLS (everything on `http://localhost:8090`):
+
+```bash
+docker compose -f docker-compose.build.yml -f docker-compose.local.yml up -d
 ```
 
 **Wiki.js itself does not live in this repo:** it runs from the official
 `requarks/wiki:2` image, pulled automatically on first start. This repo only
-contains the MCP server, the deployment configuration and a mounted wiki
-config ([deploy/wiki/config.yml](deploy/wiki/config.yml) — unchanged except
-for the DB pool). Updating the wiki = pulling a new image.
-
-### Without a repo checkout: Docker panel / compose by URL
-
-For panels that import a compose file by URL (e.g. "Compose from URL"), or a server without
-`git clone`, do **not** use the `docker-compose.yml` in the repo root (it builds the image on the server
-and mounts repo files). Use the self-contained file in `deploy/standalone/full` instead:
-
-```
-https://github.com/janschachtschabel/mcp-wiki-js-ai/blob/main/deploy/standalone/full/docker-compose.yml
-```
-
-If the panel asks for repository and path separately: repository
-`https://github.com/janschachtschabel/mcp-wiki-js-ai`, path `deploy/standalone/full`. Panels only
-recognise files named `docker-compose.yml` or `compose.yml`. For `curl` use the raw file:
-`https://raw.githubusercontent.com/janschachtschabel/mcp-wiki-js-ai/main/deploy/standalone/full/docker-compose.yml`.
-
-**Two steps**, because some panels only allow variables after the first deployment:
-
-1. **Deploy without variables.** Nothing is required: the `init` service generates the Postgres
-   password and `MCP_SESSION_SECRET` on first start and keeps them in the `stack-secrets` volume. The
-   page then shows "not set up yet".
-2. **Edit the project, set these variables, redeploy** (with a `.env` both steps are one):
-
-| Variable | Value |
-|---|---|
-| `DOMAIN` | hostname only, e.g. `wiki.example.org` (no `https://`) |
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | first admin account; remove `ADMIN_PASSWORD` after setup |
-| `BOOTSTRAP_ARGS` | optional: extra first-run setup flags, e.g. `--locale=en` (German is the default) or `--demo` |
-
-Prerequisites: the domain's DNS A record points to the server, ports 80/443 are free. First-run setup
-runs automatically on start (log of the `bootstrap` container). Afterwards create a "Team" group in
-Wiki.js without `manage:system`; users connect with `https://<DOMAIN>/mcp`. If Wiki.js already runs on
-the server, use [`deploy/standalone/mcp-only/docker-compose.yml`](deploy/standalone/mcp-only/docker-compose.yml)
-plus proxy rules instead ([IT guide, option B](mcp-for-wiki-js/docs/installation-it.md#option-b-bestehendes-wikijs-auf-einem-server-mit-docker-vserver), German).
+contains the MCP server, the deployment configuration and (for
+`docker-compose.build.yml`) a mounted wiki config
+([deploy/wiki/config.yml](deploy/wiki/config.yml) — unchanged except for the DB
+pool). Updating the wiki = pulling a new image.
 
 ## First-run setup (admin account, home page, search)
 
-A fresh Wiki.js starts in setup mode. The Compose service `bootstrap` does
+With `docker-compose.yml` and `deploy/standalone/full` this runs automatically (see above). With
+`docker-compose.build.yml` a fresh Wiki.js starts in setup mode; the Compose service `bootstrap` does
 everything in one go — **idempotent**, safe to re-run (no Node on the host):
 
 ```bash
 ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='secure-password' \
   docker compose run --rm bootstrap --locale=de
 # local test stack: same -f flags as for `up`
-#   docker compose -f docker-compose.yml -f docker-compose.local.yml run --rm bootstrap --locale=de
+#   docker compose -f docker-compose.build.yml -f docker-compose.local.yml run --rm bootstrap --locale=de
 ```
 
 **Why not in the browser?** Until setup is done, the first call to Wiki.js'
 `/finalize` creates the admin account — for anyone who can reach the domain.
-Caddy therefore always answers `/finalize` with `403`; the `bootstrap` service
+Caddy or Traefik therefore block `/finalize` from outside; the `bootstrap` service
 talks to Wiki.js directly inside the Docker network. The URL shown on
 `/ki-zugang` comes from `PUBLIC_BASE_URL` or `https://<DOMAIN>` (locally
 `http://localhost:8090`).
@@ -168,10 +178,11 @@ search engine.
 |---|---|
 | [`mcp-for-wiki-js/`](mcp-for-wiki-js/) | The MCP server (Next.js/TypeScript): 70 tools over the Wiki.js GraphQL API, OAuth layer, permission engine, tests. Details: [README (EN)](mcp-for-wiki-js/README.en.md) · [concept & permission model (EN)](mcp-for-wiki-js/docs/concept-ai-access.en.md) |
 | [`Dockerfile`](Dockerfile) | Production image of the MCP server (Next.js standalone, Node 24) |
-| [`docker-compose.yml`](docker-compose.yml) | Full stack: Postgres + Wiki.js + MCP + Caddy (auto-HTTPS) + daily DB backup |
-| [`deploy/standalone/`](deploy/standalone/) | Self-contained compose files, no repo checkout needed: full stack, or MCP only next to an existing wiki |
+| [`docker-compose.yml`](docker-compose.yml) | Full stack behind an existing Traefik (Docker panels): Postgres + Wiki.js + MCP + backup, published image, secrets generated |
+| [`deploy/standalone/`](deploy/standalone/) | No repo checkout: `full/` full stack with its own Caddy (80/443), `mcp-only/` MCP only next to an existing wiki |
+| [`docker-compose.build.yml`](docker-compose.build.yml) | Full stack built from source: Postgres + Wiki.js + MCP (local build) + Caddy (auto-HTTPS) + daily backup; `docker-compose.local.yml` for local tests |
 | [`deploy/caddy/`](deploy/caddy/) | Reverse-proxy routing (one domain for wiki & MCP → one-click SSO) |
-| [`deploy/scripts/bootstrap.mjs`](deploy/scripts/bootstrap.mjs) | Idempotent first-run setup |
+| [`deploy/scripts/`](deploy/scripts/) | `bootstrap.mjs` (idempotent first-run setup), `standalone-init.mjs` (secrets, Caddyfile) — both also in the image |
 | [`deploy/helm/wikijs-mcp/`](deploy/helm/wikijs-mcp/) | Helm chart for Kubernetes (MCP server; Wiki.js runs separately) |
 | [`.github/workflows/`](.github/workflows/) | GitHub CI: typecheck/tests/build + image → ghcr.io |
 | [`.gitlab-ci.yml`](.gitlab-ci.yml) | GitLab CI: same checks + image → company registry + Helm chart push |

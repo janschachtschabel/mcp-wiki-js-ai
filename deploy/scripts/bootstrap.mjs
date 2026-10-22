@@ -12,7 +12,9 @@
  *   5. optional --demo        Gruppe "Team" (lesen/schreiben, kein Löschen)
  *                             + Testnutzer anlegen
  *
- * Aufruf im Compose-Stack (empfohlen, nach `docker compose up -d`):
+ * In docker-compose.yml und deploy/standalone/full läuft es automatisch (Dienst
+ * bootstrap, mit --if-configured). Mit docker-compose.build.yml
+ * (COMPOSE_FILE in der .env) nach `docker compose up -d`:
  *   ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='...' \
  *     docker compose run --rm bootstrap [--locale=de] [--demo]
  * Der Dienst spricht im internen Netz mit http://wiki:3000 und setzt PUBLIC_URL
@@ -38,7 +40,7 @@
  * --if-configured  ohne ADMIN_EMAIL/ADMIN_PASSWORD oder ohne PUBLIC_URL still
  *                  beenden (Exit 0) statt mit Fehler bzw. statt WIKI_URL als
  *                  öffentliche Adresse zu nehmen — für den automatischen Start in
- *                  deploy/standalone/full/docker-compose.yml.
+ *                  docker-compose.yml und deploy/standalone/full.
  */
 
 const WIKI_URL = (process.env.WIKI_URL || 'http://localhost:8090').replace(/\/+$/, '');

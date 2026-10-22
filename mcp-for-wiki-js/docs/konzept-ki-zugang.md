@@ -107,8 +107,12 @@ für spontane Einzelfälle nutzen.
 
 ### Deployment (Kurzfassung)
 
+Welche Compose-Datei wofür (Docker-Panel mit Traefik, eigener Server, Selbstbauen): siehe
+[Root-README](../../README.md#quick-start-welche-compose-datei) und [IT-Anleitung](installation-it.md).
+Selbstbauen mit Repo-Checkout:
+
 ```bash
-cp .env.example .env    # DOMAIN, POSTGRES_PASSWORD, MCP_SESSION_SECRET
+cp .env.example .env    # COMPOSE_FILE=docker-compose.build.yml, DOMAIN, POSTGRES_PASSWORD, MCP_SESSION_SECRET
 docker compose up -d    # Caddy besorgt TLS automatisch
 
 # Ersteinrichtung (Admin-Konto, Startseite, Anleitung /ki-zugang, Postgres-Suche,
@@ -116,7 +120,7 @@ docker compose up -d    # Caddy besorgt TLS automatisch
 ADMIN_EMAIL=... ADMIN_PASSWORD=... docker compose run --rm bootstrap --locale=de
 ```
 
-Lokaler Test ohne Domain: zusätzlich `-f docker-compose.local.yml`
+Lokaler Test ohne Domain: `-f docker-compose.build.yml -f docker-compose.local.yml`
 (alles auf `http://localhost:8090`). Updates: `docker compose pull &&
 docker compose build --pull mcp && docker compose up -d`. Backup = Volumes
 `db-data` (Wiki-Inhalte) und `mcp-data` (KI-Sessions/Audit).
@@ -187,7 +191,7 @@ auf); im Extremfall 60 Sekunden warten.
 | Tag-Guardrail | `lib/guardrails.ts` + Hooks in `lib/tools/pages/` und `lib/tools/comments.ts` | `WIKIJS_BLOCKED_TAGS`: Seiten für Agenten unsichtbar/unantastbar; schließt Wiki.js' Tag-Rule-Lücke (list/single prüfen Tags nicht); Sperr-Tags selbst vor Umbenennen/Löschen geschützt |
 | Rolle `wiki` | `config/roles.json`, `WIKIJS_OAUTH_ROLE` | Agenten-Schutz-Overlay für OAuth-Sessions (siehe §6) |
 | JWT-Renewal | `lib/wikijs/client.ts` (`new-jwt`-Header) | Wiki.js' rollierende Token-Erneuerung wird persistiert → Sessions bleiben ohne Re-Login frisch |
-| Packaging | Root-`Dockerfile` (Next standalone, Node 24), `docker-compose.yml` (db/wiki/mcp/caddy), `deploy/helm/wikijs-mcp`, CI für GitHub (ghcr) + GitLab (Registry + Helm) | Ein-Host-Appliance; MCP↔Wiki über internes Netz (kein Rate-Limit-/Blocking-Problem mehr wie bei Vercel) |
+| Packaging | Root-`Dockerfile` (Next standalone, Node 24), `docker-compose.yml` (hinter Traefik) bzw. `docker-compose.build.yml` und `deploy/standalone/` (db/wiki/mcp/caddy), `deploy/helm/wikijs-mcp`, CI für GitHub (ghcr) + GitLab (Registry + Helm) | Ein-Host-Appliance; MCP↔Wiki über internes Netz (kein Rate-Limit-/Blocking-Problem mehr wie bei Vercel) |
 
 **Gehärtet nach Security-Review:** Guardrail-Tags durch Agenten nicht
 umbenenn-/löschbar; Blocked-Page-Cache pro Credential partitioniert;

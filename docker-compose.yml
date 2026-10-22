@@ -1,64 +1,72 @@
 # =============================================================================
-# Wiki.js + MCP-Server — Team-Wissensspeicher-Appliance
+# Wiki.js + MCP-Server — Komplett-Stack hinter einem vorhandenen Traefik
 # =============================================================================
-# Vier Services, EIN Host, EINE Domain:
-#   db     Postgres 15 (Wiki.js-Datenbank)
-#   wiki   Wiki.js 2 (offizielles Image — unabhängig updatebar)
-#   mcp    MCP-Server (dieses Repo) — OAuth mit Wiki.js-Login, /me, Guardrails
-#   caddy  Reverse-Proxy mit Auto-HTTPS: eine Domain für Wiki UND MCP
-#          (gleiche Domain = Ein-Klick-SSO: die Wiki-Session gilt beim Autorisieren)
+# Für Docker-Panels mit Compose-Import aus dem GitHub-Repository (z. B. „Compose
+# from URL“): Sie lesen nur diese Datei im Hauptordner und kopieren .env.example
+# als .env. Auf dem Server läuft dort schon Traefik auf den Ports 80/443 und
+# übernimmt HTTPS und Zertifikate. Nichts wird gebaut, keine Repo-Datei
+# eingebunden; der MCP-Server kommt als fertiges Image aus GHCR.
 #
-# Quick-Start:
-#   cp .env.example .env        # DOMAIN, Passwörter, MCP_SESSION_SECRET setzen
-#   docker compose up -d
-#   ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='…' \
-#     docker compose run --rm bootstrap --locale=de   # Ersteinrichtung (idempotent)
-#   https://<DOMAIN>            → Wiki.js
-#   https://<DOMAIN>/mcp        → MCP-Endpoint (Connector-URL für alle Clients)
-#   https://<DOMAIN>/me         → eigene KI-Zugänge ansehen/widerrufen
+# Ablauf im Panel:
+#   1. Bereitstellen, ohne Variablen. Postgres-Passwort und MCP_SESSION_SECRET
+#      erzeugt der Dienst init beim ersten Start selbst (Volume stack-secrets).
+#   2. Projekt bearbeiten, in der .env setzen und neu bereitstellen:
+#        DOMAIN          nur der Hostname, z. B. wiki.example.org (DNS → Server)
+#        ADMIN_EMAIL     erstes Admin-Konto, wird dann automatisch angelegt
+#        ADMIN_PASSWORD  nach der Einrichtung wieder entfernen
 #
-# Den Setup-Wizard von Wiki.js (POST /finalize = erstes Admin-Konto) sperrt
-# Caddy nach außen mit 403 — eingerichtet wird nur über den bootstrap-Dienst,
-# der im internen Netz direkt mit wiki:3000 spricht.
+# Traefik-Anbindung (Defaults = Traefik-Vorlage im Hostinger Docker Manager):
+#   TRAEFIK_NETWORK=traefik-proxy  TRAEFIK_ENTRYPOINT=websecure
+#   TRAEFIK_CERTRESOLVER=letsencrypt
+# Traefik routet die MCP-Pfade an den MCP-Server, alles andere an Wiki.js, und
+# sperrt den Setup-Endpunkt /finalize (Ersteinrichtung nur über bootstrap).
 #
-# Update:   docker compose pull && docker compose build --pull mcp && docker compose up -d
-# Logs:     docker compose logs -f
-# Backup:   der db-backup-Service sichert automatisch BEIDES ins db-backups-Volume:
-#           Postgres (Wiki-Inhalte) via pg_dump UND die MCP-sqlite (Audit-Log +
-#           Sessions) via `sqlite3 .backup`. Volume off-host replizieren.
-# Reset:    docker compose down -v   # ACHTUNG: löscht ALLE Daten
+# Andere Varianten:
+#   ohne Traefik, eigener Caddy auf 80/443:  deploy/standalone/full/docker-compose.yml
+#   nur MCP neben bestehendem Wiki:          deploy/standalone/mcp-only/docker-compose.yml
+#   Image selbst bauen (Repo-Checkout):      docker-compose.build.yml
 #
-# Base-Images bewusst per Tag (postgres:15-alpine, requarks/wiki:2, caddy:2-alpine)
-# und nicht per Digest gepinnt: ohne Renovate/Dependabot würden Digests veralten
-# und Sicherheits-Updates des Upstreams aussperren. `docker compose pull` holt sie.
-
-# Für jeden Dienst: keine Rechteausweitung per setuid, Log-Rotation (sonst
-# wachsen json-Logs unbegrenzt).
-x-hardening: &hardening
-  security_opt:
-    - no-new-privileges:true
-  logging:
-    driver: json-file
-    options:
-      max-size: "10m"
-      max-file: "3"
+# Bewusst schlicht für Web-Editoren: keine Pflicht-Variablen, keine Tabs, keine
+# YAML-Anker; Logik (Init, Ersteinrichtung) liegt im MCP-Image.
+# Routing hier und in deploy/caddy/Caddyfile gemeinsam ändern.
 
 services:
+  # Erzeugt beim ersten Start die Geheimnisse und leitet bei jedem Start die
+  # öffentliche Adresse aus DOMAIN ab; beendet sich danach.
+  init:
+    image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    command: ["node", "/app/standalone-init.mjs"]
+    environment:
+      DOMAIN: ${DOMAIN:-}
+    volumes:
+      - stack-secrets:/stack/secrets
+
   db:
-    <<: *hardening
     image: postgres:15-alpine
     restart: unless-stopped
-    # Resource-Ceilings, damit kein Service den Appliance-Host OOMt.
     mem_limit: 512m
-    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      init:
+        condition: service_completed_successfully
     environment:
       POSTGRES_DB: wiki
       POSTGRES_USER: wikijs
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD fehlt — bitte .env anlegen}
+      POSTGRES_PASSWORD_FILE: /stack/secrets/postgres_password
     volumes:
       - db-data:/var/lib/postgresql/data
-    # Nur im internen db-Netz: Caddy und MCP erreichen Postgres nicht.
-    networks: [db]
+      - stack-secrets:/stack/secrets:ro
+    networks:
+      - db
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U wikijs -d wiki"]
       interval: 10s
@@ -66,104 +74,167 @@ services:
       retries: 5
 
   wiki:
-    <<: *hardening
     image: requarks/wiki:2
     restart: unless-stopped
-    # Höheres Ceiling: Wiki.js rendert Seiten in Node (der schwerste Service).
     mem_limit: 1g
-    cpus: 1.5
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       db:
         condition: service_healthy
+    # Ohne eigene config.yml gilt der DB-Pool des Images (max. 10 Verbindungen);
+    # WIKIJS_MAX_CONCURRENCY beim MCP ist deshalb niedriger gesetzt.
     environment:
       DB_TYPE: postgres
       DB_HOST: db
       DB_PORT: 5432
       DB_USER: wikijs
-      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_PASS_FILE: /stack/secrets/postgres_password
       DB_NAME: wiki
-      # DB-Connection-Pool von Wiki.js (Knex). Default des Images wäre max 10 —
-      # mit parallelen KI-Agenten + Browser-Nutzung zu knapp. 20 direkte
-      # Verbindungen sind für Postgres (max_connections=100) völlig unkritisch;
-      # PgBouncer ist bei EINER Wiki-Instanz unnötig.
-      DB_POOL_MIN: ${WIKIJS_DB_POOL_MIN:-2}
-      DB_POOL_MAX: ${WIKIJS_DB_POOL_MAX:-20}
     volumes:
-      # Wie die config.yml des Images, plus pool-Block (siehe Datei-Kommentar).
-      - ./deploy/wiki/config.yml:/wiki/config.yml:ro
-    # Kein Port nach außen — Zugriff ausschließlich über caddy.
-    # default: für caddy/mcp/bootstrap und ausgehend (Sprachpakete); db: Postgres.
-    networks: [default, db]
+      - stack-secrets:/stack/secrets:ro
+    networks:
+      - default
+      - db
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik-proxy}"
+      - "traefik.http.routers.wikijs-wiki.rule=Host(`${DOMAIN:-}`)"
+      - "traefik.http.routers.wikijs-wiki.priority=1"
+      - "traefik.http.routers.wikijs-wiki.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.wikijs-wiki.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.wikijs-wiki.middlewares=wikijs-wiki-headers"
+      - "traefik.http.routers.wikijs-wiki.service=wikijs-wiki"
+      - "traefik.http.services.wikijs-wiki.loadbalancer.server.port=3000"
+      - "traefik.http.middlewares.wikijs-wiki-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.wikijs-wiki-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.wikijs-wiki-headers.headers.customFrameOptionsValue=SAMEORIGIN"
+      - "traefik.http.middlewares.wikijs-wiki-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
 
   mcp:
-    <<: *hardening
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: ${MCP_IMAGE:-wikijs-mcp:local}
+    image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
     restart: unless-stopped
     mem_limit: 512m
-    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+        restart: true
+      wiki:
+        condition: service_started
+    # MCP_SESSION_SECRET und PUBLIC_BASE_URL kommen aus den Dateien von init.
+    command:
+      - node
+      - --env-file-if-exists=/stack/secrets/session.env
+      - --env-file-if-exists=/stack/secrets/public.env
+      - server.js
     environment:
-      # Wiki.js über das interne Docker-Netz — kein Traffic verlässt den Host,
-      # keine Rate-Limits/Firewalls zwischen MCP und Wiki (das Vercel-Problem).
       WIKIJS_URL: http://wiki:3000
-      # Öffentliche Basis-URL (OAuth-Issuer, Discovery, Links) — MUSS zur Domain passen.
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN:?DOMAIN fehlt — bitte .env anlegen}}
-      # OAuth an: Login = Wiki.js-Login, Sessions verschlüsselt in /data.
-      MCP_SESSION_SECRET: ${MCP_SESSION_SECRET:?MCP_SESSION_SECRET fehlt — bitte .env anlegen}
       MCP_DATA_DIR: /data
-      # Rechte kommen pro User aus Wiki.js → Ceiling öffnen, Agenten-Schutz als Overlay.
       WIKIJS_PERMISSION_PRESET: ${WIKIJS_PERMISSION_PRESET:-full}
       WIKIJS_OAUTH_ROLE: ${WIKIJS_OAUTH_ROLE:-wiki}
-      # Seiten mit diesen Tags sind für KI unsichtbar & unantastbar (leer = aus).
       WIKIJS_BLOCKED_TAGS: ${WIKIJS_BLOCKED_TAGS:-kein-ki}
       WIKIJS_AUDIT: ${WIKIJS_AUDIT:-true}
-      # Max. gleichzeitige GraphQL-Requests an Wiki.js — unter DB_POOL_MAX halten,
-      # damit fürs Browsen der Menschen Pool-Luft bleibt.
-      WIKIJS_MAX_CONCURRENCY: ${WIKIJS_MAX_CONCURRENCY:-12}
-      # Optional: erlaubte OAuth-Redirect-Hosts (kommagetrennt; leer = jeder https-Host).
+      WIKIJS_MAX_CONCURRENCY: ${WIKIJS_MAX_CONCURRENCY:-6}
       MCP_ALLOWED_REDIRECT_HOSTS: ${MCP_ALLOWED_REDIRECT_HOSTS:-}
+      TZ: ${TZ:-UTC}
     volumes:
       - mcp-data:/data
-    depends_on:
-      - wiki
+      - stack-secrets:/stack/secrets:ro
+    networks:
+      - default
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik-proxy}"
+      # MCP-Pfade (wie @mcp in deploy/caddy/Caddyfile) gehen an den MCP-Server.
+      - "traefik.http.routers.wikijs-mcp.rule=Host(`${DOMAIN:-}`) && (Path(`/mcp`) || PathPrefix(`/mcp/`) || PathPrefix(`/oauth/`) || Path(`/me`) || PathPrefix(`/me/`) || Path(`/api/health`) || PathPrefix(`/_next/`) || PathPrefix(`/.well-known/oauth-authorization-server`) || PathPrefix(`/.well-known/oauth-protected-resource`) || Path(`/.well-known/mcp.json`))"
+      - "traefik.http.routers.wikijs-mcp.priority=100"
+      - "traefik.http.routers.wikijs-mcp.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.wikijs-mcp.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.wikijs-mcp.middlewares=wikijs-mcp-headers"
+      - "traefik.http.routers.wikijs-mcp.service=wikijs-mcp"
+      # Setup-Endpunkt von Wiki.js nie von außen: geht an den MCP-Server, der
+      # jeden Pfad außer /mcp mit 404 beantwortet.
+      - "traefik.http.routers.wikijs-setup.rule=Host(`${DOMAIN:-}`) && (Path(`/finalize`) || PathPrefix(`/finalize/`))"
+      - "traefik.http.routers.wikijs-setup.priority=100"
+      - "traefik.http.routers.wikijs-setup.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.wikijs-setup.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.wikijs-setup.service=wikijs-mcp"
+      - "traefik.http.services.wikijs-mcp.loadbalancer.server.port=3000"
+      - "traefik.http.middlewares.wikijs-mcp-headers.headers.stsSeconds=31536000"
 
-  # Periodisches Backup mit Retention — deckt BEIDE Datenquellen ab:
-  #   Postgres (Wiki-Inhalte) via pg_dump, und die MCP-sqlite (Audit-Log +
-  #   Sessions) via `sqlite3 .backup` (konsistenter Hot-Backup, kein naives cp).
-  # Restore Wiki (über diesen Dienst: nur er mountet db-backups, PGPASSWORD ist gesetzt):
-  #   docker compose stop wiki
-  #   docker compose exec db-backup pg_restore -h db -U wikijs -d wiki --clean /backups/<datei>.dump
-  #   docker compose start wiki
-  # Restore MCP-Store: mcp stoppen, mcp-<ts>.sqlite als /data/mcp.sqlite einspielen, mcp starten.
+  # Ersteinrichtung bei jedem Start, idempotent (erledigte Schritte werden
+  # übersprungen). Wartet still, bis DOMAIN, ADMIN_EMAIL und ADMIN_PASSWORD
+  # gesetzt sind. Läuft im internen Netz. Ergebnis: Log des Containers bootstrap.
+  bootstrap:
+    image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      wiki:
+        condition: service_started
+    command:
+      - node
+      - --env-file-if-exists=/stack/secrets/public.env
+      - /app/bootstrap.mjs
+      - --if-configured
+      - --locale=de
+    environment:
+      WIKI_URL: http://wiki:3000
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      DEMO_EMAIL: ${DEMO_EMAIL:-}
+      DEMO_NAME: ${DEMO_NAME:-}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+      BOOTSTRAP_ARGS: ${BOOTSTRAP_ARGS:-}
+    volumes:
+      - stack-secrets:/stack/secrets:ro
+
+  # Tägliches Backup von Postgres und MCP-SQLite ins Volume db-backups.
   db-backup:
-    <<: *hardening
     image: postgres:15-alpine
     restart: unless-stopped
     mem_limit: 256m
-    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       db:
         condition: service_healthy
     environment:
-      PGPASSWORD: ${POSTGRES_PASSWORD}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
       BACKUP_KEEP: ${BACKUP_KEEP:-7}
     volumes:
       - db-backups:/backups
-      # MCP-Store read-write mitmounten: der sqlite-Online-Backup nimmt einen
-      # WAL-Read-Lock (braucht Schreibzugriff aufs -shm), läuft aber gefahrlos
-      # parallel zum MCP-Writer.
       - mcp-data:/mcp-data
-    # db: für pg_dump; default: ausgehend für `apk add sqlite` beim Start.
-    networks: [default, db]
-    # `apk add` bei jedem (seltenen) Containerstart statt eigenem Image: spart
-    # Build und Registry. Fehlt das Netz, laufen die Postgres-Backups weiter,
-    # nur der sqlite-Teil meldet dann FAILED.
+      - stack-secrets:/stack/secrets:ro
+    networks:
+      - default
+      - db
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        export PGPASSWORD="$$(cat /stack/secrets/postgres_password)"
         apk add --no-cache sqlite >/dev/null 2>&1 || true
         while true; do
           ts=$$(date +%Y%m%d-%H%M%S)
@@ -184,59 +255,15 @@ services:
           sleep "$$BACKUP_INTERVAL_SECONDS"
         done
 
-  caddy:
-    <<: *hardening
-    image: caddy:2-alpine
-    restart: unless-stopped
-    mem_limit: 128m
-    cpus: 0.5
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      # Fail at `docker compose` time: an empty site address makes the Caddyfile invalid.
-      DOMAIN: ${DOMAIN:?DOMAIN fehlt — bitte .env anlegen}
-    volumes:
-      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on:
-      - wiki
-      - mcp
-
-  # Ersteinrichtung (startet NICHT mit `up`, nur per `run`):
-  #   ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='…' \
-  #     docker compose run --rm bootstrap --locale=de [--demo]
-  # Spricht im internen Netz mit wiki:3000 — der Setup-Endpunkt /finalize ist
-  # über Caddy gesperrt. Idempotent; Details im Kopf von deploy/scripts/bootstrap.mjs.
-  bootstrap:
-    <<: *hardening
-    image: node:24-alpine
-    profiles: ["setup"]
-    depends_on:
-      - wiki
-    volumes:
-      - ./deploy/scripts:/scripts:ro
-    entrypoint: ["node", "/scripts/bootstrap.mjs"]
-    environment:
-      WIKI_URL: http://wiki:3000
-      # Steht als Connector-Adresse auf /ki-zugang und wird die Site-URL von Wiki.js.
-      PUBLIC_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN:?DOMAIN fehlt — bitte .env anlegen}}
-      # Ohne Wert: aus der Shell (oder .env) übernommen, keine Defaults für Passwörter.
-      ADMIN_EMAIL:
-      ADMIN_PASSWORD:
-      DEMO_EMAIL:
-      DEMO_NAME:
-      DEMO_PASSWORD:
-
 networks:
-  # Intern: kein Zugang nach außen, nur db, wiki und db-backup hängen daran.
   db:
     internal: true
+  proxy:
+    external: true
+    name: ${TRAEFIK_NETWORK:-traefik-proxy}
 
 volumes:
+  stack-secrets:
   db-data:
   db-backups:
   mcp-data:
-  caddy-data:
-  caddy-config:

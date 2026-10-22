@@ -106,8 +106,11 @@ top for ad-hoc cases.
 
 ### Deployment (short version)
 
+Which compose file for what (Docker panel with Traefik, own server, build yourself): see the
+[root README](../../README.en.md#quick-start-which-compose-file). Building from a repo checkout:
+
 ```bash
-cp .env.example .env    # DOMAIN, POSTGRES_PASSWORD, MCP_SESSION_SECRET
+cp .env.example .env    # COMPOSE_FILE=docker-compose.build.yml, DOMAIN, POSTGRES_PASSWORD, MCP_SESSION_SECRET
 docker compose up -d    # Caddy obtains TLS automatically
 
 # First-run setup (admin account, home page, /ki-zugang guide, Postgres search,
@@ -170,7 +173,7 @@ path never calls the password login).
 | Tag guardrail | `lib/guardrails.ts` + hooks in `lib/tools/pages/` and `lib/tools/comments.ts` | `WIKIJS_BLOCKED_TAGS`: pages invisible/untouchable for agents; closes Wiki.js' tag-rule gap; guardrail tags protected from rename/delete |
 | Role `wiki` | `config/roles.json`, `WIKIJS_OAUTH_ROLE` | Agent-safety overlay for OAuth sessions (see §6) |
 | JWT renewal | `lib/wikijs/client.ts` (`new-jwt` header) | Wiki.js' rolling token renewal is persisted → sessions stay fresh without re-login |
-| Packaging | Root `Dockerfile` (Next standalone, Node 24), `docker-compose.yml` (db/wiki/mcp/caddy/backup), `deploy/helm/wikijs-mcp`, CI for GitHub (ghcr) + GitLab (registry + Helm) | Single-host appliance; MCP↔wiki over the internal network |
+| Packaging | Root `Dockerfile` (Next standalone, Node 24), `docker-compose.yml` (behind Traefik) or `docker-compose.build.yml` and `deploy/standalone/` (db/wiki/mcp/caddy/backup), `deploy/helm/wikijs-mcp`, CI for GitHub (ghcr) + GitLab (registry + Helm) | Single-host appliance; MCP↔wiki over the internal network |
 
 **Hardened after a security review:** guardrail tags cannot be
 renamed/deleted by agents; blocked-page cache partitioned per credential;

@@ -1,0 +1,242 @@
+# =============================================================================
+# Wiki.js + MCP-Server — Appliance zum Selbstbauen (Repo-Checkout, eigener Caddy)
+# =============================================================================
+# Vier Services, EIN Host, EINE Domain:
+#   db     Postgres 15 (Wiki.js-Datenbank)
+#   wiki   Wiki.js 2 (offizielles Image — unabhängig updatebar)
+#   mcp    MCP-Server (dieses Repo) — OAuth mit Wiki.js-Login, /me, Guardrails
+#   caddy  Reverse-Proxy mit Auto-HTTPS: eine Domain für Wiki UND MCP
+#          (gleiche Domain = Ein-Klick-SSO: die Wiki-Session gilt beim Autorisieren)
+#
+# Quick-Start:
+#   cp .env.example .env        # COMPOSE_FILE=docker-compose.build.yml, DOMAIN, Secrets
+#   docker compose up -d
+#   ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='…' \
+#     docker compose run --rm bootstrap --locale=de   # Ersteinrichtung (idempotent)
+#   https://<DOMAIN>            → Wiki.js
+#   https://<DOMAIN>/mcp        → MCP-Endpoint (Connector-URL für alle Clients)
+#   https://<DOMAIN>/me         → eigene KI-Zugänge ansehen/widerrufen
+#
+# Den Setup-Wizard von Wiki.js (POST /finalize = erstes Admin-Konto) sperrt
+# Caddy nach außen mit 403 — eingerichtet wird nur über den bootstrap-Dienst,
+# der im internen Netz direkt mit wiki:3000 spricht.
+#
+# Update:   docker compose pull && docker compose build --pull mcp && docker compose up -d
+# Logs:     docker compose logs -f
+# Backup:   der db-backup-Service sichert automatisch BEIDES ins db-backups-Volume:
+#           Postgres (Wiki-Inhalte) via pg_dump UND die MCP-sqlite (Audit-Log +
+#           Sessions) via `sqlite3 .backup`. Volume off-host replizieren.
+# Reset:    docker compose down -v   # ACHTUNG: löscht ALLE Daten
+#
+# Base-Images bewusst per Tag (postgres:15-alpine, requarks/wiki:2, caddy:2-alpine)
+# und nicht per Digest gepinnt: ohne Renovate/Dependabot würden Digests veralten
+# und Sicherheits-Updates des Upstreams aussperren. `docker compose pull` holt sie.
+
+# Für jeden Dienst: keine Rechteausweitung per setuid, Log-Rotation (sonst
+# wachsen json-Logs unbegrenzt).
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  db:
+    <<: *hardening
+    image: postgres:15-alpine
+    restart: unless-stopped
+    # Resource-Ceilings, damit kein Service den Appliance-Host OOMt.
+    mem_limit: 512m
+    cpus: 1.0
+    environment:
+      POSTGRES_DB: wiki
+      POSTGRES_USER: wikijs
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD fehlt — bitte .env anlegen}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    # Nur im internen db-Netz: Caddy und MCP erreichen Postgres nicht.
+    networks: [db]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wikijs -d wiki"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  wiki:
+    <<: *hardening
+    image: requarks/wiki:2
+    restart: unless-stopped
+    # Höheres Ceiling: Wiki.js rendert Seiten in Node (der schwerste Service).
+    mem_limit: 1g
+    cpus: 1.5
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_TYPE: postgres
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: wikijs
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_NAME: wiki
+      # DB-Connection-Pool von Wiki.js (Knex). Default des Images wäre max 10 —
+      # mit parallelen KI-Agenten + Browser-Nutzung zu knapp. 20 direkte
+      # Verbindungen sind für Postgres (max_connections=100) völlig unkritisch;
+      # PgBouncer ist bei EINER Wiki-Instanz unnötig.
+      DB_POOL_MIN: ${WIKIJS_DB_POOL_MIN:-2}
+      DB_POOL_MAX: ${WIKIJS_DB_POOL_MAX:-20}
+    volumes:
+      # Wie die config.yml des Images, plus pool-Block (siehe Datei-Kommentar).
+      - ./deploy/wiki/config.yml:/wiki/config.yml:ro
+    # Kein Port nach außen — Zugriff ausschließlich über caddy.
+    # default: für caddy/mcp/bootstrap und ausgehend (Sprachpakete); db: Postgres.
+    networks: [default, db]
+
+  mcp:
+    <<: *hardening
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${MCP_IMAGE:-wikijs-mcp:local}
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    environment:
+      # Wiki.js über das interne Docker-Netz — kein Traffic verlässt den Host,
+      # keine Rate-Limits/Firewalls zwischen MCP und Wiki (das Vercel-Problem).
+      WIKIJS_URL: http://wiki:3000
+      # Öffentliche Basis-URL (OAuth-Issuer, Discovery, Links) — MUSS zur Domain passen.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN:?DOMAIN fehlt — bitte .env anlegen}}
+      # OAuth an: Login = Wiki.js-Login, Sessions verschlüsselt in /data.
+      MCP_SESSION_SECRET: ${MCP_SESSION_SECRET:?MCP_SESSION_SECRET fehlt — bitte .env anlegen}
+      MCP_DATA_DIR: /data
+      # Rechte kommen pro User aus Wiki.js → Ceiling öffnen, Agenten-Schutz als Overlay.
+      WIKIJS_PERMISSION_PRESET: ${WIKIJS_PERMISSION_PRESET:-full}
+      WIKIJS_OAUTH_ROLE: ${WIKIJS_OAUTH_ROLE:-wiki}
+      # Seiten mit diesen Tags sind für KI unsichtbar & unantastbar (leer = aus).
+      WIKIJS_BLOCKED_TAGS: ${WIKIJS_BLOCKED_TAGS:-kein-ki}
+      WIKIJS_AUDIT: ${WIKIJS_AUDIT:-true}
+      # Max. gleichzeitige GraphQL-Requests an Wiki.js — unter DB_POOL_MAX halten,
+      # damit fürs Browsen der Menschen Pool-Luft bleibt.
+      WIKIJS_MAX_CONCURRENCY: ${WIKIJS_MAX_CONCURRENCY:-12}
+      # Optional: erlaubte OAuth-Redirect-Hosts (kommagetrennt; leer = jeder https-Host).
+      MCP_ALLOWED_REDIRECT_HOSTS: ${MCP_ALLOWED_REDIRECT_HOSTS:-}
+    volumes:
+      - mcp-data:/data
+    depends_on:
+      - wiki
+
+  # Periodisches Backup mit Retention — deckt BEIDE Datenquellen ab:
+  #   Postgres (Wiki-Inhalte) via pg_dump, und die MCP-sqlite (Audit-Log +
+  #   Sessions) via `sqlite3 .backup` (konsistenter Hot-Backup, kein naives cp).
+  # Restore Wiki (über diesen Dienst: nur er mountet db-backups, PGPASSWORD ist gesetzt):
+  #   docker compose stop wiki
+  #   docker compose exec db-backup pg_restore -h db -U wikijs -d wiki --clean /backups/<datei>.dump
+  #   docker compose start wiki
+  # Restore MCP-Store: mcp stoppen, mcp-<ts>.sqlite als /data/mcp.sqlite einspielen, mcp starten.
+  db-backup:
+    <<: *hardening
+    image: postgres:15-alpine
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+    volumes:
+      - db-backups:/backups
+      # MCP-Store read-write mitmounten: der sqlite-Online-Backup nimmt einen
+      # WAL-Read-Lock (braucht Schreibzugriff aufs -shm), läuft aber gefahrlos
+      # parallel zum MCP-Writer.
+      - mcp-data:/mcp-data
+    # db: für pg_dump; default: ausgehend für `apk add sqlite` beim Start.
+    networks: [default, db]
+    # `apk add` bei jedem (seltenen) Containerstart statt eigenem Image: spart
+    # Build und Registry. Fehlt das Netz, laufen die Postgres-Backups weiter,
+    # nur der sqlite-Teil meldet dann FAILED.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache sqlite >/dev/null 2>&1 || true
+        while true; do
+          ts=$$(date +%Y%m%d-%H%M%S)
+          if pg_dump -h db -U wikijs -d wiki -F c -f "/backups/wiki-$$ts.dump"; then
+            echo "backup ok: wiki-$$ts.dump"
+            ls -1t /backups/wiki-*.dump 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
+          else
+            echo "backup FAILED (postgres) at $$ts" >&2
+          fi
+          if [ -f /mcp-data/mcp.sqlite ]; then
+            if sqlite3 /mcp-data/mcp.sqlite ".backup '/backups/mcp-$$ts.sqlite'"; then
+              echo "backup ok: mcp-$$ts.sqlite"
+              ls -1t /backups/mcp-*.sqlite 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
+            else
+              echo "backup FAILED (mcp sqlite) at $$ts" >&2
+            fi
+          fi
+          sleep "$$BACKUP_INTERVAL_SECONDS"
+        done
+
+  caddy:
+    <<: *hardening
+    image: caddy:2-alpine
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.5
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Fail at `docker compose` time: an empty site address makes the Caddyfile invalid.
+      DOMAIN: ${DOMAIN:?DOMAIN fehlt — bitte .env anlegen}
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - wiki
+      - mcp
+
+  # Ersteinrichtung (startet NICHT mit `up`, nur per `run`):
+  #   ADMIN_EMAIL=admin@example.org ADMIN_PASSWORD='…' \
+  #     docker compose run --rm bootstrap --locale=de [--demo]
+  # Spricht im internen Netz mit wiki:3000 — der Setup-Endpunkt /finalize ist
+  # über Caddy gesperrt. Idempotent; Details im Kopf von deploy/scripts/bootstrap.mjs.
+  bootstrap:
+    <<: *hardening
+    image: node:24-alpine
+    profiles: ["setup"]
+    depends_on:
+      - wiki
+    volumes:
+      - ./deploy/scripts:/scripts:ro
+    entrypoint: ["node", "/scripts/bootstrap.mjs"]
+    environment:
+      WIKI_URL: http://wiki:3000
+      # Steht als Connector-Adresse auf /ki-zugang und wird die Site-URL von Wiki.js.
+      PUBLIC_URL: ${PUBLIC_BASE_URL:-https://${DOMAIN:?DOMAIN fehlt — bitte .env anlegen}}
+      # Ohne Wert: aus der Shell (oder .env) übernommen, keine Defaults für Passwörter.
+      ADMIN_EMAIL:
+      ADMIN_PASSWORD:
+      DEMO_EMAIL:
+      DEMO_NAME:
+      DEMO_PASSWORD:
+
+networks:
+  # Intern: kein Zugang nach außen, nur db, wiki und db-backup hängen daran.
+  db:
+    internal: true
+
+volumes:
+  db-data:
+  db-backups:
+  mcp-data:
+  caddy-data:
+  caddy-config:

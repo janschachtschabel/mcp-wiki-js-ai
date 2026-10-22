@@ -1,16 +1,16 @@
 # Lokales Testen OHNE Domain/TLS — Caddy dient plain HTTP auf Port 8090.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#   docker compose -f docker-compose.build.yml -f docker-compose.local.yml up -d
 #   http://localhost:8090       → Wiki.js
 #   http://localhost:8090/mcp   → MCP-Endpoint
 #   http://localhost:8090/me    → Selbstverwaltung
 #
 # Ersteinrichtung genauso mit beiden Dateien:
-#   ADMIN_EMAIL=… ADMIN_PASSWORD=… docker compose -f docker-compose.yml \
+#   ADMIN_EMAIL=… ADMIN_PASSWORD=… docker compose -f docker-compose.build.yml \
 #     -f docker-compose.local.yml run --rm bootstrap --locale=de
 #
 # In der .env reichen dafür: DOMAIN=localhost (Platzhalter), POSTGRES_PASSWORD,
-# MCP_SESSION_SECRET. Produktion nutzt NUR docker-compose.yml (Auto-HTTPS).
+# MCP_SESSION_SECRET. Produktion: docker-compose.build.yml allein (Auto-HTTPS).
 
 services:
   caddy:
