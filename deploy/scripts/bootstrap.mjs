@@ -37,7 +37,7 @@
  *
  * --if-configured  ohne ADMIN_EMAIL/ADMIN_PASSWORD still beenden (Exit 0) statt
  *                  mit Fehler — für den automatischen Start in
- *                  deploy/standalone/docker-compose.full.yml.
+ *                  deploy/standalone/full/docker-compose.yml.
  */
 
 const WIKI_URL = (process.env.WIKI_URL || 'http://localhost:8090').replace(/\/+$/, '');

@@ -27,7 +27,7 @@
 # die Datei lesen: keine Tabs, keine YAML-Anker, keine verschachtelten Variablen,
 # keine mehrzeiligen Shell-Skripte außer im Backup-Dienst.
 #
-# Mit Repo-Checkout ist ../../docker-compose.yml die Variante zum Selbstbauen
+# Mit Repo-Checkout ist ../../../docker-compose.yml die Variante zum Selbstbauen
 # (gleiche Dienste, Konfiguration aus deploy/). Änderungen am Routing dort
 # (deploy/caddy/Caddyfile) hier in CADDYFILE nachziehen.
 

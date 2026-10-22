@@ -4,7 +4,7 @@ Kurzanleitung, um den MCP-Server neben eine **laufende** Wiki.js-2.x-Installatio
 (Container) zu hängen — **ohne das Wiki zu verändern** (kein Fork, keine
 Migration). Für einen kompletten Neuaufbau siehe stattdessen den Compose-Stack
 im [Root-README](../../README.md). Statt `docker run` (Schritt 3) geht auch die fertige Compose-Datei
-[`deploy/standalone/docker-compose.mcp-only.yml`](../../deploy/standalone/docker-compose.mcp-only.yml).
+[`deploy/standalone/mcp-only/docker-compose.yml`](../../deploy/standalone/mcp-only/docker-compose.yml).
 
 ## Voraussetzungen
 - Laufender **Wiki.js 2.x** (Container) mit Postgres.

@@ -24,9 +24,10 @@ Interaktive Fassung mit Quellenverweisen je Komponente: [docs/architektur.html](
 > Wiki auf einem Server mit Docker, Neuinstallation per Docker Compose): [installation-it.md](mcp-for-wiki-js/docs/installation-it.md).
 >
 > **Ohne Repo-Checkout** (Compose-Import per URL in Docker-Panels, vServer): eigenständige Dateien unter
-> [`deploy/standalone/`](deploy/standalone/) — `docker-compose.full.yml` (Komplett-Stack, Ersteinrichtung
-> automatisch) und `docker-compose.mcp-only.yml` (nur der MCP neben einem bestehenden Wiki). Die
-> Repo-`docker-compose.yml` baut lokal und bindet Dateien aus `deploy/` ein; Panels melden dann „nicht gefunden“.
+> [`deploy/standalone/`](deploy/standalone/) — `full/docker-compose.yml` (Komplett-Stack, Ersteinrichtung
+> automatisch) und `mcp-only/docker-compose.yml` (nur der MCP neben einem bestehenden Wiki). Jede liegt
+> in einem eigenen Ordner und heißt `docker-compose.yml`, weil Docker-Panels nur diesen Namen (oder
+> `compose.yml`) erkennen.
 
 ## Quick-Start (Docker Compose)
 
@@ -52,13 +53,18 @@ DB-Pool). Updates: neues Image ziehen, fertig.
 
 ### Ohne Repo-Checkout: Docker-Panel / Compose per URL
 
-Für Panels, die eine Compose-Datei per URL importieren (oder einen Server ohne `git clone`), **nicht**
-die `docker-compose.yml` oben nehmen (sie baut lokal und braucht Repo-Dateien, Panels melden dann
-„nicht gefunden“), sondern diese Datei:
+Für Panels, die eine Compose-Datei per URL importieren (z. B. „Compose from URL“), oder einen Server
+ohne `git clone` **nicht** die `docker-compose.yml` im Hauptordner nehmen (sie baut das Image auf dem
+Server und bindet Repo-Dateien ein), sondern die eigenständige Datei im Ordner `deploy/standalone/full`:
 
 ```
-https://raw.githubusercontent.com/janschachtschabel/mcp-wiki-js-ai/main/deploy/standalone/docker-compose.full.yml
+https://github.com/janschachtschabel/mcp-wiki-js-ai/blob/main/deploy/standalone/full/docker-compose.yml
 ```
+
+Verlangt das Panel Repository und Pfad getrennt: Repository
+`https://github.com/janschachtschabel/mcp-wiki-js-ai`, Pfad `deploy/standalone/full`. Panels erkennen
+nur Dateien namens `docker-compose.yml` oder `compose.yml`. Für `curl` die Rohfassung nehmen:
+`https://raw.githubusercontent.com/janschachtschabel/mcp-wiki-js-ai/main/deploy/standalone/full/docker-compose.yml`.
 
 Variablen im Panel (bzw. in einer `.env` daneben):
 
@@ -74,7 +80,7 @@ Voraussetzungen: DNS-A-Eintrag der Domain zeigt auf den Server, Ports 80/443 sin
 Ersteinrichtung läuft beim Start automatisch (Log des Containers `bootstrap`). Danach in Wiki.js die
 Gruppe „Team“ ohne `manage:system` anlegen; Anwender verbinden sich mit `https://<DOMAIN>/mcp`.
 Läuft auf dem Server schon ein Wiki.js, stattdessen
-[`deploy/standalone/docker-compose.mcp-only.yml`](deploy/standalone/docker-compose.mcp-only.yml) plus
+[`deploy/standalone/mcp-only/docker-compose.yml`](deploy/standalone/mcp-only/docker-compose.yml) plus
 Proxy-Einträge ([IT-Anleitung, Option B](mcp-for-wiki-js/docs/installation-it.md#option-b-bestehendes-wikijs-auf-einem-server-mit-docker-vserver)).
 Details: [IT-Anleitung, Option C Variante 2](mcp-for-wiki-js/docs/installation-it.md#variante-2-eine-datei-ohne-repo-z-b-compose-import-in-docker-panels).
 
@@ -138,7 +144,7 @@ MCP-Pfade auf dieselbe Domain legen → in Wiki.js eine „Team"-Gruppe (ohne
 
 **→ Schritt-für-Schritt-Anleitung: [docs/integration-bestehendes-wiki.md](mcp-for-wiki-js/docs/integration-bestehendes-wiki.md).**
 Läuft das Wiki auf einem vServer mit eigenem Proxy: fertige Compose-Datei
-[`deploy/standalone/docker-compose.mcp-only.yml`](deploy/standalone/docker-compose.mcp-only.yml) plus
+[`deploy/standalone/mcp-only/docker-compose.yml`](deploy/standalone/mcp-only/docker-compose.yml) plus
 nginx-/Caddy-Beispiele in der [IT-Anleitung, Option B](mcp-for-wiki-js/docs/installation-it.md#option-b-bestehendes-wikijs-auf-einem-server-mit-docker-vserver).
 
 | URL | Zweck |

@@ -93,13 +93,13 @@ curl https://wiki.example.org/.well-known/oauth-authorization-server  # JSON
 
 Voraussetzungen: Wiki.js 2.x läuft (als Container oder direkt), davor ein Reverse-Proxy (nginx, Caddy,
 Traefik …) mit TLS für die Wiki-Domain, Docker Compose auf dem Server. Gebraucht wird nur **eine**
-Datei, [`deploy/standalone/docker-compose.mcp-only.yml`](../../deploy/standalone/docker-compose.mcp-only.yml).
+Datei, [`deploy/standalone/mcp-only/docker-compose.yml`](../../deploy/standalone/mcp-only/docker-compose.yml).
 Kein Repo-Checkout und kein Build nötig: Das fertige Image kommt aus GHCR.
 
 ### 1. Compose-Datei holen und Variablen setzen
 ```bash
 mkdir wikijs-mcp && cd wikijs-mcp
-curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/janschachtschabel/mcp-wiki-js-ai/main/deploy/standalone/docker-compose.mcp-only.yml
+curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/janschachtschabel/mcp-wiki-js-ai/main/deploy/standalone/mcp-only/docker-compose.yml
 ```
 Daneben eine `.env`:
 ```
@@ -199,15 +199,19 @@ für ein **bereits eingerichtetes** Wiki (z. B. `--locale` oder `--demo` nachhol
 über die Domain scheitert an der `/finalize`-Sperre.
 
 ### Variante 2: eine Datei, ohne Repo (z. B. Compose-Import in Docker-Panels)
-Die Repo-Datei `docker-compose.yml` baut das MCP-Image lokal und bindet Dateien aus `deploy/` ein.
-Panels, die eine Compose-Datei per URL importieren, finden diese Dateien nicht und melden
-„nicht gefunden“. Dafür gibt es [`deploy/standalone/docker-compose.full.yml`](../../deploy/standalone/docker-compose.full.yml):
+Die Repo-Datei `docker-compose.yml` im Hauptordner baut das MCP-Image auf dem Server und bindet Dateien
+aus `deploy/` ein. Für Docker-Panels mit Compose-Import per URL und Server ohne Repo gibt es
+[`deploy/standalone/full/docker-compose.yml`](../../deploy/standalone/full/docker-compose.yml)
+(eigener Ordner, Standardname — Panels erkennen nur `docker-compose.yml` bzw. `compose.yml`):
 gleiche Dienste, fertiges Image aus GHCR, Caddy-Konfiguration in der Datei selbst, Ersteinrichtung
 automatisch beim Start.
 
 - **Docker-Panel:** als Compose-Quelle diese URL angeben und die Variablen im Panel eintragen:
-  `https://raw.githubusercontent.com/janschachtschabel/mcp-wiki-js-ai/main/deploy/standalone/docker-compose.full.yml`
-- **Server ohne Repo:** die Datei per `curl -fsSLo docker-compose.yml <URL>` holen, `.env` daneben,
+  `https://github.com/janschachtschabel/mcp-wiki-js-ai/blob/main/deploy/standalone/full/docker-compose.yml`  
+  Verlangt das Panel Repository und Pfad getrennt: `https://github.com/janschachtschabel/mcp-wiki-js-ai`
+  und Pfad `deploy/standalone/full`.
+- **Server ohne Repo:** die Rohfassung per
+  `curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/janschachtschabel/mcp-wiki-js-ai/main/deploy/standalone/full/docker-compose.yml` holen, `.env` daneben,
   dann `docker compose up -d`.
 
 Vorher: Der DNS-A-Eintrag der Domain zeigt auf die IP des Servers, und die Ports 80/443 sind auf dem
@@ -358,7 +362,7 @@ https://<domain>/mcp
 | MCP-Container/Pod startet nicht (Exit 1) | Konfigurationsfehler – Log-Zeile `[wikijs-mcp] …` lesen (siehe oben) |
 | `413 Payload Too Large` | Anfrage an `/mcp` über 4 MB (z. B. großer Datei-Upload per KI) – Datei direkt im Wiki hochladen |
 | `docker compose` bricht mit „DOMAIN fehlt“ ab | `DOMAIN` in `.env` leer oder `.env` fehlt |
-| Docker-Panel meldet beim Compose-Import „nicht gefunden“ | Repo-`docker-compose.yml` braucht Build und Repo-Dateien – `deploy/standalone/docker-compose.full.yml` bzw. `…mcp-only.yml` nehmen (Option C Variante 2 / Option B) |
+| Docker-Panel meldet beim Compose-Import „Projekt nicht gefunden“ | Panels erkennen nur Dateien namens `docker-compose.yml`/`compose.yml` – Ordner `deploy/standalone/full` bzw. `deploy/standalone/mcp-only` angeben (Option C Variante 2 / Option B) |
 | Docker-Panel: „YAML-Datei kann nicht verarbeitet werden“ | ältere Fassung der Standalone-Datei (mit Tabs/YAML-Ankern) im Cache – Datei neu importieren; hilft das nicht, per SSH mit `docker compose up -d` starten |
 | Bootstrap meldet „Admin-Login schlägt fehl“ | Wiki ist schon eingerichtet, `ADMIN_PASSWORD` passt nicht mehr – Variable entfernen |
 | Login meldet „Zu viele Anmeldeversuche“ | Login-Limit: 10 Versuche pro IP bzw. 5 pro Benutzername in 15 Minuten |
