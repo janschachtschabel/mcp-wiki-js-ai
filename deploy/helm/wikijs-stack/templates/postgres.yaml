@@ -1,0 +1,91 @@
+{{- $fullname := include "stack.fullname" . }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-postgres
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "postgres") | nindent 4 }}
+spec:
+  selector: {{ include "stack.selectorLabels" (dict "ctx" $ "component" "postgres") | nindent 4 }}
+  ports:
+  - name: postgres
+    port: 5432
+    targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-postgres
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "postgres") | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ $fullname }}-postgres
+  selector:
+    matchLabels: {{ include "stack.selectorLabels" (dict "ctx" $ "component" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{ include "stack.labels" (dict "ctx" $ "component" "postgres") | nindent 8 }}
+    spec:
+      {{- include "stack.podDefaults" . | nindent 6 }}
+      # The alpine image's "postgres" user; initdb runs without root.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: postgres
+        image: "{{ .Values.images.postgres.repository }}:{{ .Values.images.postgres.tag }}"
+        imagePullPolicy: {{ .Values.images.postgres.pullPolicy }}
+        env:
+        - name: POSTGRES_DB
+          value: wiki
+        - name: POSTGRES_USER
+          value: wikijs
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "stack.secretName" . }}
+              key: POSTGRES_PASSWORD
+        # Subdirectory: a fresh volume may contain lost+found, which initdb refuses.
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        ports:
+        - name: postgres
+          containerPort: 5432
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "-U", "wikijs", "-d", "wiki"]
+          periodSeconds: 10
+          timeoutSeconds: 5
+        livenessProbe:
+          exec:
+            command: ["pg_isready", "-U", "wikijs", "-d", "wiki"]
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+        - name: run
+          mountPath: /var/run/postgresql
+        {{- with .Values.postgres.resources }}
+        resources: {{ toYaml . | nindent 10 }}
+        {{- end }}
+        securityContext: {{ toYaml .Values.containerSecurityContext | nindent 10 }}
+      volumes:
+      - name: run
+        emptyDir: {}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ReadWriteOnce]
+      {{- with .Values.postgres.persistence.storageClassName }}
+      storageClassName: {{ . | quote }}
+      {{- end }}
+      resources:
+        requests:
+          storage: {{ .Values.postgres.persistence.size }}

@@ -1,0 +1,196 @@
+########################################################################################################################
+# wikijs-stack — Wiki.js + MCP server as one release (case A on Kubernetes)
+#
+# Minimal install (secrets are generated and kept across upgrades):
+#   helm install wiki ./deploy/helm/wikijs-stack -n wiki --create-namespace \
+#     --set domain=wiki.example.org --set admin.email=admin@example.org \
+#     --set admin.existingSecret=wiki-admin
+# Template with all common settings: values-example.yaml
+########################################################################################################################
+
+## @param domain Public hostname of wiki AND MCP (no https://, no path) — REQUIRED. One domain makes the OAuth consent
+## one click, because the wiki session cookie also counts there.
+domain: ""
+
+## @param publicBaseUrl Public base URL (OAuth issuer, address on /ki-zugang). Empty = https://<domain>.
+## Only set it for plain-HTTP tests or a non-standard port.
+publicBaseUrl: ""
+
+## @param nameOverride Override the name part of resource names
+nameOverride: ""
+## @param fullnameOverride Fully override the resource name prefix (default: release name)
+fullnameOverride: ""
+
+images:
+  mcp:
+    ## @param images.mcp.repository MCP server image (public on GHCR)
+    repository: ghcr.io/janschachtschabel/mcp-wiki-js-ai
+    ## @param images.mcp.tag Image tag; empty = .Chart.AppVersion ("main"). Production: pin a release tag (X.Y.Z)
+    tag: ""
+    ## @param images.mcp.pullPolicy Empty = Always for moving tags (main, latest …), IfNotPresent for release/sha tags
+    pullPolicy: ""
+  wiki:
+    ## @param images.wiki.repository Wiki.js image
+    repository: requarks/wiki
+    ## @param images.wiki.tag Wiki.js image tag (2 = newest 2.x)
+    tag: "2"
+    ## @param images.wiki.pullPolicy Pull policy for Wiki.js
+    pullPolicy: IfNotPresent
+  postgres:
+    ## @param images.postgres.repository PostgreSQL image (also used by the backup CronJob)
+    repository: postgres
+    ## @param images.postgres.tag PostgreSQL image tag
+    tag: "15-alpine"
+    ## @param images.postgres.pullPolicy Pull policy for PostgreSQL
+    pullPolicy: IfNotPresent
+  ## @param images.pullSecrets Image pull secrets for all pods (e.g. for a private registry mirror)
+  pullSecrets: []
+
+secrets:
+  ## @param secrets.existingSecret Existing Secret with the keys POSTGRES_PASSWORD and MCP_SESSION_SECRET (min. 16 chars).
+  ## Empty = the chart creates "<fullname>-secrets" with random values ONCE and keeps them on upgrades (Helm lookup)
+  ## and on uninstall (resource-policy keep). Use an existing Secret with GitOps tools that render without cluster
+  ## access (Argo CD, helm template) — there lookup returns nothing and the values would change on every render.
+  existingSecret: ""
+
+admin:
+  ## @param admin.email E-mail of the first Wiki.js admin. Empty = first-run setup is skipped.
+  email: ""
+  ## @param admin.existingSecret Secret with the key ADMIN_PASSWORD (recommended). Created e.g. with
+  ##   kubectl -n wiki create secret generic wiki-admin --from-literal=ADMIN_PASSWORD='…'
+  existingSecret: ""
+  ## @param admin.password Admin password inline (tests only — ends up in the Helm release history)
+  password: ""
+
+bootstrap:
+  ## @param bootstrap.enabled Run the first-run setup Job on install/upgrade (idempotent; skips without admin credentials)
+  enabled: true
+  ## @param bootstrap.args Arguments of deploy/scripts/bootstrap.mjs (--locale=de, --locale=en, --demo …)
+  args: "--locale=de"
+  ## @param bootstrap.demoPasswordSecret Secret with the key DEMO_PASSWORD (only needed with --demo)
+  demoPasswordSecret: ""
+  ## @param bootstrap.demoEmail Login of the --demo test user (empty = test@team.local)
+  demoEmail: ""
+
+########################################################################################################################
+
+ingress:
+  ## @param ingress.enabled Create the Ingress (wiki on "/", MCP paths to the MCP server, /finalize blocked)
+  enabled: true
+  ## @param ingress.className IngressClass (nginx, traefik …)
+  className: nginx
+  ## @param ingress.annotations Annotations on both Ingress objects. The nginx defaults keep streaming responses
+  ## unbuffered and allow 8 MB bodies (ignored by other controllers).
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "8m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  ## @param ingress.mcpAnnotations Extra annotations of the MCP Ingress only. Traefik ranks routes by rule length — the
+  ## explicit priority keeps short MCP paths (/me, /mcp) ahead of the wiki's "/" (ignored by nginx).
+  mcpAnnotations:
+    traefik.ingress.kubernetes.io/router.priority: "100"
+  ## @param ingress.wikiAnnotations Extra annotations of the wiki Ingress only — put cert-manager here (one owner per
+  ## certificate), e.g. cert-manager.io/cluster-issuer: letsencrypt; both Ingresses share the TLS Secret.
+  wikiAnnotations: {}
+  tls:
+    ## @param ingress.tls.enabled Serve TLS for the domain
+    enabled: true
+    ## @param ingress.tls.secretName TLS Secret (existing, or created by cert-manager). Empty = "<fullname>-tls"
+    secretName: ""
+  ## @param ingress.mcpPaths Paths owned by the MCP server; everything else goes to Wiki.js. Exact for single
+  ## paths, Prefix only with a trailing slash: some controllers (Traefik) treat Prefix as a plain string prefix,
+  ## so a Prefix "/me" would also catch wiki pages like /meeting.
+  mcpPaths:
+  - { path: /mcp, pathType: Exact }
+  - { path: /mcp/, pathType: Prefix }
+  - { path: /oauth/, pathType: Prefix }
+  - { path: /me, pathType: Exact }
+  - { path: /me/, pathType: Prefix }
+  - { path: /api/health, pathType: Exact }
+  - { path: /_next/, pathType: Prefix }
+  - { path: /.well-known/oauth-authorization-server, pathType: Prefix }
+  - { path: /.well-known/oauth-protected-resource, pathType: Prefix }
+  - { path: /.well-known/mcp.json, pathType: Exact }
+
+########################################################################################################################
+
+mcp:
+  config:
+    ## @param mcp.config.blockedTags Pages with these tags are invisible/locked for AI agents (comma-separated, empty = off)
+    blockedTags: "kein-ki"
+    ## @param mcp.config.oauthRole Agent-safety role for OAuth sessions (delete/admin only after a confirm step)
+    oauthRole: "wiki"
+    ## @param mcp.config.permissionPreset Tool ceiling; keep "full" — effective rights come from Wiki.js
+    permissionPreset: "full"
+    ## @param mcp.config.audit Audit log of write/delete/admin actions
+    audit: true
+    ## @param mcp.config.maxConcurrency Max. parallel requests to Wiki.js (Wiki.js default DB pool = 10)
+    maxConcurrency: 6
+    ## @param mcp.config.allowedRedirectHosts OAuth clients may only redirect to these hosts (e.g. "claude.ai,chatgpt.com"); empty = any https host
+    allowedRedirectHosts: ""
+    ## @param mcp.config.timezone Time zone of the timestamps on /me
+    timezone: "UTC"
+    ## @param mcp.config.extraEnv Extra plain environment variables for the MCP server (map)
+    extraEnv: {}
+  persistence:
+    ## @param mcp.persistence.size PVC for sessions + audit log (sqlite)
+    size: 1Gi
+    ## @param mcp.persistence.storageClassName StorageClass (empty = cluster default)
+    storageClassName: ""
+  ## @param mcp.resources Resources of the MCP server
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 1000m, memory: 512Mi }
+
+wiki:
+  ## @param wiki.resources Resources of Wiki.js
+  resources:
+    requests: { cpu: 100m, memory: 300Mi }
+    limits: { cpu: 1000m, memory: 1Gi }
+
+postgres:
+  persistence:
+    ## @param postgres.persistence.size PVC of the wiki database
+    size: 5Gi
+    ## @param postgres.persistence.storageClassName StorageClass (empty = cluster default)
+    storageClassName: ""
+  ## @param postgres.resources Resources of PostgreSQL
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 1000m, memory: 512Mi }
+  ## @param postgres.networkPolicy Only Wiki.js and the backup job may reach PostgreSQL (needs a CNI that enforces NetworkPolicies)
+  networkPolicy: true
+
+backup:
+  ## @param backup.enabled Daily pg_dump of the wiki database into its own PVC
+  enabled: true
+  ## @param backup.schedule Cron schedule (cluster time zone)
+  schedule: "30 2 * * *"
+  ## @param backup.keep Number of dumps to keep
+  keep: 7
+  persistence:
+    ## @param backup.persistence.size PVC for the dumps — copy them off-cluster regularly
+    size: 5Gi
+    ## @param backup.persistence.storageClassName StorageClass (empty = cluster default)
+    storageClassName: ""
+
+## @param podSecurityContext Pod security context for MCP and Wiki.js (both run as uid 1000)
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+## @param containerSecurityContext Container security context for all containers
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+
+## @param nodeSelector Node selector for all pods
+nodeSelector: {}
+## @param tolerations Tolerations for all pods
+tolerations: []

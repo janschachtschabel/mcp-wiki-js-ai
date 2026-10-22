@@ -91,6 +91,8 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
     ## @param ingress.annotations.nginx.ingress.kubernetes.io/proxy-buffering Disable response buffering (SSE/streaming responses)
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    ## @param ingress.annotations.traefik.ingress.kubernetes.io/router.priority Traefik ranks routes by rule length; this keeps the short MCP paths (/me, /mcp) ahead of the wiki's own "/" route (ignored by nginx)
+    traefik.ingress.kubernetes.io/router.priority: "100"
 
   ## @param ingress.hosts Set ingress hosts. RECOMMENDED: the SAME host that serves Wiki.js —
   ## the wiki session cookie then makes the OAuth consent one-click (SSO). The path list below
@@ -98,18 +100,22 @@ ingress:
   hosts:
   - wiki.127.0.0.1.nip.io
 
-  ## @param ingress.paths Paths owned by the MCP server on the shared host (pathType Prefix)
+  ## @param ingress.paths Paths owned by the MCP server on the shared host. Plain strings use pathType Prefix;
+  ## objects set it explicitly. Exact for single paths, Prefix only with a trailing slash: some controllers
+  ## (Traefik) treat Prefix as a plain string prefix, so a Prefix "/me" would also catch wiki pages like /meeting.
   # No /sse: the server speaks stateless Streamable HTTP on /mcp only (mcp-handler 2),
   # so routing it would only expose a dead path.
   paths:
-  - /mcp
-  - /oauth
-  - /me
-  - /.well-known/oauth-authorization-server
-  - /.well-known/oauth-protected-resource
-  - /.well-known/mcp.json
-  - /_next
-  - /api/health
+  - { path: /mcp, pathType: Exact }
+  - { path: /mcp/, pathType: Prefix }
+  - { path: /oauth/, pathType: Prefix }
+  - { path: /me, pathType: Exact }
+  - { path: /me/, pathType: Prefix }
+  - { path: /api/health, pathType: Exact }
+  - { path: /_next/, pathType: Prefix }
+  - { path: /.well-known/oauth-authorization-server, pathType: Prefix }
+  - { path: /.well-known/oauth-protected-resource, pathType: Prefix }
+  - { path: /.well-known/mcp.json, pathType: Exact }
 
   ## @param ingress.tls Set TLS for ingress
   #  - secretName: wikijs-mcp-tls

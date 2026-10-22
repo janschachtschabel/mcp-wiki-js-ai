@@ -1,0 +1,67 @@
+# =============================================================================
+# Muster für eine Produktions-Installation von wikijs-stack (Wiki.js + MCP)
+# =============================================================================
+# Kopieren, Platzhalter <…> ersetzen, dann:
+#   kubectl create namespace wiki
+#   kubectl -n wiki create secret generic wiki-admin --from-literal=ADMIN_PASSWORD='<sicheres-passwort>'
+#   helm install wiki ./deploy/helm/wikijs-stack -n wiki -f values-wiki.yaml
+# Nach der Einrichtung (Log: kubectl -n wiki logs job/wiki-bootstrap-1) kann das
+# Secret wiki-admin gelöscht und admin.* geleert werden.
+
+# Öffentlicher Hostname von Wiki UND MCP (ohne https://). DNS zeigt auf den Ingress-Controller.
+domain: <wiki.example.org>
+
+images:
+  mcp:
+    # Für Produktion einen Release-Tag pinnen (GHCR: X.Y.Z); "main" folgt dem Hauptzweig.
+    tag: "main"
+  # Eigene Registry/Spiegel statt GHCR/Docker Hub:
+  # mcp:      { repository: <registry>/<pfad>/wikijs-mcp, tag: "<X.Y.Z>" }
+  # wiki:     { repository: <registry>/requarks/wiki, tag: "2" }
+  # postgres: { repository: <registry>/postgres, tag: "15-alpine" }
+  # pullSecrets: [ { name: <registry-secret> } ]
+
+# Geheimnisse (POSTGRES_PASSWORD, MCP_SESSION_SECRET): ohne Angabe erzeugt das Chart sie
+# einmalig und behält sie. Bei GitOps (Argo CD, Flux) vorab anlegen und hier eintragen:
+#   kubectl -n wiki create secret generic wiki-secrets \
+#     --from-literal=POSTGRES_PASSWORD="$(openssl rand -base64 24)" \
+#     --from-literal=MCP_SESSION_SECRET="$(openssl rand -base64 32)"
+secrets:
+  existingSecret: ""
+
+admin:
+  email: <admin@example.org>
+  existingSecret: wiki-admin
+
+bootstrap:
+  # --locale=en für englische Oberfläche; --demo nur für Testinstanzen.
+  args: "--locale=de"
+
+ingress:
+  className: nginx                       # oder traefik
+  tls:
+    enabled: true
+    secretName: wiki-tls                 # vorhandenes Zertifikat oder von cert-manager erzeugt
+  # cert-manager: nur am Wiki-Ingress (ein Eigentümer pro Zertifikat), beide nutzen das Secret.
+  wikiAnnotations: {}
+  #   cert-manager.io/cluster-issuer: letsencrypt
+
+mcp:
+  config:
+    blockedTags: "kein-ki"
+    allowedRedirectHosts: ""             # z. B. "claude.ai,chatgpt.com"
+    timezone: "Europe/Berlin"
+  persistence:
+    size: 1Gi
+    storageClassName: ""
+
+postgres:
+  persistence:
+    size: 10Gi
+    storageClassName: ""
+
+backup:
+  schedule: "30 2 * * *"
+  keep: 14
+  persistence:
+    size: 10Gi

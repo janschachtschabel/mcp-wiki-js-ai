@@ -1,0 +1,76 @@
+{{- $fullname := include "stack.fullname" . }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-wiki
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "wiki") | nindent 4 }}
+spec:
+  selector: {{ include "stack.selectorLabels" (dict "ctx" $ "component" "wiki") | nindent 4 }}
+  ports:
+  - name: http
+    port: 3000
+    targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-wiki
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "wiki") | nindent 4 }}
+spec:
+  # Wiki.js 2 keeps scheduler/cache state per process — run one replica.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {{ include "stack.selectorLabels" (dict "ctx" $ "component" "wiki") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{ include "stack.labels" (dict "ctx" $ "component" "wiki") | nindent 8 }}
+    spec:
+      {{- include "stack.podDefaults" . | nindent 6 }}
+      securityContext: {{ toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: wiki
+        image: "{{ .Values.images.wiki.repository }}:{{ .Values.images.wiki.tag }}"
+        imagePullPolicy: {{ .Values.images.wiki.pullPolicy }}
+        env:
+        - name: DB_TYPE
+          value: postgres
+        - name: DB_HOST
+          value: {{ $fullname }}-postgres
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USER
+          value: wikijs
+        - name: DB_NAME
+          value: wiki
+        - name: DB_PASS
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "stack.secretName" . }}
+              key: POSTGRES_PASSWORD
+        ports:
+        - name: http
+          containerPort: 3000
+        # /healthz answers in setup mode too; Wiki.js restarts itself until Postgres is ready.
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 5
+          failureThreshold: 60
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          periodSeconds: 30
+          timeoutSeconds: 5
+        {{- with .Values.wiki.resources }}
+        resources: {{ toYaml . | nindent 10 }}
+        {{- end }}
+        securityContext: {{ toYaml .Values.containerSecurityContext | nindent 10 }}

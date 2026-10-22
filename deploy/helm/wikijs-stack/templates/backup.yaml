@@ -1,0 +1,78 @@
+{{- if .Values.backup.enabled }}
+{{- $fullname := include "stack.fullname" . }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-backups
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "backup") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.backup.persistence.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.backup.persistence.size }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $fullname }}-backup
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "backup") | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels: {{ include "stack.labels" (dict "ctx" $ "component" "backup") | nindent 12 }}
+        spec:
+          {{- include "stack.podDefaults" . | nindent 10 }}
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            fsGroup: 70
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+          - name: pg-dump
+            image: "{{ .Values.images.postgres.repository }}:{{ .Values.images.postgres.tag }}"
+            imagePullPolicy: {{ .Values.images.postgres.pullPolicy }}
+            command: ["/bin/sh", "-c"]
+            args:
+            - |
+              set -e
+              ts=$(date +%Y%m%d-%H%M%S)
+              pg_dump -h "$PGHOST" -U wikijs -d wiki -F c -f "/backups/wiki-$ts.dump"
+              echo "backup ok: wiki-$ts.dump"
+              ls -1t /backups/wiki-*.dump | tail -n +$((KEEP + 1)) | xargs -r rm --
+            env:
+            - name: PGHOST
+              value: {{ $fullname }}-postgres
+            - name: KEEP
+              value: {{ .Values.backup.keep | quote }}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "stack.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            volumeMounts:
+            - name: backups
+              mountPath: /backups
+            resources:
+              requests: { cpu: 50m, memory: 64Mi }
+              limits: { cpu: 500m, memory: 256Mi }
+            securityContext: {{ toYaml .Values.containerSecurityContext | nindent 14 }}
+          volumes:
+          - name: backups
+            persistentVolumeClaim:
+              claimName: {{ $fullname }}-backups
+{{- end }}

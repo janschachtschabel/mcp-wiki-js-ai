@@ -29,11 +29,15 @@ Interactive version with per-component source links (German labels): [docs/archi
 | **A: Full stack** | no wiki yet | **A1** hosting provider's Docker panel (import from the Git repo, Traefik already running) | [`docker-compose.yml`](docker-compose.yml) |
 | | | **A2** own server without a reverse proxy | [`deploy/standalone/full/`](deploy/standalone/full/docker-compose.yml) |
 | | | **A3** build it yourself (repo checkout) | [`docker-compose.build.yml`](docker-compose.build.yml) |
+| | | **A4** Kubernetes | [Helm chart `wikijs-stack`](deploy/helm/wikijs-stack/README.md) |
 | **B: Add MCP to an existing wiki** | Wiki.js is running; MCP under the **same address** | **B1** Traefik in front of the wiki | [`deploy/standalone/mcp-only/`](deploy/standalone/mcp-only/docker-compose.yml) + `TRAEFIK_ENABLE=true` |
 | | | **B2** nginx, Caddy, Apache … in front of the wiki | [`deploy/standalone/mcp-only/`](deploy/standalone/mcp-only/docker-compose.yml) + path rules |
 | | | **B3** Kubernetes | [Helm chart](deploy/helm/wikijs-mcp/README.md) |
 | **C: MCP only** | wiki runs elsewhere, its proxy cannot be changed | **C1** MCP under its own address | [`deploy/standalone/mcp-only/`](deploy/standalone/mcp-only/docker-compose.yml) |
 | | | **C2** locally on your own machine (stdio) | [server README](mcp-for-wiki-js/README.en.md) |
+
+Full stack on Kubernetes (**A4**): `helm install wiki ./deploy/helm/wikijs-stack --set domain=… --set admin.email=… --set admin.existingSecret=…`
+— template: [`values-example.yaml`](deploy/helm/wikijs-stack/values-example.yaml).
 
 All compose files except A3 use the published image `ghcr.io/janschachtschabel/mcp-wiki-js-ai:main`,
 need **no required variables** and generate the database password and `MCP_SESSION_SECRET` on first
@@ -149,7 +153,8 @@ claude mcp add --transport http wiki https://<DOMAIN>/mcp   # then: /mcp → Aut
 | [`deploy/standalone/full/`](deploy/standalone/full/) | A2: full stack with its own Caddy (80/443) |
 | [`deploy/standalone/mcp-only/`](deploy/standalone/mcp-only/) | B1/B2/C1: MCP server only, optional Traefik labels |
 | [`docker-compose.build.yml`](docker-compose.build.yml) | A3: full stack built from source; `docker-compose.local.yml` for local tests |
-| [`deploy/helm/wikijs-mcp/`](deploy/helm/wikijs-mcp/) | B3: Helm chart for Kubernetes |
+| [`deploy/helm/wikijs-stack/`](deploy/helm/wikijs-stack/) | A4: Helm chart template for the full stack (Postgres, Wiki.js, MCP, Ingress, first-run setup, backup) |
+| [`deploy/helm/wikijs-mcp/`](deploy/helm/wikijs-mcp/) | B3: Helm chart for the MCP server only |
 | [`deploy/scripts/`](deploy/scripts/) | `bootstrap.mjs` (first-run setup), `standalone-init.mjs` (secrets, Caddyfile) — both also in the image |
 | [`deploy/caddy/`](deploy/caddy/), [`deploy/wiki/`](deploy/wiki/) | Caddy routing (one domain for wiki & MCP), Wiki.js config for A3 |
 | [`Dockerfile`](Dockerfile) | Production image of the MCP server (Next.js standalone, Node 24) |

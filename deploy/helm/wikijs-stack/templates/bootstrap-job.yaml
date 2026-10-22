@@ -1,0 +1,61 @@
+{{- if .Values.bootstrap.enabled }}
+{{- $fullname := include "stack.fullname" . }}
+{{- /*
+First-run setup (deploy/scripts/bootstrap.mjs from the MCP image): admin account, home
+page, /ki-zugang, PostgreSQL search, language. Idempotent and quiet without admin
+credentials (--if-configured). One Job per Helm revision, so every upgrade re-runs it;
+finished Jobs are removed after an hour.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-bootstrap-{{ .Release.Revision }}
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "bootstrap") | nindent 4 }}
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels: {{ include "stack.labels" (dict "ctx" $ "component" "bootstrap") | nindent 8 }}
+    spec:
+      {{- include "stack.podDefaults" . | nindent 6 }}
+      restartPolicy: OnFailure
+      securityContext: {{ toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: bootstrap
+        image: {{ include "stack.mcpImage" . }}
+        imagePullPolicy: {{ include "stack.mcpPullPolicy" . }}
+        command: ["node", "/app/bootstrap.mjs", "--if-configured"]
+        env:
+        - name: WIKI_URL
+          value: http://{{ $fullname }}-wiki:3000
+        - name: PUBLIC_URL
+          value: {{ include "stack.publicBaseUrl" . | quote }}
+        - name: BOOTSTRAP_ARGS
+          value: {{ .Values.bootstrap.args | quote }}
+        - name: ADMIN_EMAIL
+          value: {{ .Values.admin.email | quote }}
+        {{- if or .Values.admin.existingSecret .Values.admin.password }}
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "stack.adminSecretName" . }}
+              key: ADMIN_PASSWORD
+        {{- end }}
+        {{- with .Values.bootstrap.demoEmail }}
+        - name: DEMO_EMAIL
+          value: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.bootstrap.demoPasswordSecret }}
+        - name: DEMO_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ . }}
+              key: DEMO_PASSWORD
+        {{- end }}
+        resources:
+          requests: { cpu: 50m, memory: 64Mi }
+          limits: { cpu: 500m, memory: 256Mi }
+        securityContext: {{ toYaml .Values.containerSecurityContext | nindent 10 }}
+{{- end }}

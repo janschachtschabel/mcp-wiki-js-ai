@@ -1,0 +1,84 @@
+{{- if .Values.ingress.enabled }}
+{{- $fullname := include "stack.fullname" . }}
+{{- $domain := include "stack.domain" . }}
+{{- /*
+Two Ingress objects on the same host: one for the MCP paths (+ the blocked setup
+wizard), one for Wiki.js on "/". Separate objects let the MCP one carry its own
+annotations — Traefik ranks routers by rule length, so without an explicit priority
+the wiki's PathPrefix(`/`) would beat short exact paths such as Path(`/me`). nginx
+merges both and picks the most specific path anyway.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}-mcp
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "mcp") | nindent 4 }}
+  {{- with merge (deepCopy .Values.ingress.mcpAnnotations) .Values.ingress.annotations }}
+  annotations: {{ toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+  - hosts: [{{ $domain | quote }}]
+    secretName: {{ default (printf "%s-tls" $fullname) .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+  - host: {{ $domain | quote }}
+    http:
+      paths:
+      {{- range .Values.ingress.mcpPaths }}
+      {{- /* Plain strings are accepted too (pathType Prefix). */}}
+      {{- $p := ternary (dict "path" . "pathType" "Prefix") . (kindIs "string" .) }}
+      - path: {{ $p.path }}
+        pathType: {{ default "Prefix" $p.pathType }}
+        backend:
+          service:
+            name: {{ $fullname }}-mcp
+            port:
+              name: http
+      {{- end }}
+      # Wiki.js setup wizard (creates the first admin account for anyone until setup is
+      # done): never reachable from outside. The MCP server answers every path except
+      # /mcp with 404; the first-run setup runs as a Job inside the cluster.
+      {{- range list (dict "path" "/finalize" "pathType" "Exact") (dict "path" "/finalize/" "pathType" "Prefix") }}
+      - path: {{ .path }}
+        pathType: {{ .pathType }}
+        backend:
+          service:
+            name: {{ $fullname }}-mcp
+            port:
+              name: http
+      {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}-wiki
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "wiki") | nindent 4 }}
+  {{- with merge (deepCopy .Values.ingress.wikiAnnotations) .Values.ingress.annotations }}
+  annotations: {{ toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+  - hosts: [{{ $domain | quote }}]
+    secretName: {{ default (printf "%s-tls" $fullname) .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+  - host: {{ $domain | quote }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ $fullname }}-wiki
+            port:
+              name: http
+{{- end }}

@@ -13,6 +13,7 @@ AI then works with exactly that person's wiki permissions.
 | **A: Full stack** | No wiki yet. Wiki.js and MCP should run together. | **A1** hosting provider's Docker panel, import from the Git repo, Traefik already running there | [`docker-compose.yml`](../../docker-compose.yml) (repo root) |
 | | | **A2** own server without a reverse proxy | [`deploy/standalone/full/docker-compose.yml`](../../deploy/standalone/full/docker-compose.yml) |
 | | | **A3** build it yourself (repo checkout, own registry, development) | [`docker-compose.build.yml`](../../docker-compose.build.yml) |
+| | | **A4** Kubernetes | [Helm chart `wikijs-stack`](../../deploy/helm/wikijs-stack/README.md) |
 | **B: Add MCP to an existing wiki** | Wiki.js already runs under a domain. The MCP joins under the **same address**; the wiki stays unchanged. | **B1** Traefik in front of the wiki (your own or a Docker panel's) | [`deploy/standalone/mcp-only/docker-compose.yml`](../../deploy/standalone/mcp-only/docker-compose.yml) with `TRAEFIK_ENABLE=true` |
 | | | **B2** nginx, Caddy, Apache or similar in front of the wiki | the same file + path rules in the proxy |
 | | | **B3** Wiki.js runs in Kubernetes | [Helm chart](../../deploy/helm/wikijs-mcp/README.md) |
@@ -38,9 +39,9 @@ AI then works with exactly that person's wiki permissions.
 
 ## A: Wiki.js and MCP as a full stack
 
-All three paths bring Postgres, Wiki.js, the MCP server and a daily backup. First-run setup (admin
-account, home page, user guide `/ki-zugang`, PostgreSQL search, language) runs automatically in A1 and
-A2 once `DOMAIN`, `ADMIN_EMAIL` and `ADMIN_PASSWORD` are set. Always required: a DNS A record of the
+All paths bring Postgres, Wiki.js, the MCP server and a daily backup. First-run setup (admin
+account, home page, user guide `/ki-zugang`, PostgreSQL search, language) runs automatically in A1, A2
+and A4 once the domain and admin credentials are set. Always required: a DNS A record of the
 domain pointing to the server.
 
 ### A1: Docker panel with Traefik (import from the Git repo)
@@ -117,6 +118,20 @@ The image is built locally, Caddy takes 80/443, Wiki.js gets a larger DB pool
 from outside with 403; `bootstrap` talks to Wiki.js directly inside the Docker network. Local testing
 without a domain/TLS: `docker compose -f docker-compose.build.yml -f docker-compose.local.yml up -d`
 (then `http://localhost:8090`); run the setup with the same `-f` flags before `run --rm bootstrap`.
+
+### A4: Kubernetes (Helm chart `wikijs-stack`)
+
+Postgres, Wiki.js, MCP server, Ingress (one domain), first-run setup as a Job and a daily backup
+CronJob in one release:
+```bash
+kubectl create namespace wiki
+kubectl -n wiki create secret generic wiki-admin --from-literal=ADMIN_PASSWORD='…'
+helm install wiki ./deploy/helm/wikijs-stack -n wiki   --set domain=wiki.example.org   --set admin.email=admin@example.org --set admin.existingSecret=wiki-admin
+```
+The chart generates the database password and `MCP_SESSION_SECRET` once and keeps them (with GitOps tools
+such as Argo CD use `secrets.existingSecret` instead). Template with all common settings:
+[`values-example.yaml`](../../deploy/helm/wikijs-stack/values-example.yaml) · details and values:
+[chart README](../../deploy/helm/wikijs-stack/README.md).
 
 ### After setup
 

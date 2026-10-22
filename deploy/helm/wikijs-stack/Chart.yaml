@@ -1,0 +1,14 @@
+apiVersion: v2
+
+name: wikijs-stack
+description: Wiki.js + MCP-Server komplett (Postgres, Wiki.js, MCP, Ingress, Backup) — Muster für Kubernetes
+
+type: application
+
+# Chart-Version (SemVer der Verpackung selbst).
+version: 0.1.0
+# Default-Tag des MCP-Images (ghcr.io/janschachtschabel/mcp-wiki-js-ai). "main" folgt
+# dem Hauptzweig und wird immer neu gezogen; für Produktion einen Release-Tag pinnen:
+#   helm install ... --set images.mcp.tag=X.Y.Z
+appVersion: "main"
+kubeVersion: ">=1.23.0-0"

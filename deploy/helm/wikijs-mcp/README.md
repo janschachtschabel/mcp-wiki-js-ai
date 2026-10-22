@@ -46,6 +46,16 @@ Wiki.js-Ingress. Gleiche Domain ⇒ die Wiki-Session macht die OAuth-Freigabe zu
 Ein-Klick (SSO). Im Wiki keine Seiten unter `me/`, `oauth/`, `mcp`, `api/`
 anlegen.
 
+**Pfadtypen und Traefik:** `ingress.paths` nutzt `Exact` für Einzelpfade (`/mcp`, `/me`,
+`/api/health`) und `Prefix` nur mit abschließendem `/` — manche Controller (Traefik) behandeln
+`Prefix` als reinen Text-Präfix, sodass `/me` sonst auch Wiki-Seiten wie `/meeting` abfangen würde.
+Weil Traefik Routen nach Regellänge sortiert, setzt das Chart zusätzlich
+`traefik.ingress.kubernetes.io/router.priority: "100"` (nginx ignoriert die Angabe). Einfache
+Strings in `ingress.paths` gelten weiterhin als `Prefix`.
+
+Kein Wiki vorhanden? Das Muster-Chart [`wikijs-stack`](../wikijs-stack/README.md) bringt Wiki.js,
+Postgres und den MCP-Server zusammen mit.
+
 ## Betriebsmodi
 
 | Modus | Aktivierung | Verhalten |

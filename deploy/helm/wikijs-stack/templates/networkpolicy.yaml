@@ -1,0 +1,21 @@
+{{- if .Values.postgres.networkPolicy }}
+# Only Wiki.js and the backup job may open connections to PostgreSQL.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "stack.fullname" . }}-postgres
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "postgres") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{ include "stack.selectorLabels" (dict "ctx" $ "component" "postgres") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels: {{ include "stack.selectorLabels" (dict "ctx" $ "component" "wiki") | nindent 10 }}
+    - podSelector:
+        matchLabels: {{ include "stack.selectorLabels" (dict "ctx" $ "component" "backup") | nindent 10 }}
+    ports:
+    - port: 5432
+      protocol: TCP
+{{- end }}

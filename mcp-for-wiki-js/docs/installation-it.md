@@ -13,6 +13,7 @@ normalen Wiki-Konto an; die KI arbeitet dann mit genau deren Wiki-Rechten.
 | **A: Komplett** | Noch kein Wiki. Wiki.js und MCP sollen zusammen laufen. | **A1** Docker-Panel des Hosters, Import aus dem Git-Repo, Traefik läuft dort schon | [`docker-compose.yml`](../../docker-compose.yml) (Hauptordner) |
 | | | **A2** eigener Server ohne Reverse-Proxy | [`deploy/standalone/full/docker-compose.yml`](../../deploy/standalone/full/docker-compose.yml) |
 | | | **A3** selbst bauen (Repo-Checkout, eigene Registry, Entwicklung) | [`docker-compose.build.yml`](../../docker-compose.build.yml) |
+| | | **A4** Kubernetes | [Helm-Chart `wikijs-stack`](../../deploy/helm/wikijs-stack/README.md) |
 | **B: MCP zum bestehenden Wiki** | Wiki.js läuft schon unter einer Domain. Der MCP kommt unter **derselben Adresse** dazu, das Wiki bleibt unverändert. | **B1** vor dem Wiki steht Traefik (eigener oder der eines Docker-Panels) | [`deploy/standalone/mcp-only/docker-compose.yml`](../../deploy/standalone/mcp-only/docker-compose.yml) mit `TRAEFIK_ENABLE=true` |
 | | | **B2** vor dem Wiki steht nginx, Caddy, Apache o. ä. | dieselbe Datei + Pfad-Regeln im Proxy |
 | | | **B3** Wiki.js läuft in Kubernetes | [Helm-Chart](../../deploy/helm/wikijs-mcp/README.md) |
@@ -38,9 +39,9 @@ normalen Wiki-Konto an; die KI arbeitet dann mit genau deren Wiki-Rechten.
 
 ## A: Wiki.js und MCP komplett
 
-Alle drei Wege bringen Postgres, Wiki.js, den MCP-Server und ein tägliches Backup mit. Die
+Alle Wege bringen Postgres, Wiki.js, den MCP-Server und ein tägliches Backup mit. Die
 Ersteinrichtung (Admin-Konto, Startseite, Anleitungsseite `/ki-zugang`, PostgreSQL-Suche, Sprache)
-läuft bei A1 und A2 automatisch, sobald `DOMAIN`, `ADMIN_EMAIL` und `ADMIN_PASSWORD` gesetzt sind.
+läuft bei A1, A2 und A4 automatisch, sobald Domain und Admin-Zugang gesetzt sind.
 Voraussetzung immer: ein DNS-A-Eintrag der Domain zeigt auf den Server.
 
 ### A1: Docker-Panel mit Traefik (Import aus dem Git-Repo)
@@ -118,6 +119,20 @@ Das Image wird lokal gebaut, Caddy belegt 80/443, Wiki.js bekommt einen größer
 Caddy von außen mit 403; `bootstrap` spricht im internen Docker-Netz direkt mit Wiki.js. Lokal ohne
 Domain/TLS testen: `docker compose -f docker-compose.build.yml -f docker-compose.local.yml up -d`
 (dann `http://localhost:8090`), Einrichtung mit denselben `-f`-Angaben vor `run --rm bootstrap`.
+
+### A4: Kubernetes (Helm-Chart `wikijs-stack`)
+
+Postgres, Wiki.js, MCP-Server, Ingress (eine Domain), Ersteinrichtung als Job und tägliches Backup als
+CronJob in einem Release:
+```bash
+kubectl create namespace wiki
+kubectl -n wiki create secret generic wiki-admin --from-literal=ADMIN_PASSWORD='…'
+helm install wiki ./deploy/helm/wikijs-stack -n wiki   --set domain=wiki.example.org   --set admin.email=admin@example.org --set admin.existingSecret=wiki-admin
+```
+Datenbank-Passwort und `MCP_SESSION_SECRET` erzeugt das Chart einmalig und behält sie (bei GitOps-Werkzeugen
+wie Argo CD stattdessen `secrets.existingSecret`). Vorlage mit allen üblichen Einstellungen:
+[`values-example.yaml`](../../deploy/helm/wikijs-stack/values-example.yaml) · Details und Werte:
+[Chart-README](../../deploy/helm/wikijs-stack/README.md).
 
 ### Nach der Einrichtung
 

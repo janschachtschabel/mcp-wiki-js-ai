@@ -20,8 +20,13 @@ spec:
     http:
       paths:
       {{- range $.Values.ingress.paths }}
+      {{- if kindIs "string" . }}
       - path: {{ . }}
         pathType: Prefix
+      {{- else }}
+      - path: {{ .path }}
+        pathType: {{ default "Prefix" .pathType }}
+      {{- end }}
         backend:
           service:
             name: {{ include "wikijs-mcp.fullname" $ }}

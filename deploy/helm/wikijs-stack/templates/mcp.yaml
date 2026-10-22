@@ -1,0 +1,103 @@
+{{- $fullname := include "stack.fullname" . }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-mcp
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "mcp") | nindent 4 }}
+spec:
+  selector: {{ include "stack.selectorLabels" (dict "ctx" $ "component" "mcp") | nindent 4 }}
+  ports:
+  - name: http
+    port: 3000
+    targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-mcp
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "mcp") | nindent 4 }}
+spec:
+  # One replica: OAuth sessions live in a single-writer sqlite file on one PVC.
+  replicas: 1
+  serviceName: {{ $fullname }}-mcp
+  selector:
+    matchLabels: {{ include "stack.selectorLabels" (dict "ctx" $ "component" "mcp") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{ include "stack.labels" (dict "ctx" $ "component" "mcp") | nindent 8 }}
+    spec:
+      {{- include "stack.podDefaults" . | nindent 6 }}
+      securityContext: {{ toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: mcp
+        image: {{ include "stack.mcpImage" . }}
+        imagePullPolicy: {{ include "stack.mcpPullPolicy" . }}
+        env:
+        - name: WIKIJS_URL
+          value: http://{{ $fullname }}-wiki:3000
+        - name: PUBLIC_BASE_URL
+          value: {{ include "stack.publicBaseUrl" . | quote }}
+        - name: MCP_SESSION_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "stack.secretName" . }}
+              key: MCP_SESSION_SECRET
+        - name: MCP_DATA_DIR
+          value: /data
+        - name: WIKIJS_PERMISSION_PRESET
+          value: {{ .Values.mcp.config.permissionPreset | quote }}
+        - name: WIKIJS_OAUTH_ROLE
+          value: {{ .Values.mcp.config.oauthRole | quote }}
+        - name: WIKIJS_BLOCKED_TAGS
+          value: {{ .Values.mcp.config.blockedTags | quote }}
+        - name: WIKIJS_AUDIT
+          value: {{ .Values.mcp.config.audit | quote }}
+        - name: WIKIJS_MAX_CONCURRENCY
+          value: {{ .Values.mcp.config.maxConcurrency | quote }}
+        - name: MCP_ALLOWED_REDIRECT_HOSTS
+          value: {{ .Values.mcp.config.allowedRedirectHosts | quote }}
+        - name: TZ
+          value: {{ .Values.mcp.config.timezone | quote }}
+        {{- range $k, $v := .Values.mcp.config.extraEnv }}
+        - name: {{ $k }}
+          value: {{ $v | quote }}
+        {{- end }}
+        ports:
+        - name: http
+          containerPort: 3000
+        # /api/health checks only the local store, never Wiki.js — a wiki outage never restarts this pod.
+        startupProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          periodSeconds: 5
+          failureThreshold: 30
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          periodSeconds: 30
+          timeoutSeconds: 5
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        {{- with .Values.mcp.resources }}
+        resources: {{ toYaml . | nindent 10 }}
+        {{- end }}
+        securityContext: {{ toYaml .Values.containerSecurityContext | nindent 10 }}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ReadWriteOnce]
+      {{- with .Values.mcp.persistence.storageClassName }}
+      storageClassName: {{ . | quote }}
+      {{- end }}
+      resources:
+        requests:
+          storage: {{ .Values.mcp.persistence.size }}

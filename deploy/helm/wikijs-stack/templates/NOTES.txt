@@ -1,0 +1,26 @@
+{{ .Chart.Name }} {{ .Chart.Version }} — Wiki.js + MCP-Server ({{ include "stack.mcpImage" . }})
+
+Adressen:
+  {{ include "stack.publicBaseUrl" . }}            Wiki.js
+  {{ include "stack.publicBaseUrl" . }}/mcp        MCP-Endpoint (Connector-URL für alle KI-Programme)
+  {{ include "stack.publicBaseUrl" . }}/me         eigene KI-Verbindungen ansehen/widerrufen
+  {{ include "stack.publicBaseUrl" . }}/ki-zugang  Anleitung für Anwender (nach der Ersteinrichtung)
+
+{{- if and .Values.bootstrap.enabled .Values.admin.email (or .Values.admin.existingSecret .Values.admin.password) }}
+
+Ersteinrichtung läuft als Job:
+  kubectl -n {{ .Release.Namespace }} logs job/{{ include "stack.fullname" . }}-bootstrap-{{ .Release.Revision }} -f
+{{- else }}
+
+Ersteinrichtung übersprungen — admin.email und admin.existingSecret (Schlüssel ADMIN_PASSWORD)
+setzen und `helm upgrade` ausführen.
+{{- end }}
+
+Geheimnisse: Secret {{ include "stack.secretName" . }} (POSTGRES_PASSWORD, MCP_SESSION_SECRET).
+{{- if not .Values.secrets.existingSecret }}
+  Vom Chart erzeugt und bei Upgrades/Deinstallation behalten — mitsichern.
+{{- end }}
+{{- if .Values.backup.enabled }}
+Backup: täglich ({{ .Values.backup.schedule }}) nach PVC {{ include "stack.fullname" . }}-backups — regelmäßig aus dem Cluster kopieren.
+{{- end }}
+Danach im Wiki: Gruppe „Team“ ohne manage:system anlegen, Nutzer zuordnen.
