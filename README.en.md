@@ -53,6 +53,32 @@ contains the MCP server, the deployment configuration and a mounted wiki
 config ([deploy/wiki/config.yml](deploy/wiki/config.yml) — unchanged except
 for the DB pool). Updating the wiki = pulling a new image.
 
+### Without a repo checkout: Docker panel / compose by URL
+
+For panels that import a compose file by URL (or a server without `git clone`), do **not** use the
+`docker-compose.yml` above (it builds locally and needs repo files; panels then report "not found").
+Use this file instead:
+
+```
+https://raw.githubusercontent.com/janschachtschabel/mcp-wiki-js-ai/main/deploy/standalone/docker-compose.full.yml
+```
+
+Variables in the panel (or in a `.env` next to the file):
+
+| Variable | Value |
+|---|---|
+| `DOMAIN` | hostname only, e.g. `wiki.example.org` (no `https://`) |
+| `POSTGRES_PASSWORD` | random, e.g. `openssl rand -base64 24` |
+| `MCP_SESSION_SECRET` | random, at least 16 characters, e.g. `openssl rand -base64 32` |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | first admin account; remove `ADMIN_PASSWORD` after the first start |
+| `BOOTSTRAP_ARGS` | optional, default `--locale=de` |
+
+Prerequisites: the domain's DNS A record points to the server, ports 80/443 are free. First-run setup
+runs automatically on start (log of the `bootstrap` container). Afterwards create a "Team" group in
+Wiki.js without `manage:system`; users connect with `https://<DOMAIN>/mcp`. If Wiki.js already runs on
+the server, use [`deploy/standalone/docker-compose.mcp-only.yml`](deploy/standalone/docker-compose.mcp-only.yml)
+plus proxy rules instead ([IT guide, option B](mcp-for-wiki-js/docs/installation-it.md#option-b-bestehendes-wikijs-auf-einem-server-mit-docker-vserver), German).
+
 ## First-run setup (admin account, home page, search)
 
 A fresh Wiki.js starts in setup mode. The Compose service `bootstrap` does

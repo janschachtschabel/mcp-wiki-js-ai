@@ -210,21 +210,31 @@ automatisch beim Start.
 - **Server ohne Repo:** die Datei per `curl -fsSLo docker-compose.yml <URL>` holen, `.env` daneben,
   dann `docker compose up -d`.
 
-Variablen (Pflicht: die ersten drei):
+Vorher: Der DNS-A-Eintrag der Domain zeigt auf die IP des Servers, und die Ports 80/443 sind auf dem
+Server frei. Caddy holt dann das HTTPS-Zertifikat automatisch.
+
+Variablen (Pflicht: die ersten drei; im Panel einzeln eintragen oder als `.env`):
 ```
-DOMAIN=wiki.example.org
+DOMAIN=wiki.example.org                # nur der Hostname, ohne https:// und ohne Pfad
 POSTGRES_PASSWORD=<openssl rand -base64 24>
-MCP_SESSION_SECRET=<openssl rand -base64 32>
+MCP_SESSION_SECRET=<openssl rand -base64 32>   # mind. 16 Zeichen
 ADMIN_EMAIL=admin@example.org          # nur für die Ersteinrichtung
 ADMIN_PASSWORD=…                       # nach dem ersten Start wieder entfernen
 # BOOTSTRAP_ARGS=--locale=de           # Default; mit --demo zusätzlich Gruppe „Team“ + Testnutzer
 ```
 Beim Start richtet der Dienst `bootstrap` das Wiki ein (Admin-Konto, Startseite, `/ki-zugang`,
-PostgreSQL-Suche, Sprache) und beendet sich dann. Das Ergebnis steht in `docker compose logs bootstrap`.
-Ohne `ADMIN_EMAIL`/`ADMIN_PASSWORD` überspringt er sich. Er ist idempotent, ein erneuter Start ändert
-ein eingerichtetes Wiki nicht. Unterschiede zu Variante 1: Wiki.js nutzt seinen eingebauten DB-Pool
-(max. 10 Verbindungen, daher `WIKIJS_MAX_CONCURRENCY` Default `6`), und Updates brauchen keinen Build
-(`docker compose pull && docker compose up -d`).
+PostgreSQL-Suche, Sprache) und beendet sich dann. Das Ergebnis steht im Log des Containers `bootstrap`
+(`docker compose logs bootstrap`). Ohne `ADMIN_EMAIL`/`ADMIN_PASSWORD` überspringt er sich. Er ist
+idempotent, ein erneuter Start ändert ein eingerichtetes Wiki nicht. Unterschiede zu Variante 1: Wiki.js
+nutzt seinen eingebauten DB-Pool (max. 10 Verbindungen, daher `WIKIJS_MAX_CONCURRENCY` Default `6`),
+und Updates brauchen keinen Build (`docker compose pull && docker compose up -d`).
+
+Danach:
+1. `ADMIN_PASSWORD` im Panel bzw. in der `.env` entfernen.
+2. Im Wiki unter Administration → Groups die Gruppe „Team“ anlegen, wie in Option A, Schritt 4
+   (**ohne** `manage:system`), und Nutzer zuordnen.
+3. Testen wie in Option A, Schritt 5 (`https://<DOMAIN>/api/health`).
+4. Anwender tragen in ihrem KI-Programm `https://<DOMAIN>/mcp` ein (siehe „Nutzung durch die Anwender“).
 
 **Betrieb**
 
