@@ -29,11 +29,34 @@ export function navigationLosses(current: NavTree[], next: NavTree[]): string[] 
   return losses;
 }
 
+/** Schemes that run code when a visitor clicks the link. */
+const SCRIPT_SCHEME = /^(javascript|vbscript|data):/;
+
+/**
+ * Navigation links render for every visitor, so a script URL is stored XSS
+ * (audit A-31). Browsers ignore whitespace and control characters inside the
+ * scheme ("java\tscript:"), so those are stripped before the check. Returns the
+ * offending targets; empty list = safe.
+ */
+export function unsafeNavigationTargets(tree: NavTree[]): string[] {
+  const unsafe: string[] = [];
+  for (const locale of tree) {
+    for (const item of locale.items ?? []) {
+      const target = (item as { target?: unknown } | null)?.target;
+      if (typeof target !== 'string') continue;
+      if (SCRIPT_SCHEME.test(target.replace(/[\u0000-\u0020]/g, '').toLowerCase())) unsafe.push(target);
+    }
+  }
+  return unsafe;
+}
+
 export const navigationTools: ToolDef[] = [
   {
     name: 'wiki_navigation_get',
     description: 'Get the site navigation tree (per locale).',
-    category: 'read',
+    // Wiki.js only returns the editable tree with manage:navigation/manage:system (audit A-31).
+    category: 'manage_system',
+    readOnly: true,
     inputSchema: {},
     handler: async (_a, ctx) => {
       const data = await ctx.client.request(TREE_QUERY);
@@ -65,6 +88,10 @@ export const navigationTools: ToolDef[] = [
         .describe('Required to proceed when the change would delete or empty existing navigation.'),
     },
     handler: async (a, ctx) => {
+      const unsafe = unsafeNavigationTargets(a.tree ?? []);
+      if (unsafe.length > 0) {
+        return fail(`Refusing navigation links with a script URL (javascript:, vbscript:, data:): ${unsafe.map((t) => JSON.stringify(t)).join(', ')}`);
+      }
       // Always snapshot the current navigation first — this is the rollback payload.
       const before = await ctx.client.request<{ navigation: { tree: NavTree[] } }>(TREE_QUERY);
       const current: NavTree[] = before.navigation.tree ?? [];

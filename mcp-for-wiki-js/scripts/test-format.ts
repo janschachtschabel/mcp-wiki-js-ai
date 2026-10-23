@@ -7,7 +7,7 @@
  */
 export {}; // module scope — keep pass/failed from colliding with sibling test scripts
 
-import { exceedsByteLimit, wildcardMatch, wildcardMatcher } from '../lib/wikijs/format';
+import { exceedsByteLimit, redactSecrets, wildcardMatch, wildcardMatcher } from '../lib/wikijs/format';
 
 let pass = 0;
 let failed = 0;
@@ -69,6 +69,19 @@ check('#1: wildcardMatcher compiles once and agrees with wildcardMatch', ['draft
 check('#7: "?" matches one astral character', m('?', '😀') === true && m('a?c', 'a😀c') === true);
 check('#7: "??" does not match one astral character', m('??', '😀') === false);
 check('#7: literal astral characters match', m('docs/😀/*', 'docs/😀/x') === true);
+
+// Audit 2026-10-23 A-24: more secret spellings; Wiki.js key/value config pairs.
+const red = JSON.stringify(redactSecrets({
+  passwd: 'S1', pass: 'S2', privateKey: 'S3', private_key: 'S4', apiKey: 'S5', credentials: 'S6', jwt: 'S7',
+  nested: [{ clientSecret: 'S8' }],
+  config: [{ key: 'clientSecret', value: 'S9' }, { key: 'clientId', value: 'visible-id' }],
+  providerKey: 'local', key: 'local', keyShort: 'abc', passage: 'visible-text',
+  apiKeys: [{ id: 1, name: 'visible-key-name' }], createApiKey: { responseResult: { succeeded: true } },
+}));
+check('A-24: passwd/pass/privateKey/apiKey/credentials/jwt are redacted', ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8'].every((x) => !red.includes(`"${x}"`)));
+check('A-24: a {key, value} pair with a secret key name has its value redacted', !red.includes('S9') && red.includes('visible-id'));
+check('A-24: API-key metadata lists and createApiKey results are not swallowed whole', red.includes('visible-key-name') && red.includes('"succeeded":true'));
+check('A-24: providerKey, key, keyShort and passage stay visible', red.includes('"providerKey":"local"') && red.includes('"key":"local"') && red.includes('"keyShort":"abc"') && red.includes('visible-text'));
 
 if (failed === 0) {
   console.log(`\n${pass} format assertions passed.`);

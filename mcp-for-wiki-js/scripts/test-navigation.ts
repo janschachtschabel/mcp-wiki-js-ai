@@ -9,7 +9,7 @@
  *
  * Run: npm run test:nav   (no network — pure logic).
  */
-import { navigationLosses } from '../lib/tools/navigation';
+import { navigationLosses, unsafeNavigationTargets } from '../lib/tools/navigation';
 
 const home = [{ id: 'x', kind: 'link', label: 'Home' }];
 let pass = 0;
@@ -66,6 +66,16 @@ check(
 );
 // Current empty, set empty -> safe (nothing to lose).
 check('empty -> empty -> safe', navigationLosses([{ locale: 'en', items: [] }], [{ locale: 'de', items: [] }]).length === 0);
+
+// Audit 2026-10-23 A-31: script URLs in navigation links run for every visitor.
+const link = (target: string) => [{ locale: 'en', items: [{ kind: 'link', label: 'x', targetType: 'external', target }] }];
+for (const bad of ['javascript:alert(1)', ' JavaScript:alert(1)', 'java\tscript:x', 'data:text/html,x', 'vbscript:x']) {
+  check(`A-31: "${bad.replace(/\t/g, '\\t')}" is unsafe`, unsafeNavigationTargets(link(bad)).length === 1);
+}
+for (const good of ['https://example.org', '/en/home', 'mailto:a@example.org', 'docs/javascript-guide']) {
+  check(`A-31: "${good}" is fine`, unsafeNavigationTargets(link(good)).length === 0);
+}
+check('A-31: items without a target are fine', unsafeNavigationTargets([{ locale: 'en', items: [{ kind: 'divider' }] }]).length === 0);
 
 if (failed === 0) {
   console.log(`\n${pass} navigation-guard assertions passed.`);

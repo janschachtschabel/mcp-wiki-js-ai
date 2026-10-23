@@ -23,6 +23,38 @@ function groupAssignmentGate(groups: number[] | undefined, confirm: unknown, ctx
   });
 }
 
+/** Wiki.js permissions that make an account an administrator of users, groups, keys or the site. */
+const ADMIN_PERMISSION = /^(manage:(system|users|groups|api)|write:(users|groups))$/;
+
+/**
+ * Setting the password, e-mail or 2FA of a privileged account takes that account
+ * over — with only manage_users that would bypass the R-12 gate on groups (audit
+ * A-10). For such targets the call needs what group assignment needs. Accounts
+ * that cannot be read count as privileged (fail closed).
+ */
+async function privilegedTargetGate(id: number, what: string, confirm: unknown, ctx: WikiContext): Promise<CallToolResult | undefined> {
+  if (ctx.policy.resolve('wiki_group_assign_user', 'manage_groups') === 'allow') return undefined;
+  let privileged = true;
+  try {
+    const data = await ctx.client.request<{ users: { single: { isSystem: boolean; groups: { id: number; permissions: string[] }[] } | null } }>(
+      `query($id:Int!){ users { single(id:$id){ isSystem groups { id permissions } } } }`,
+      { id },
+    );
+    const user = data.users.single;
+    privileged = !user || user.isSystem || user.groups.some((g) => g.id === 1 || g.permissions.some((p) => ADMIN_PERMISSION.test(p)));
+  } catch {
+    // Unreadable target: keep privileged = true and let the gate decide.
+  }
+  if (!privileged) return undefined;
+  return parameterGate(ctx, {
+    policyKey: 'wiki_group_assign_user',
+    category: 'manage_groups',
+    what: `${what} on privileged account ${id}`,
+    confirm,
+    dryRun: { id },
+  });
+}
+
 /** Strong random password: base64url entropy + one char of each class (password-policy compliance). */
 function generatePassword(): string {
   return randomBytes(16).toString('base64url') + 'A7!z';
@@ -37,8 +69,15 @@ const USER_MINIMAL = 'id name email providerKey isSystem isActive createdAt last
 // for the full record (those resolvers populate every field).
 const USER_SEARCH_FIELDS = 'id name email providerKey createdAt';
 
-/** Simple id-only mutations that return a DefaultResponse. */
-function userIdMutation(name: string, field: string, label: string, verb: string, annotations?: ToolDef['annotations']): ToolDef {
+/** Simple id-only mutations that return a DefaultResponse. `credential` names what a privileged target needs gating for. */
+function userIdMutation(
+  name: string,
+  field: string,
+  label: string,
+  verb: string,
+  annotations?: ToolDef['annotations'],
+  credential?: string,
+): ToolDef {
   return {
     name,
     description: `${label} a user by id.`,
@@ -46,6 +85,10 @@ function userIdMutation(name: string, field: string, label: string, verb: string
     ...(annotations ? { annotations } : {}),
     inputSchema: { id: z.number().int() },
     handler: async (a, ctx: WikiContext) => {
+      if (credential) {
+        const gated = await privilegedTargetGate(a.id, credential, a.confirm, ctx);
+        if (gated) return gated;
+      }
       const data = await ctx.client.request(
         `mutation($id:Int!){ users { ${field}(id:$id){ ${DEFAULT_RESPONSE} } } }`,
         { id: a.id },
@@ -189,6 +232,11 @@ export const userTools: ToolDef[] = [
       // groups:[] on update strips every membership — gated as well.
       const gated = groupAssignmentGate(a.groups, a.confirm, ctx);
       if (gated) return gated;
+      const credentials = [a.newPassword !== undefined && '"newPassword"', a.email !== undefined && '"email"'].filter(Boolean);
+      if (credentials.length > 0) {
+        const targetGated = await privilegedTargetGate(a.id, credentials.join(' and '), a.confirm, ctx);
+        if (targetGated) return targetGated;
+      }
       const data = await ctx.client.request(
         `mutation($id:Int!,$email:String,$name:String,$newPassword:String,$groups:[Int],$location:String,$jobTitle:String,$timezone:String,$dateFormat:String,$appearance:String){ users { update(id:$id,email:$email,name:$name,newPassword:$newPassword,groups:$groups,location:$location,jobTitle:$jobTitle,timezone:$timezone,dateFormat:$dateFormat,appearance:$appearance){ ${DEFAULT_RESPONSE} } } }`,
         {
@@ -244,6 +292,8 @@ export const userTools: ToolDef[] = [
       newPassword: z.string().min(8).optional().describe('New password. Omit to auto-generate a strong random one.'),
     },
     handler: async (a, ctx) => {
+      const gated = await privilegedTargetGate(a.id, 'a new password', a.confirm, ctx);
+      if (gated) return gated;
       const generated = !a.newPassword;
       const newPassword = a.newPassword ?? generatePassword();
       const data = await ctx.client.request(
@@ -261,5 +311,5 @@ export const userTools: ToolDef[] = [
         : ok({ id: a.id, generated }, '✅ Password reset.');
     },
   },
-  userIdMutation('wiki_user_disable_tfa', 'disableTFA', 'Disable 2FA for', '2FA disabled', { destructiveHint: true }),
+  userIdMutation('wiki_user_disable_tfa', 'disableTFA', 'Disable 2FA for', '2FA disabled', { destructiveHint: true }, '2FA off'),
 ];

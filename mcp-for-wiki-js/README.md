@@ -333,13 +333,13 @@ Eigene Rolle anlegen: Eintrag in `config/roles.json` (oder `extends` einer beste
 
 `wiki_`-Präfix. (R)=read · (W)=write · (D)=delete · (S)=manage_system · (U)=manage_users · (G)=manage_groups · (A)=manage_auth.
 
-**Pages / Tags** `wiki_pages_search` (R) · `wiki_page_get` (R) · `wiki_pages_list` (R) · `wiki_pages_tree` (R) · `wiki_page_history` (R) · `wiki_page_version` (R) · `wiki_pages_links` (R) · `wiki_tags_list` (R) · `wiki_tags_search` (R) · `wiki_page_create` (W) · `wiki_page_update` (W, full **oder** `edits=[{find,replace}]`) · `wiki_page_move` (W) · `wiki_page_render` (W) · `wiki_page_restore` (W) · `wiki_page_convert` (W) · `wiki_tag_update` (W) · `wiki_page_delete` (D) · `wiki_pages_delete_batch` (D) · `wiki_pages_delete_tree` (D) · `wiki_tag_delete` (D) · `wiki_pages_purge_history` (D) · `wiki_pages_flush_cache` (S) · `wiki_pages_rebuild_tree` (S) · `wiki_pages_migrate_locale` (S)
+**Pages / Tags** `wiki_pages_search` (R) · `wiki_page_get` (R) · `wiki_pages_list` (R) · `wiki_pages_tree` (R) · `wiki_page_history` (R) · `wiki_page_version` (R) · `wiki_pages_links` (R) · `wiki_tags_list` (R) · `wiki_tags_search` (R) · `wiki_page_create` (W) · `wiki_page_update` (W, full **oder** `edits=[{find,replace}]`) · `wiki_page_move` (W) · `wiki_page_restore` (W) · `wiki_page_convert` (W) · `wiki_page_delete` (D) · `wiki_pages_delete_batch` (D) · `wiki_pages_delete_tree` (D) · `wiki_page_render` (S) · `wiki_tag_update` (S) · `wiki_tag_delete` (S) · `wiki_pages_purge_history` (S, `olderThan` als ISO-8601-Dauer > 0, z. B. `P30D`) · `wiki_pages_flush_cache` (S) · `wiki_pages_rebuild_tree` (S) · `wiki_pages_migrate_locale` (S)
 
 **Assets** `wiki_assets_list` (R) · `wiki_asset_folders` (R) · `wiki_asset_download` (R) · `wiki_asset_upload` (W) · `wiki_asset_create_folder` (W) · `wiki_asset_rename` (W) · `wiki_asset_delete` (D) · `wiki_assets_flush_temp` (S)
 
 **Comments** `wiki_comments_list` (R) · `wiki_comment_get` (R) · `wiki_comment_create` (W) · `wiki_comment_update` (W) · `wiki_comment_delete` (D)
 
-**Navigation** `wiki_navigation_get` (R) · `wiki_navigation_update_tree` (S)
+**Navigation** `wiki_navigation_get` (S) · `wiki_navigation_update_tree` (S, lehnt `javascript:`/`vbscript:`/`data:`-Links ab)
 
 **Users** `wiki_user_profile` (R) · `wiki_users_list` · `wiki_users_search` · `wiki_user_get` · `wiki_users_last_logins` · `wiki_user_create` · `wiki_user_update` · `wiki_user_delete` · `wiki_user_activate` · `wiki_user_deactivate` · `wiki_user_verify` · `wiki_user_reset_password` · `wiki_user_disable_tfa` (U, außer Profile)
 
@@ -347,9 +347,11 @@ Eigene Rolle anlegen: Eintrag in `config/roles.json` (oder `extends` einer beste
 
 **System / Auth / Escape-Hatch** `wiki_connection_status` (R) · `wiki_site_info` (R) · `wiki_site_config` (S) · `wiki_system_info` (S) · `wiki_system_flags` (S) · `wiki_apikeys_list` (A) · `wiki_apikey_create` (A) · `wiki_apikey_revoke` (A) · `wiki_auth_strategies` (A) · `wiki_auth_set_api_state` (A) · `wiki_graphql` (S, beliebige GraphQL-Operation)
 
-**Lese-Tools in `manage_*`** (`wiki_users_list`, `_search`, `wiki_user_get`, `wiki_users_last_logins`, `wiki_groups_list`, `wiki_group_get`, `wiki_site_config`, `wiki_system_info`, `wiki_system_flags`, `wiki_apikeys_list`, `wiki_auth_strategies`) tragen `readOnlyHint` und erzeugen keinen Audit-Eintrag; ihr Policy-Modus bleibt der ihrer Kategorie.
+**Lese-Tools in `manage_*`** (`wiki_users_list`, `_search`, `wiki_user_get`, `wiki_users_last_logins`, `wiki_groups_list`, `wiki_group_get`, `wiki_navigation_get`, `wiki_site_config`, `wiki_system_info`, `wiki_system_flags`, `wiki_apikeys_list`, `wiki_auth_strategies`) tragen `readOnlyHint` und erzeugen keinen Audit-Eintrag; ihr Policy-Modus bleibt der ihrer Kategorie.
 
-**Parameter mit eigenem Gate:** `scriptJs`/`scriptCss` bei `wiki_page_create`/`_update` brauchen den Modus von `manage_system` (Policy-Schlüssel `wiki_page_scripts`, per Tool-Override steuerbar): `block` → Fehler, `confirm` → Vorschau. `groups` bei `wiki_user_create`/`_update` braucht den Modus von `wiki_group_assign_user`.
+**Parameter mit eigenem Gate:** `scriptJs`/`scriptCss` bei `wiki_page_create`/`_update` brauchen den Modus von `manage_system` (Policy-Schlüssel `wiki_page_scripts`, per Tool-Override steuerbar): `block` → Fehler, `confirm` → Vorschau. `groups` bei `wiki_user_create`/`_update` braucht den Modus von `wiki_group_assign_user`. Ebenso Passwort, E-Mail und 2FA eines **privilegierten** Kontos (Administratoren-Gruppe oder eine Gruppe mit `manage:system`/`manage:users`/`manage:groups`/`manage:api`/`write:users`/`write:groups`) über `wiki_user_update`, `wiki_user_reset_password` und `wiki_user_disable_tfa`. `wiki_apikey_create` mit `fullAccess` oder `group: 1` läuft nur bei `manage_auth` = `allow` (keine Selbstbestätigung).
+
+**Geschwärzt** werden in Vorschauen und `wiki_graphql`-Ergebnissen Felder wie `password`, `passwd`, `secret`, `token`, `privateKey`, `apiKey`, `credential`, `jwt` sowie der `value` von `{ key, value }`-Paaren mit solchem Schlüssel.
 
 **Massenlöschen** (`wiki_pages_delete_batch`, `wiki_pages_delete_tree`): `pathPattern` mit `*`/`?` innerhalb eines Pfadsegments, `**` über beliebige Tiefe (`drafts/*` = direkte Kinder, `drafts/**` = alles darunter). `locale` (Default `en`) gilt für `paths`, `pathPattern` und den Tree; `ids` gelten locale-übergreifend. Mehr als 50 Ziele nur mit `force: true`. Die `confirm`-Vorschau zeigt die tatsächlich betroffenen Seiten (Anzahl + bis zu 100 Pfade). Ergebnis-Pfade als `locale/pfad`; nicht gefundene `ids`/`paths` stehen in `notFound`.
 

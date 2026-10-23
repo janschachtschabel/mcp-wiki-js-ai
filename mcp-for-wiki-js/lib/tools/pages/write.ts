@@ -237,7 +237,7 @@ export const pageWriteTools: ToolDef[] = [
   {
     name: 'wiki_page_render',
     description: 'Re-render a page (rebuild its cached HTML output).',
-    category: 'write',
+    category: 'manage_system', // Wiki.js: manage:system (audit A-12)
     inputSchema: { id: z.number().int() },
     handler: async (a, ctx) => {
       await assertPageIdNotBlocked(ctx, a.id, `Page ${a.id}`);
@@ -283,7 +283,7 @@ export const pageWriteTools: ToolDef[] = [
   {
     name: 'wiki_tag_update',
     description: 'Rename / retitle a tag.',
-    category: 'write',
+    category: 'manage_system', // Wiki.js: manage:system (audit A-12)
     inputSchema: { id: z.number().int(), tag: z.string(), title: z.string() },
     handler: async (a, ctx) => {
       // Renaming a guardrail tag would un-block every page carrying it.

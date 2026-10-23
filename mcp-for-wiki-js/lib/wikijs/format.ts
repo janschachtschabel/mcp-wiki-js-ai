@@ -29,16 +29,26 @@ export function isDryRun(result: CallToolResult): boolean {
   return (result._meta as { dryRun?: unknown } | undefined)?.dryRun === true;
 }
 
-/** Key names whose values never belong in a preview (and so the model context). */
-const SECRET_KEY = /password|secret|token/i;
+/**
+ * Key names whose values never belong in a preview or raw result (and so the model
+ * context). Bare "key" is not listed: Wiki.js uses it for strategy/engine ids;
+ * `providerKey`, `apiKeys` (metadata) and `createApiKey` stay readable (audit A-24).
+ */
+const SECRET_KEY = /password|passwd|^pass$|secret|token|^private_?key$|^api_?key$|credential|jwt/i;
 
-/** Deep copy of a JSON-like value with every secret-named key's value replaced (R-19). */
+/**
+ * Deep copy of a JSON-like value with every secret-named key's value replaced (R-19).
+ * Wiki.js config lists are `{ key, value }` pairs: a secret-named `key` hides its `value`.
+ */
 export function redactSecrets(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactSecrets);
   if (value === null || typeof value !== 'object') return value;
+  const pairKey = (value as { key?: unknown }).key;
+  const secretPair = typeof pairKey === 'string' && SECRET_KEY.test(pairKey);
   const out: Record<string, unknown> = {};
   for (const [key, v] of Object.entries(value)) {
-    out[key] = SECRET_KEY.test(key) && v != null ? '[redacted]' : redactSecrets(v);
+    const secret = SECRET_KEY.test(key) || (secretPair && key === 'value');
+    out[key] = secret && v != null ? '[redacted]' : redactSecrets(v);
   }
   return out;
 }

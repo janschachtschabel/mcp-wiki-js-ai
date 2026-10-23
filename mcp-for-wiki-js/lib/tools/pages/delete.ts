@@ -11,6 +11,8 @@ export const MAX_DELETE_WITHOUT_FORCE = 50;
 const LISTED_TARGETS = 100;
 /** Longest accepted pathPattern — matching cost must stay small per page (review 2026-10-21 #1). */
 const MAX_PATH_PATTERN = 512;
+/** ISO-8601 duration (Y M W D, then T H M S) with at least one component. */
+const ISO_DURATION = /^P(?=\d|T\d)(\d+Y)?(\d+M)?(\d+W)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+(\.\d+)?S)?)?$/;
 
 interface Target {
   id: number;
@@ -228,7 +230,7 @@ export const pageDeleteTools: ToolDef[] = [
   {
     name: 'wiki_tag_delete',
     description: 'Delete a tag by id.',
-    category: 'delete',
+    category: 'manage_system', // Wiki.js: manage:system (audit A-12)
     inputSchema: { id: z.number().int() },
     handler: async (a, ctx) => {
       // Deleting a guardrail tag would un-block every page carrying it.
@@ -243,9 +245,17 @@ export const pageDeleteTools: ToolDef[] = [
   },
   {
     name: 'wiki_pages_purge_history',
-    description: 'Purge page version history older than a duration (e.g. "P1M", "P30D", or "1w").',
-    category: 'delete',
-    inputSchema: { olderThan: z.string().describe('ISO-8601 duration or relative spec accepted by Wiki.js.') },
+    description: 'Purge page version history older than an ISO-8601 duration (e.g. "P1M", "P30D", "P2W").',
+    category: 'manage_system', // Wiki.js: manage:system (audit A-12)
+    inputSchema: {
+      // Wiki.js parses this with Luxon: an invalid spec ("1w") is silently ignored, and a
+      // zero duration purges ALL history — both are rejected here (audit A-12).
+      olderThan: z
+        .string()
+        .regex(ISO_DURATION, 'Must be an ISO-8601 duration such as "P30D", "P1M" or "PT12H".')
+        .refine((s) => /[1-9]/.test(s), 'Duration must be greater than zero.')
+        .describe('ISO-8601 duration, e.g. "P30D" (30 days), "P1M", "P2W", "PT12H".'),
+    },
     handler: async (a, ctx) => {
       const data = await ctx.client.request(
         `mutation($olderThan:String!){ pages { purgeHistory(olderThan:$olderThan){ ${DEFAULT_RESPONSE} } } }`,

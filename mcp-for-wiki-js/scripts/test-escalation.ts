@@ -14,6 +14,7 @@ import type { ToolDef } from '../lib/tools/types';
 import { ROLES, basePolicyFromEnv, roleConfig } from '../lib/permissions';
 import { WikiClient } from '../lib/wikijs/client';
 import { GuardrailError } from '../lib/guardrails';
+import { isDryRun } from '../lib/wikijs/format';
 
 let pass = 0;
 let failed = 0;
@@ -35,12 +36,30 @@ interface Calls {
   downloads: string[];
 }
 
-function stubCtx(role: string, opts: { mime?: string } = {}): { ctx: WikiContext; calls: Calls } {
+interface StubOpts {
+  mime?: string;
+  /** users.single answer for the target-account lookup (A-10); null = no such user. */
+  target?: { isSystem: boolean; groups: { id: number; permissions: string[] }[] } | null;
+  lookupFails?: boolean;
+  /** Answer for queries the stub does not know (default { ok: true }). */
+  fallback?: unknown;
+}
+
+const PLAIN_USER = { isSystem: false, groups: [{ id: 3, permissions: ['read:pages', 'write:pages'] }] };
+const ADMIN_USER = { isSystem: false, groups: [{ id: 1, permissions: ['manage:system'] }] };
+
+function stubCtx(role: string, opts: StubOpts = {}): { ctx: WikiContext; calls: Calls } {
   const calls: Calls = { requests: [], downloads: [] };
   const ctx = {
     client: {
       request: async (q: string) => {
         calls.requests.push(q);
+        if (q.includes('users { single')) {
+          if (opts.lookupFails) throw new Error('Forbidden');
+          return { users: { single: opts.target === undefined ? PLAIN_USER : opts.target } };
+        }
+        if (q.includes('disableTFA')) return { users: { disableTFA: { responseResult: { succeeded: true } } } };
+        if (q.includes('createApiKey')) return { authentication: { createApiKey: { responseResult: { succeeded: true }, key: 'new-key' } } };
         if (q.includes('users { create')) return { users: { create: { responseResult: { succeeded: true }, user: { id: 7 } } } };
         if (q.includes('users { update')) return { users: { update: { responseResult: { succeeded: true } } } };
         if (q.includes('pages { create')) return { pages: { create: { responseResult: { succeeded: true }, page: { id: 1 } } } };
@@ -55,7 +74,7 @@ function stubCtx(role: string, opts: { mime?: string } = {}): { ctx: WikiContext
             },
           };
         }
-        return { ok: true };
+        return opts.fallback ?? { ok: true };
       },
       download: async (path: string) => {
         calls.downloads.push(path);
@@ -218,6 +237,79 @@ async function main(): Promise<void> {
   s = stubCtx('systemadmin');
   const created = await create.handler({ ...userArgs, groups: [], passwordRaw: 'Init-Secret-456' }, s.ctx);
   check('R-19: user_create does not echo passwordRaw', !created.isError && !JSON.stringify(created).includes('Init-Secret-456'));
+
+  // ---- A-10: manage_users must not take over privileged accounts -----------------
+  const uUpdate = tool('wiki_user_update');
+  const uReset = tool('wiki_user_reset_password');
+  const uTfa = tool('wiki_user_disable_tfa');
+  s = stubCtx('moderator', { target: ADMIN_USER });
+  const pwAdmin = await settle(uUpdate.handler({ id: 1, newPassword: 'Takeover-123', confirm: true }, s.ctx));
+  check('A-10: moderator sets the password of an admin -> refused (GuardrailError), nothing written', pwAdmin.guardrail && !mutated(s.calls));
+  s = stubCtx('moderator', { target: ADMIN_USER });
+  const mailAdmin = await settle(uUpdate.handler({ id: 1, email: 'evil@example.org', confirm: true }, s.ctx));
+  check('A-10: moderator changes the e-mail of an admin -> refused', mailAdmin.guardrail && !mutated(s.calls));
+  s = stubCtx('moderator', { target: ADMIN_USER });
+  check('A-10: moderator renames an admin (no credential field) -> runs', !(await uUpdate.handler({ id: 1, name: 'Boss', confirm: true }, s.ctx)).isError && mutated(s.calls));
+  s = stubCtx('moderator', { target: ADMIN_USER });
+  const resetAdmin = await settle(uReset.handler({ id: 1, confirm: true }, s.ctx));
+  check('A-10: moderator resets an admin password -> refused', resetAdmin.guardrail && !mutated(s.calls));
+  s = stubCtx('moderator', { target: ADMIN_USER });
+  const tfaAdmin = await settle(uTfa.handler({ id: 1, confirm: true }, s.ctx));
+  check('A-10: moderator disables 2FA of an admin -> refused', tfaAdmin.guardrail && !mutated(s.calls));
+  s = stubCtx('moderator', { target: { isSystem: false, groups: [{ id: 5, permissions: ['manage:users'] }] } });
+  const customAdmin = await settle(uReset.handler({ id: 4, confirm: true }, s.ctx));
+  check('A-10: a custom group with manage:users counts as privileged', customAdmin.guardrail && !mutated(s.calls));
+  s = stubCtx('moderator', { lookupFails: true });
+  const unknown = await settle(uReset.handler({ id: 4, confirm: true }, s.ctx));
+  check('A-10: an unreadable target account fails closed', unknown.guardrail && !mutated(s.calls));
+  s = stubCtx('moderator');
+  check('A-10: moderator resets the password of a normal user -> runs', !(await uReset.handler({ id: 3, confirm: true }, s.ctx)).isError && mutated(s.calls));
+  s = stubCtx('moderator');
+  check('A-10: moderator disables 2FA of a normal user -> runs', !(await uTfa.handler({ id: 3, confirm: true }, s.ctx)).isError && mutated(s.calls));
+  s = stubCtx('admin', { target: ADMIN_USER });
+  const adminPreview = await uReset.handler({ id: 1 }, s.ctx);
+  check('A-10: admin (manage_groups confirm) on an admin target, no confirm -> dry run, nothing written', !adminPreview.isError && isDryRun(adminPreview) && !mutated(s.calls));
+  s = stubCtx('admin', { target: ADMIN_USER });
+  check('A-10: … with confirm -> runs', !(await uReset.handler({ id: 1, confirm: true }, s.ctx)).isError && mutated(s.calls));
+  s = stubCtx('systemadmin', { target: ADMIN_USER });
+  check('A-10: systemadmin needs no target lookup', !(await uReset.handler({ id: 1 }, s.ctx)).isError && !s.calls.requests.some((q) => q.includes('users { single')));
+
+  // ---- A-12: tag maintenance, render and purge need manage:system in Wiki.js ------
+  for (const name of ['wiki_tag_update', 'wiki_tag_delete', 'wiki_page_render', 'wiki_pages_purge_history']) {
+    check(`A-12: ${name} is in category manage_system`, tool(name).category === 'manage_system');
+  }
+  const olderThan = (tool('wiki_pages_purge_history').inputSchema as unknown as Record<string, { safeParse(v: unknown): { success: boolean } }>).olderThan;
+  for (const good of ['P1M', 'P30D', 'PT1H', 'P1Y2M', 'P2W', 'PT0.5S']) check(`A-12: olderThan "${good}" accepted`, olderThan.safeParse(good).success);
+  for (const bad of ['1w', '30d', 'P', 'PT', 'P0D', 'PT0S', 'abc', '', 'P1DT']) check(`A-12: olderThan "${bad}" rejected`, !olderThan.safeParse(bad).success);
+  check('A-12: purge description no longer suggests "1w"', !tool('wiki_pages_purge_history').description.includes('1w'));
+
+  // ---- A-13: full-access API keys only with manage_auth = allow ----------------------
+  const keyCreate = tool('wiki_apikey_create');
+  s = stubCtx('maintainer');
+  const fullKey = await settle(keyCreate.handler({ name: 'k', expiration: '30d', fullAccess: true, confirm: true }, s.ctx));
+  check('A-13: maintainer (manage_auth confirm) creates a full-access key -> refused, nothing sent', fullKey.guardrail && s.calls.requests.length === 0);
+  s = stubCtx('maintainer');
+  const adminGroupKey = await settle(keyCreate.handler({ name: 'k', expiration: '30d', fullAccess: false, group: 1, confirm: true }, s.ctx));
+  check('A-13: maintainer creates a key for the Administrators group -> refused', adminGroupKey.guardrail && s.calls.requests.length === 0);
+  s = stubCtx('maintainer');
+  check('A-13: maintainer creates a key for another group -> runs', !(await keyCreate.handler({ name: 'k', expiration: '30d', fullAccess: false, group: 3, confirm: true }, s.ctx)).isError && s.calls.requests.length === 1);
+  s = stubCtx('systemadmin');
+  check('A-13: systemadmin (manage_auth allow) creates a full-access key -> runs', !(await keyCreate.handler({ name: 'k', expiration: '30d', fullAccess: true }, s.ctx)).isError && s.calls.requests.length === 1);
+
+  // ---- A-24: raw GraphQL results are redacted too -----------------------------------
+  s = stubCtx('systemadmin', { fallback: { authentication: { login: { jwt: 'eyJ.secret.jwt', responseResult: { succeeded: true } } } } });
+  const gqlOut = JSON.stringify(await tool('wiki_graphql').handler({ query: '{ site { config { title } } }' }, s.ctx));
+  check('A-24: wiki_graphql result redacts secret-named fields', !gqlOut.includes('eyJ.secret.jwt') && gqlOut.includes('redacted'));
+
+  // ---- A-31: navigation is manage:system in Wiki.js; links are checked ----------------
+  const navGet = tool('wiki_navigation_get');
+  check('A-31: wiki_navigation_get is manage_system + readOnly', navGet.category === 'manage_system' && navGet.readOnly === true);
+  s = stubCtx('systemadmin');
+  const jsLink = await settle(tool('wiki_navigation_update_tree').handler(
+    { tree: [{ locale: 'en', items: [{ kind: 'link', label: 'x', targetType: 'external', target: 'java\tscript:alert(1)' }] }], force: true },
+    s.ctx,
+  ));
+  check('A-31: a javascript: navigation target is refused before any request', jsLink.isError && s.calls.requests.length === 0);
 
   if (failed === 0) {
     console.log(`\n${pass} escalation assertions passed.`);
