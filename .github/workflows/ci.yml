@@ -64,3 +64,36 @@ jobs:
         run: |
           test -f .next/standalone/server.js || (echo "standalone server.js fehlt" && exit 1)
           echo "OK: standalone bundle gebaut"
+
+  # Audit 2026-10-23 A-33: Compose-Dateien und Helm-Charts werden mit jedem Build
+  # gerendert — ein Tippfehler fällt hier auf, nicht erst beim Deploy im Panel.
+  # Die MCP-Pfadliste aller Routing-Dateien gleicht die Offline-Suite ab (test:deploy).
+  deploy:
+    name: Deploy-Artefakte — Compose + Helm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Compose-Dateien rendern
+        env:
+          DOMAIN: ci.example.org
+          POSTGRES_PASSWORD: ci-only
+          MCP_SESSION_SECRET: ci-only-secret-0123456789abcdef
+        run: |
+          docker compose -f docker-compose.yml config -q
+          docker compose -f deploy/standalone/full/docker-compose.yml config -q
+          docker compose -f deploy/standalone/mcp-only/docker-compose.yml config -q
+          docker compose -f docker-compose.build.yml config -q
+          docker compose -f docker-compose.build.yml -f docker-compose.local.yml config -q
+          echo "OK: Compose-Dateien"
+
+      - name: Helm-Charts prüfen
+        run: |
+          stack="--set domain=ci.example.org --set admin.email=ci@example.org --set admin.existingSecret=ci-admin"
+          helm lint deploy/helm/wikijs-stack $stack
+          helm template ci deploy/helm/wikijs-stack $stack > /dev/null
+          helm template ci deploy/helm/wikijs-stack $stack --set ingress.className=traefik             --set 'networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.kubernetes\.io/metadata\.name=kube-system' > /dev/null
+          mcp="--set config.wikijs.url=http://wiki:3000 --set config.oauth.publicBaseUrl=https://ci.example.org --set config.oauth.sessionSecret=ci-only-secret-0123456789abcdef"
+          helm lint deploy/helm/wikijs-mcp $mcp
+          helm template ci deploy/helm/wikijs-mcp $mcp > /dev/null
+          echo "OK: Helm-Charts"

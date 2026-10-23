@@ -27,8 +27,11 @@ die bewusst zurückgestellt wurden.
 - [ ] **Cookie-Vorrang (A-37, needs verification):** liegt ein Wiki.js-`jwt`-Cookie einer
   Subdomain vor, gewinnt es gegenüber dem eigenen Login. Prüfen, ob Cookie-Tossing praktisch
   möglich ist; mindestens die angemeldete Identität auf der Consent-Seite deutlicher zeigen.
-- [ ] **Deploy-Befunde aus Audit 2026-10-23** (A-09, A-14, A-16, A-30, A-32, A-33, A-36, A-43,
-  A-44, A-49, A-50, A-51): Compose/Helm/Backup-Härtungen, siehe Status im Audit-Bericht.
+- [ ] **Backups automatisch nach außen** (A-16): die Stacks sichern täglich, aber nur auf denselben
+  Server; eine Off-Host-Kopie (z. B. restic/S3) ist dokumentiert, nicht eingebaut.
+- [ ] **Postgres-Backup und Caddy ohne root** (A-50): braucht eine Umstellung der Volume-Rechte
+  bestehender Installationen.
+- [ ] **Image-Scan in der CI** (A-33, z. B. Trivy) — Compose und Helm werden schon gerendert.
 
 - [ ] **Helm: eigene Dateien einhängen** (`extraVolumes`/`extraVolumeMounts`), z. B. für ein
   CA-Zertifikat (`NODE_EXTRA_CA_CERTS`), wenn `WIKIJS_URL` eine Domain mit internem Zertifikat ist.

@@ -381,7 +381,7 @@ interne Service-Adresse per `http://` nehmen.
 | `WIKIJS_OAUTH_ROLE` | Schutzrolle für KI-Sitzungen: Löschen/Admin erst nach Bestätigungsschritt | `wiki` |
 | `WIKIJS_PERMISSION_PRESET` | Obergrenze der sichtbaren Tools; bei OAuth `full` lassen (die Rechte kommen aus Wiki.js) | `full` |
 | `WIKIJS_AUDIT` | Audit-Log (Tool, Nutzer, Ergebnis) an/aus | `true` |
-| `MCP_ALLOWED_REDIRECT_HOSTS` | nur an diese Hosts dürfen OAuth-Clients zurückleiten (kommagetrennt, z. B. `claude.ai,chatgpt.com`); Loopback immer erlaubt | leer = jeder https-Host |
+| `MCP_ALLOWED_REDIRECT_HOSTS` | nur an diese Hosts dürfen KI-Clients nach dem Login zurückleiten (kommagetrennt, z. B. `claude.ai,chatgpt.com`); Programme auf dem eigenen Rechner (localhost) sind immer erlaubt. **Leer lassen, wenn die Nutzer ihre KI-Programme frei wählen** — die Freigabeseite zeigt dann vor jeder Verbindung, wohin der Login geht; der Server meldet beim Start nur einen Hinweis. Setzen, sobald feststeht, welche Clients genutzt werden | leer = jeder https-Host |
 | `MCP_IMAGE` | anderes Image/Tag, z. B. ein Release-Tag `ghcr.io/janschachtschabel/mcp-wiki-js-ai:v1.2.3` | `…:main` (A3: `wikijs-mcp:local`) |
 | `TZ` | Zeitzone der Zeitangaben auf `/me` | `UTC` |
 
@@ -390,10 +390,11 @@ interne Service-Adresse per `http://` nehmen.
 | Variable | Bedeutung | Default |
 |---|---|---|
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | erstes Admin-Konto. A1/A2: wird beim Start angelegt, danach `ADMIN_PASSWORD` leeren. A3: beim `run --rm bootstrap` | – |
-| `BOOTSTRAP_ARGS` | zusätzliche Parameter der Ersteinrichtung (A1/A2): `--locale=en` (andere Sprache; Deutsch ist voreingestellt), `--demo` (Gruppe „Team“ + Testnutzer, nur für Tests; braucht `DEMO_PASSWORD`, optional `DEMO_EMAIL`, `DEMO_NAME`) | – |
-| `BACKUP_INTERVAL_SECONDS` / `BACKUP_KEEP` | Abstand und Anzahl der Backups (Postgres + MCP-SQLite, Volume `db-backups`) | `86400` / `7` |
+| `BOOTSTRAP_ARGS` | zusätzliche Parameter der Ersteinrichtung (A1/A2): `--locale=en` (andere Sprache; Deutsch ist voreingestellt), `--demo` (Gruppe „Team“ + Testnutzer, nur für Tests; braucht `DEMO_PASSWORD`, optional `DEMO_EMAIL`, `DEMO_NAME`), `--reapply` (Sprache, Suchmaschine und Gruppenrechte erneut setzen — sonst nur bei der Ersteinrichtung) | – |
+| `BACKUP_INTERVAL_SECONDS` / `BACKUP_KEEP` | Abstand und Anzahl der Backups (Postgres + Secrets in `db-backups`, MCP-SQLite in `mcp-backups`; siehe [Backup](#backup-und-wiederherstellung-a1-a2)) | `86400` / `7` |
 | `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERTRESOLVER` | Namen im vorhandenen Traefik (nur A1) | `websecure` / `letsencrypt` |
 | `TRAEFIK_NETWORK` | Netz, über das Traefik den Stack erreicht; wird angelegt. Nur ändern, wenn Traefik in einem eigenen Docker-Netz läuft (nur A1) | `wikijs-web` |
+| `INSTANCE` | Präfix der Traefik-Router; für eine **zweite** Installation am selben Traefik (z. B. Staging) einen eigenen Namen setzen (A1, B1/C1) | `wikijs` bzw. `wikijs-mcponly` |
 | `HTTP_PORT` / `HTTPS_PORT` | Host-Ports des mitgelieferten Caddy (nur A2; für Let's Encrypt 80/443 lassen) | `80` / `443` |
 | `COMPOSE_FILE` | `docker-compose.build.yml` — dann gelten `docker compose …`-Befehle ohne `-f` (nur A3) | – |
 | `POSTGRES_PASSWORD`, `MCP_SESSION_SECRET` | nur A3 Pflicht; A1/A2 erzeugen sie selbst | – |
@@ -430,6 +431,8 @@ Werte für `helm install … -f <datei>` bzw. `--set`. Vollständig kommentiert 
 | `mcp.config.*` / `config.policy.*`, `config.oauth.role`, `config.extraEnv` | stack / mcp | `blockedTags`, Schutzrolle, Redirect-Hosts, Zeitzone, weitere Variablen | wie Compose |
 | `postgres.persistence.size`, `mcp.persistence.size` / `persistence.size` | stack / mcp | Speichergrößen | `5Gi`, `1Gi` |
 | `backup.schedule`, `backup.keep`, `backup.persistence.size` | wikijs-stack | Zeitplan und Anzahl der `pg_dump`-Sicherungen | `30 2 * * *`, `7`, `5Gi` |
+| `backup.mcpStore.enabled`, `.intervalSeconds`, `.size` | wikijs-stack | Sidecar im MCP-Pod sichert die MCP-Datenbank in die PVC `<release>-mcp-backups` | `true`, `86400`, `1Gi` |
+| `networkPolicy.ingressFrom` | wikijs-stack | wer Wiki.js und den MCP-Server erreichen darf (meist der Namespace des Ingress-Controllers, Beispiele in `values.yaml`); leer = clusterweit | `[]` |
 | `publicBaseUrl` | wikijs-stack | nur für Tests ohne TLS oder mit anderem Port | `https://<domain>` |
 
 Alle weiteren Variablen des Servers (Legacy-Zugang mit API-Keys, Limits, Diagnose):
@@ -466,10 +469,58 @@ steht bei Fall A bereits im Wiki unter `/ki-zugang`.
 | Update | `docker compose pull && docker compose up -d` bzw. im Panel neu bereitstellen (A3 zusätzlich `docker compose build --pull mcp`). `:main` folgt dem Hauptzweig; feste Stände per `MCP_IMAGE` mit Release-Tag |
 | Update (Kubernetes) | `helm upgrade wiki ./deploy/helm/wikijs-stack -n wiki -f values-wiki.yaml` (B3 entsprechend mit `wikijs-mcp`); mit Tag `main` zieht jeder Neustart das aktuelle Image, z. B. `kubectl -n wiki rollout restart statefulset/wiki-mcp` |
 | Logs | `docker compose logs -f <dienst>` bzw. im Panel; nützlich: `init`, `bootstrap`, `mcp`. Kubernetes: `kubectl -n wiki logs statefulset/wiki-mcp`, `… job/wiki-bootstrap-<revision>` |
-| Backup | Fall A: automatisch täglich ins Volume `db-backups` — **off-host kopieren**. Immer mitsichern: Volumes `stack-secrets` (Passwörter; ohne sie startet Wiki.js nach einem Restore nicht) und `mcp-data` (Sessions, Audit-Log) |
+| Backup | Fall A1/A2: automatisch täglich in die Volumes `db-backups` (Postgres + Secrets) und `mcp-backups` (MCP-Datenbank) — **regelmäßig vom Server wegkopieren**; Wiederherstellung siehe [unten](#backup-und-wiederherstellung-a1-a2). A3: `db-backups` und `mcp-backups` plus die `.env` |
 | Domain später ändern | `DOMAIN` ändern und neu bereitstellen; im Wiki zusätzlich die Site-URL (Administration → Allgemein) und die Seite `/ki-zugang` anpassen; KI-Programme neu verbinden |
-| Backup (Kubernetes, A4) | CronJob schreibt täglich nach PVC `<release>-backups` — aus dem Cluster kopieren; mitsichern: Secret `<release>-secrets` und die MCP-PVC. Restore: `kubectl -n wiki exec -i wiki-postgres-0 -- pg_restore -U wikijs -d wiki --clean < wiki-<datum>.dump` |
+| Backup (Kubernetes, A4) | CronJob schreibt täglich nach PVC `<release>-backups`, ein Sidecar die MCP-Datenbank nach `<release>-mcp-backups` — aus dem Cluster kopieren; mitsichern: Secret `<release>-secrets` (`kubectl -n wiki get secret <release>-secrets -o yaml`, vertraulich aufbewahren). Restore: `kubectl -n wiki exec -i wiki-postgres-0 -- pg_restore -U wikijs -d wiki --clean < wiki-<datum>.dump` |
+| Ersteinrichtung erneut | Der automatische `bootstrap` bei jedem Deploy legt nur Fehlendes an; Sprache, Suchmaschine und Rechte der Gruppe „Team“ setzt er nur bei der Ersteinrichtung — Änderungen in Wiki.js bleiben erhalten. Bewusst neu setzen: `BOOTSTRAP_ARGS=--reapply` (mit `ADMIN_EMAIL`/`ADMIN_PASSWORD`) einmal bereitstellen, danach wieder entfernen. A3: `docker compose run --rm bootstrap --locale=de` |
 | Alles löschen | `docker compose down -v` (**löscht alle Daten**). Kubernetes: `helm uninstall wiki -n wiki` lässt Secret `<release>-secrets` und die Backup-PVC stehen; PVCs der Datenbank und des MCP mit `kubectl -n wiki delete pvc …` entfernen |
+
+
+### Backup und Wiederherstellung (A1, A2)
+
+Der Stack sichert täglich (`BACKUP_INTERVAL_SECONDS`, `BACKUP_KEEP` Kopien):
+
+| Volume | Inhalt | Dienst |
+|---|---|---|
+| `<projekt>_db-backups` | `wiki-<zeit>.dump` (Postgres, alle Wiki-Inhalte) und `secrets-<zeit>.tar.gz` (DB-Passwort, `MCP_SESSION_SECRET`) | `db-backup` |
+| `<projekt>_mcp-backups` | `mcp-<zeit>.sqlite` (KI-Verbindungen, Audit-Log) | `mcp-backup` |
+
+Abgebrochene Läufe hinterlassen keine Teil-Dateien. Die Dateien in `db-backups` sind nur für root
+lesbar, denn sie enthalten Geheimnisse.
+
+> **Wichtig:** Beide Volumes liegen auf demselben Server wie das Wiki. Gegen den Ausfall des Servers
+> helfen sie nicht — kopiert sie regelmäßig nach außen (anderer Server, Objektspeicher, Snapshot des
+> Anbieters). Ein Beispiel für eine Kopie in das aktuelle Verzeichnis auf dem Server:
+>
+> ```bash
+> docker run --rm -v <projekt>_db-backups:/b:ro -v <projekt>_mcp-backups:/m:ro -v "$PWD":/out alpine \
+>   tar czf /out/wiki-backup-$(date +%F).tar.gz -C / b m
+> ```
+
+**Wiki wiederherstellen** (im Projektordner bzw. über die Konsole des Panels; Dateinamen mit
+`docker compose exec db-backup ls /backups` nachsehen):
+
+```bash
+docker compose stop wiki mcp
+docker compose exec db-backup sh -c 'PGPASSWORD="$(cat /stack/secrets/postgres_password)" pg_restore -h wikijs-db -U wikijs -d wiki --clean --if-exists /backups/wiki-<zeit>.dump'
+docker compose start wiki mcp
+```
+
+(In der Caddy-Variante A2 heißt der Datenbank-Host `db` statt `wikijs-db`.)
+
+**MCP-Datenbank wiederherstellen** (KI-Verbindungen und Audit-Log):
+
+```bash
+docker compose stop mcp
+docker run --rm --user 1000:1000 -v <projekt>_mcp-data:/data -v <projekt>_mcp-backups:/backups:ro alpine \
+  sh -c 'rm -f /data/mcp.sqlite-wal /data/mcp.sqlite-shm && cp /backups/mcp-<zeit>.sqlite /data/mcp.sqlite'
+docker compose start mcp
+```
+
+**Auf einen neuen Server umziehen:** Stack einmal ohne Variablen starten, dann die Secrets aus
+`secrets-<zeit>.tar.gz` in die Volumes `stack-secrets` (`secrets/…`) und `mcp-secrets` (`mcp-secrets/…`)
+zurückspielen, neu starten und Wiki sowie MCP-Datenbank wie oben wiederherstellen. Ohne das alte
+`MCP_SESSION_SECRET` bleiben die Wiki-Inhalte vollständig; nur die KI-Programme müssen sich neu verbinden.
 
 ---
 

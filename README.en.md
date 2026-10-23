@@ -122,7 +122,8 @@ Kubernetes (**B3**): Helm chart [`wikijs-mcp`](deploy/helm/wikijs-mcp/README.md)
 | `TRAEFIK_ENABLE` | switch the Traefik labels on | B1, C1 |
 | `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERTRESOLVER` / `TRAEFIK_NETWORK` | names in the existing Traefik (defaults `websecure` / `letsencrypt` / own network) | A1, B1, C1 |
 | `WIKIJS_BLOCKED_TAGS` | tags that lock pages away from the AI (default `kein-ki`) | all |
-| `MCP_ALLOWED_REDIRECT_HOSTS` | allowed OAuth redirect hosts, e.g. `claude.ai,chatgpt.com` | all |
+| `MCP_ALLOWED_REDIRECT_HOSTS` | allowed OAuth redirect hosts, e.g. `claude.ai,chatgpt.com`; leave empty when users choose their AI apps freely (the consent page shows the target) | all |
+| `INSTANCE` | prefix of the Traefik routers, only for a second installation behind the same Traefik | A1, B1, C1 |
 | `MCP_IMAGE` | another image or a release tag | all |
 
 Complete tables per file: [guide, environment variables](mcp-for-wiki-js/docs/installation-it.en.md#environment-variables) ·
@@ -151,8 +152,9 @@ claude mcp add --transport http wiki https://<DOMAIN>/mcp   # then: /mcp → Aut
 - **Update:** `docker compose pull && docker compose up -d` or redeploy in the panel (A3 also
   `docker compose build --pull mcp`; Kubernetes: `helm upgrade … -f values-wiki.yaml`). Wiki.js runs from the official `requarks/wiki:2` image and can be
   updated independently.
-- **Backup:** case A backs up Postgres and the MCP SQLite daily into the `db-backups` volume — copy it
-  off-host. Also back up the `stack-secrets` and `mcp-data` volumes.
+- **Backup:** case A backs up Postgres and the secrets daily into the `db-backups` volume and the MCP
+  SQLite into `mcp-backups`. Both live on the same server — **copy them off the server regularly**.
+  Restore: [installation guide](mcp-for-wiki-js/docs/installation-it.en.md#backup-and-restore-a1-a2).
 - **First-run setup** (`deploy/scripts/bootstrap.mjs`, idempotent): creates the admin account, home
   page, `/ki-zugang`, PostgreSQL search and language. The Wiki.js setup wizard (`/finalize`) is blocked
   from outside so nobody can claim the first admin account before setup.

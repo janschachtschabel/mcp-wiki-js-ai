@@ -120,7 +120,8 @@ Kubernetes (**B3**): Helm-Chart [`wikijs-mcp`](deploy/helm/wikijs-mcp/README.md)
 | `TRAEFIK_ENABLE` | Traefik-Labels einschalten | B1, C1 |
 | `TRAEFIK_ENTRYPOINT` / `TRAEFIK_CERTRESOLVER` / `TRAEFIK_NETWORK` | Namen im vorhandenen Traefik (Defaults `websecure` / `letsencrypt` / eigenes Netz) | A1, B1, C1 |
 | `WIKIJS_BLOCKED_TAGS` | Tags, die Seiten für die KI sperren (Default `kein-ki`) | alle |
-| `MCP_ALLOWED_REDIRECT_HOSTS` | erlaubte OAuth-Rückleitungen, z. B. `claude.ai,chatgpt.com` | alle |
+| `MCP_ALLOWED_REDIRECT_HOSTS` | erlaubte OAuth-Rückleitungen, z. B. `claude.ai,chatgpt.com`; leer lassen, wenn Nutzer ihre KI-Programme frei wählen (die Freigabeseite zeigt das Ziel) | alle |
+| `INSTANCE` | Präfix der Traefik-Router, nur für eine zweite Installation am selben Traefik | A1, B1, C1 |
 | `MCP_IMAGE` | anderes Image oder Release-Tag | alle |
 
 Vollständige Tabellen je Datei: [Anleitung, Umgebungsvariablen](mcp-for-wiki-js/docs/installation-it.md#umgebungsvariablen) ·
@@ -149,8 +150,9 @@ claude mcp add --transport http wiki https://<DOMAIN>/mcp   # dann: /mcp → Aut
 - **Update:** `docker compose pull && docker compose up -d` bzw. im Panel neu bereitstellen
   (A3 zusätzlich `docker compose build --pull mcp`; Kubernetes: `helm upgrade … -f values-wiki.yaml`). Wiki.js läuft aus dem offiziellen Image
   `requarks/wiki:2` und bleibt unabhängig updatebar.
-- **Backup:** Fall A sichert täglich Postgres und MCP-SQLite ins Volume `db-backups` — off-host
-  kopieren. Zusätzlich die Volumes `stack-secrets` und `mcp-data` sichern.
+- **Backup:** Fall A sichert täglich Postgres und die Secrets ins Volume `db-backups`, die MCP-SQLite
+  ins Volume `mcp-backups`. Beide liegen auf demselben Server — **regelmäßig nach außen kopieren**.
+  Wiederherstellen: [Installationsanleitung](mcp-for-wiki-js/docs/installation-it.md#backup-und-wiederherstellung-a1-a2).
 - **Ersteinrichtung** (`deploy/scripts/bootstrap.mjs`, idempotent): legt Admin-Konto, Startseite,
   `/ki-zugang`, PostgreSQL-Suche und Sprache an. Der Setup-Assistent von Wiki.js (`/finalize`) ist von
   außen gesperrt, damit niemand vor der Einrichtung das erste Admin-Konto übernimmt.
