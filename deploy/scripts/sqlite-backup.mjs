@@ -8,7 +8,7 @@
  *
  * Env: MCP_DB                   store file (default /data/mcp.sqlite)
  *      BACKUP_DIR               target directory (default /backups)
- *      BACKUP_INTERVAL_SECONDS  pause between runs (default 86400, min 60)
+ *      BACKUP_INTERVAL_SECONDS  pause between runs (default 86400, min 60, max ~24.8 days)
  *      BACKUP_KEEP              copies kept (default 7)
  *      BACKUP_ONCE=1            one run, then exit (tests, manual runs)
  */
@@ -22,7 +22,9 @@ const intEnv = (name, def, min) => {
   const n = Number(process.env[name]);
   return Number.isInteger(n) && n >= min ? n : def;
 };
-const INTERVAL_S = intEnv('BACKUP_INTERVAL_SECONDS', 86_400, 60);
+// setTimeout fires after 1 ms above 2^31-1 ms (~24.8 days): cap, or the loop would spin.
+const MAX_INTERVAL_S = Math.floor((2 ** 31 - 1) / 1000);
+const INTERVAL_S = Math.min(intEnv('BACKUP_INTERVAL_SECONDS', 86_400, 60), MAX_INTERVAL_S);
 const KEEP = intEnv('BACKUP_KEEP', 7, 1);
 const COPY = /^mcp-\d{8}-\d{6}\.sqlite$/;
 

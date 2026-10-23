@@ -14,7 +14,8 @@
  *
  * Schritte 3–5 ändern nur, was vom Soll abweicht. Der automatische Lauf bei
  * jedem Deploy (--if-configured) setzt Sprache und Suchmaschine nur, solange das
- * Wiki noch unbenutzt ist (nur Startseite und /ki-zugang), und die Rechte der
+ * Wiki noch unbenutzt ist (nur Startseite und /ki-zugang, keine Sprach-Namespaces),
+ * und die Rechte der
  * Gruppe "Team" nur, solange sie noch die Wiki.js-Standardrechte hat; was Admins
  * später in Wiki.js ändern, bleibt erhalten (Audit A-36). Eine abgebrochene
  * Ersteinrichtung vollendet der nächste Lauf. Ein manueller Lauf oder --reapply
@@ -216,10 +217,15 @@ async function ensurePage(jwt, { path, title, description, content }) {
 
 const START_PAGES = ['home', 'ki-zugang'];
 
-/** No content beyond the start pages: the wiki is still in its first setup. */
-async function onlyStartPages(jwt) {
+/**
+ * Still in its first setup: no content beyond the start pages, and no language
+ * namespaces turned on (that is an admin's multilingual setup).
+ */
+async function untouchedWiki(jwt) {
   const found = await gql('query{ pages { list { path } } }', {}, jwt);
-  return found.pages.list.every((p) => START_PAGES.includes(p.path));
+  if (!found.pages.list.every((p) => START_PAGES.includes(p.path))) return false;
+  const loc = await gql('query{ localization { config { namespacing } } }', {}, jwt);
+  return !loc.localization.config.namespacing;
 }
 
 /** Step 2 — a home page (instead of the setup screen) and the user guide it links to. */
@@ -271,8 +277,9 @@ const DICT_BY_LOCALE = { de: 'german', en: 'english', fr: 'french', es: 'spanish
 /** Step 4 — the PostgreSQL search engine beats the default DB search by far.
  *  The dictionary follows the wiki's ACTUAL locale. */
 async function ensureSearchEngine(jwt, fresh) {
-  const s = await gql('query{ search { searchEngines { key isEnabled } } }', {}, jwt);
-  const active = s.search.searchEngines.find((e) => e.isEnabled)?.key ?? 'keine';
+  const s = await gql('query{ search { searchEngines { key isEnabled config { key value } } } }', {}, jwt);
+  const enabled = s.search.searchEngines.filter((e) => e.isEnabled);
+  const active = enabled.map((e) => e.key).join(', ') || 'keine';
   if (active === 'postgres') {
     log('PostgreSQL-Suche ist aktiv.');
     return;
@@ -283,19 +290,18 @@ async function ensureSearchEngine(jwt, fresh) {
   }
   const loc = await gql('query{ localization { config { locale } } }', {}, jwt);
   const dict = DICT_BY_LOCALE[loc.localization.config.locale] ?? 'simple';
+  // Wiki.js patches isEnabled AND config of every listed engine and activates the one
+  // it finds enabled: switch every other enabled engine off, sending its own config back
+  // (the query returns {value}, the mutation takes {v}) so nothing of it is lost.
+  const keepConfig = (config) => (config ?? []).map((c) => ({ key: c.key, value: JSON.stringify({ v: JSON.parse(c.value).value }) }));
+  const off = enabled.filter((e) => e.key !== 'postgres').map((e) => ({ key: e.key, isEnabled: false, config: keepConfig(e.config) }));
   const u = await gql(
     'mutation($engines:[SearchEngineInput]){ search { updateSearchEngines(engines:$engines){ responseResult { succeeded message } } } }',
-    {
-      engines: [
-        { key: 'db', isEnabled: false, config: [] },
-        { key: 'postgres', isEnabled: true, config: [{ key: 'dictLanguage', value: JSON.stringify({ v: dict }) }] },
-      ],
-    },
+    { engines: [...off, { key: 'postgres', isEnabled: true, config: [{ key: 'dictLanguage', value: JSON.stringify({ v: dict }) }] }] },
     jwt,
   );
   assertSucceeded(u.search.updateSearchEngines.responseResult, 'Suchmaschine umstellen');
-  const r = await gql('mutation{ search { rebuildIndex { responseResult { succeeded message } } } }', {}, jwt);
-  assertSucceeded(r.search.rebuildIndex.responseResult, 'Suchindex aufbauen');
+  await rebuildIndex(jwt);
   log(`PostgreSQL-Suche aktiv (Wörterbuch: ${dict}), Index neu aufgebaut.`);
 }
 
@@ -309,7 +315,18 @@ async function switchLocale(jwt, fresh) {
   const loc = await gql('query{ localization { config { locale } } }', {}, jwt);
   const current = loc.localization.config.locale;
   if (current === LOCALE) {
-    log(`Standardsprache ist ${LOCALE}.`);
+    // A first setup can break off between setting the language and moving the pages;
+    // finish the move then (only then — later pages in other languages are deliberate).
+    const pages = fresh ? (await gql('query{ pages { list { path locale } } }', {}, jwt)).pages.list : [];
+    const sources = [...new Set(pages.map((p) => p.locale).filter((l) => l !== LOCALE))];
+    if (sources.length === 0) {
+      log(`Standardsprache ist ${LOCALE}.`);
+      return;
+    }
+    let moved = 0;
+    for (const source of sources) moved += await migratePages(jwt, source);
+    await rebuildIndex(jwt);
+    log(`Standardsprache ${LOCALE}: ${moved} Seiten aus ${sources.join(', ')} nachträglich verschoben, Suchindex erneuert.`);
     return;
   }
   if (KEEP_ADMIN_CHOICES && !fresh) {
@@ -324,14 +341,24 @@ async function switchLocale(jwt, fresh) {
     vars, jwt,
   );
   assertSucceeded(up.localization.updateLocale.responseResult, `Standardsprache ${LOCALE} setzen`);
+  const moved = await migratePages(jwt, current);
+  await rebuildIndex(jwt);
+  log(`Standardsprache ${LOCALE}, ${moved} Seiten aus ${current} verschoben, Suchindex erneuert.`);
+}
+
+/** Move all pages of `source` into LOCALE; returns how many moved. */
+async function migratePages(jwt, source) {
   const mig = await gql(
-    'mutation($source:String!,$locale:String!){ pages { migrateToLocale(sourceLocale:$source,targetLocale:$locale){ responseResult { succeeded message } count } } }',
-    { source: current, locale: LOCALE }, jwt,
+    'mutation($sourceLocale:String!,$targetLocale:String!){ pages { migrateToLocale(sourceLocale:$sourceLocale,targetLocale:$targetLocale){ responseResult { succeeded message } count } } }',
+    { sourceLocale: source, targetLocale: LOCALE }, jwt,
   );
-  assertSucceeded(mig.pages.migrateToLocale.responseResult, `Seiten von ${current} nach ${LOCALE} verschieben`);
+  assertSucceeded(mig.pages.migrateToLocale.responseResult, `Seiten von ${source} nach ${LOCALE} verschieben`);
+  return mig.pages.migrateToLocale.count ?? 0;
+}
+
+async function rebuildIndex(jwt) {
   const r = await gql('mutation{ search { rebuildIndex { responseResult { succeeded message } } } }', {}, jwt);
   assertSucceeded(r.search.rebuildIndex.responseResult, 'Suchindex aufbauen');
-  log(`Standardsprache ${LOCALE}, ${mig.pages.migrateToLocale.count ?? 0} Seiten aus ${current} verschoben, Suchindex erneuert.`);
 }
 
 /**
@@ -401,7 +428,7 @@ const jwt = finalized.jwt;
 await ensureStartPages(jwt);
 // First setup = this run finalized the wiki, or it still holds nothing but the start
 // pages — so a setup that broke off after /finalize is completed by the restart.
-const fresh = finalized.fresh || (await onlyStartPages(jwt));
+const fresh = finalized.fresh || (await untouchedWiki(jwt));
 if (LOCALE) await switchLocale(jwt, fresh);
 await ensureSearchEngine(jwt, fresh);
 if (WITH_DEMO) await ensureDemo(jwt);

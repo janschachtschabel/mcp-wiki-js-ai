@@ -28,8 +28,16 @@ function check(name: string, cond: boolean): void {
 interface WikiState {
   setup: boolean;
   locale: string;
+  /** The enabled search engine; "MULTI:a,b" when more than one is enabled. */
   engine: string;
   pages: string[];
+  /** Locale per page path; default: the site locale. */
+  pageLocales?: Record<string, string>;
+  namespacing?: boolean;
+  /** sourceLocale of every migrateToLocale call. */
+  migrations?: string[];
+  /** Engine config the last updateSearchEngines sent, per key. */
+  sentConfig?: Record<string, { key: string; value: string }[]>;
   groups: { id: number; name: string }[];
   /** Permissions of the Team group (groups.single); default: already configured. */
   groupPerms?: string[];
@@ -67,10 +75,20 @@ function startWiki(state: WikiState): Promise<{ url: string; close: () => void }
       const result = (name: string) => (state.fail === name ? bad : ok);
       const data = (() => {
         if (query.includes('login(')) return { authentication: { login: { jwt: 'jwt', responseResult: ok } } };
-        if (query.includes('pages { list { path } }')) return { pages: { list: state.pages.map((p) => ({ path: p })) } };
-        if (query.includes('localization { config')) return { localization: { config: { locale: state.locale } } };
+        const pageLocale = (p: string) => state.pageLocales?.[p] ?? state.locale;
+        if (query.includes('pages { list {')) return { pages: { list: state.pages.map((p) => ({ path: p, locale: pageLocale(p) })) } };
+        if (query.includes('localization { config')) return { localization: { config: { locale: state.locale, namespacing: !!state.namespacing } } };
         if (query.includes('searchEngines {')) {
-          return { search: { searchEngines: ['db', 'postgres', 'elasticsearch'].map((key) => ({ key, isEnabled: key === state.engine })) } };
+          const enabled = state.engine.replace(/^MULTI:/, '').split(',');
+          return {
+            search: {
+              searchEngines: ['db', 'postgres', 'elasticsearch'].map((key) => ({
+                key,
+                isEnabled: enabled.includes(key),
+                config: key === 'elasticsearch' ? [{ key: 'host', value: JSON.stringify({ default: '', title: 'Host', value: 'http://es:9200' }) }] : [],
+              })),
+            },
+          };
         }
         if (query.includes('groups { list')) return { groups: { list: state.groups } };
         if (query.includes('groups { single')) return { groups: { single: { permissions: state.groupPerms ?? TEAM_CONFIGURED } } };
@@ -97,10 +115,25 @@ function startWiki(state: WikiState): Promise<{ url: string; close: () => void }
             if (state.fail !== 'updateLocale') state.locale = variables.locale;
             return { localization: { updateLocale: { responseResult: result('updateLocale') } } };
           case 'migrateToLocale':
+            (state.migrations ??= []).push(variables.sourceLocale);
+            if (state.fail !== 'migrateToLocale') {
+              for (const p of state.pages) {
+                if (pageLocale(p) === variables.sourceLocale) (state.pageLocales ??= {})[p] = variables.targetLocale;
+              }
+            }
             return { pages: { migrateToLocale: { responseResult: result('migrateToLocale'), count: 2 } } };
-          case 'updateSearchEngines':
-            state.engine = (variables.engines as { key: string; isEnabled: boolean }[]).find((e) => e.isEnabled)?.key ?? state.engine;
+          case 'updateSearchEngines': {
+            // Like Wiki.js: only the listed engines are patched (isEnabled AND config).
+            const enabled = new Set(state.engine.replace(/^MULTI:/, '').split(','));
+            for (const e of variables.engines as { key: string; isEnabled: boolean; config: { key: string; value: string }[] }[]) {
+              if (e.isEnabled) enabled.add(e.key);
+              else enabled.delete(e.key);
+              (state.sentConfig ??= {})[e.key] = e.config;
+            }
+            const list = [...enabled].filter(Boolean).sort();
+            state.engine = list.length === 1 ? list[0] : `MULTI:${list.join(',')}`;
             return { search: { updateSearchEngines: { responseResult: result('updateSearchEngines') } } };
+          }
           case 'rebuildIndex':
             return { search: { rebuildIndex: { responseResult: result('rebuildIndex') } } };
           case 'update':
@@ -166,6 +199,7 @@ async function main(): Promise<void> {
   let r = await run(fresh, ['--if-configured', '--locale=de']);
   check(`fresh wiki: automatic run succeeds (exit ${r.code})`, r.code === 0);
   check('fresh wiki: finalize, language switch and page migration happen', ['finalize', 'updateLocale', 'migrateToLocale'].every((c) => fresh.calls.includes(c)) && fresh.locale === 'de');
+  check('fresh wiki: pages are migrated from the locale the wiki had (en)', fresh.migrations?.join() === 'en');
   check('fresh wiki: PostgreSQL search is enabled and indexed', fresh.engine === 'postgres' && fresh.calls.includes('rebuildIndex'));
 
   // 2. A-36: the next automatic run on the same, unchanged wiki changes nothing.
@@ -190,6 +224,19 @@ async function main(): Promise<void> {
   r = await run(teamUnset, ['--if-configured', '--demo'], { DEMO_PASSWORD: 'Demo-Pass-123' });
   check('review: a "Team" group still on Wiki.js default rights gets its rights', r.code === 0 && teamUnset.calls.includes('update'));
 
+  // Review 2: the language was switched, but moving the pages broke off — the restart
+  // moves them, although the site locale already matches.
+  const movedHalf = settled({ locale: 'de', pageLocales: { home: 'en', 'ki-zugang': 'en' } });
+  r = await run(movedHalf, ['--if-configured', '--locale=de']);
+  check('review 2: pages left in the old language are moved by the next run', r.code === 0 && movedHalf.migrations?.join() === 'en' && movedHalf.pageLocales?.home === 'de');
+  const migrateRefused = settled({ locale: 'en', engine: 'db', fail: 'migrateToLocale' });
+  r = await run(migrateRefused, ['--if-configured', '--locale=de']);
+  check(`review 2: a refused page migration fails the run (exit ${r.code})`, r.code !== 0 && /refused by stub/.test(r.out));
+  // Review 2: an admin who turned on multilingual namespaces made a choice — even with only the start pages.
+  const multilingual = settled({ locale: 'en', engine: 'db', namespacing: true });
+  r = await run(multilingual, ['--if-configured', '--locale=de']);
+  check('review 2: a wiki with language namespaces keeps its language setup', r.code === 0 && multilingual.locale === 'en' && !multilingual.calls.includes('migrateToLocale'));
+
   // 4. A manual run still applies what it is told to.
   const manual = settled({ locale: 'en', engine: 'db' });
   r = await run(manual, ['--locale=de']);
@@ -203,6 +250,7 @@ async function main(): Promise<void> {
   const reapply = settled({ locale: 'en', engine: 'elasticsearch' });
   r = await run(reapply, ['--if-configured', '--locale=de'], { BOOTSTRAP_ARGS: '--reapply' });
   check('--reapply: the automatic run sets language and search engine again', r.code === 0 && reapply.locale === 'de' && reapply.engine === 'postgres');
+  check('review 2: the previous engine is switched off with its configuration kept', reapply.sentConfig?.elasticsearch?.some((c) => c.key === 'host' && c.value === JSON.stringify({ v: 'http://es:9200' })) === true);
   const reapplyDemo = settled();
   r = await run(reapplyDemo, ['--if-configured', '--demo'], { DEMO_PASSWORD: 'Demo-Pass-123', BOOTSTRAP_ARGS: '--reapply' });
   check('--reapply: the "Team" group gets its rights again', r.code === 0 && reapplyDemo.calls.includes('update'));

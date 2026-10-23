@@ -119,6 +119,18 @@ async function backupTests(): Promise<void> {
   const broken = await run(BACKUP, { ...env, MCP_DB: tmp() });
   check('review: an unreadable store is reported as "backup FAILED", not a stack trace', broken.code !== 0 && /backup FAILED/.test(broken.out) && !/\n\s+at /.test(broken.out));
 
+  // Review 2: an interval beyond setTimeout's 2^31-1 ms limit must not become a 1 ms hot loop.
+  const hot = await new Promise<string>((resolve) => {
+    execFile(
+      process.execPath,
+      [BACKUP],
+      { env: { NODE_ENV: 'test', PATH: process.env.PATH ?? '', MCP_DB: dbFile, BACKUP_DIR: tmp(), BACKUP_INTERVAL_SECONDS: '2592000' }, timeout: 2500 },
+      (_err: Error | null, stdout: string, stderr: string) => resolve(stdout + stderr),
+    );
+  });
+  const runs = (hot.match(/backup ok/g) ?? []).length;
+  check(`review 2: a 30-day interval runs one backup, not a hot loop (${runs} in 2.5 s)`, runs === 1);
+
   const none = await run(BACKUP, { ...env, MCP_DB: path.join(tmp(), 'missing.sqlite') });
   check('A-50: no store yet → nothing to back up, no error', none.code === 0 && /nothing to back up/i.test(none.out));
 }
