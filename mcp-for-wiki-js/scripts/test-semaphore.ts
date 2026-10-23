@@ -6,7 +6,7 @@
  *
  * Run: npm run test:sema   (no network — pure timing logic).
  */
-import { Semaphore } from '../lib/wikijs/client';
+import { Semaphore } from '../lib/wikijs/gate';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let pass = 0;

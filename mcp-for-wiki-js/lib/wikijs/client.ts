@@ -19,6 +19,7 @@
 
 import { Kind, parse } from 'graphql';
 import { exceedsByteLimit } from './format';
+import { gated } from './gate';
 
 export interface GraphQLErrorEntry {
   message: string;
@@ -171,90 +172,6 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Exponential backoff with jitter, capped at 2s. */
 const backoffMs = (attempt: number) => Math.min(2000, 150 * 2 ** attempt) + Math.floor(Math.random() * 120);
 
-/**
- * Async counting semaphore: caps concurrent work at `max`, queues the rest FIFO, and
- * rejects (sheds) a queued caller if it can't get a slot within `acquireTimeoutMs`.
- */
-export class Semaphore {
-  private active = 0;
-  private readonly waiters: Array<{ resolve: () => void; reject: (e: Error) => void }> = [];
-
-  constructor(private readonly max: number) {}
-
-  /** Current in-flight count (for tests/diagnostics). */
-  get inFlight(): number {
-    return this.active;
-  }
-
-  /** Nothing running and nobody waiting. */
-  get idle(): boolean {
-    return this.active === 0 && this.waiters.length === 0;
-  }
-
-  async run<T>(fn: () => Promise<T>, acquireTimeoutMs: number): Promise<T> {
-    await this.acquire(acquireTimeoutMs);
-    try {
-      return await fn();
-    } finally {
-      this.release();
-    }
-  }
-
-  private acquire(timeoutMs: number): Promise<void> {
-    if (this.active < this.max) {
-      this.active++;
-      return Promise.resolve();
-    }
-    return new Promise<void>((resolve, reject) => {
-      let timer: ReturnType<typeof setTimeout>;
-      const entry = {
-        resolve: () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        reject,
-      };
-      timer = setTimeout(() => {
-        const i = this.waiters.indexOf(entry);
-        if (i >= 0) this.waiters.splice(i, 1);
-        reject(
-          new Error(
-            `Wiki.js gateway busy: ${this.max} concurrent upstream requests already in flight ` +
-              `and no slot freed within ${timeoutMs} ms. Try again shortly (raise WIKIJS_MAX_CONCURRENCY ` +
-              `only if the Wiki.js DB pool can take it).`,
-          ),
-        );
-      }, timeoutMs);
-      this.waiters.push(entry);
-    });
-  }
-
-  private release(): void {
-    const next = this.waiters.shift();
-    if (next) {
-      // Transfer the slot directly to the next waiter (active count stays the same).
-      next.resolve();
-    } else {
-      this.active--;
-    }
-  }
-}
-
-/** One gate per wiki, shared by every WikiClient talking to it; dropped when idle (A-20). */
-const gates = new Map<string, Semaphore>();
-
-async function gated<T>(baseUrl: string, fn: () => Promise<T>, acquireTimeoutMs: number): Promise<T> {
-  let gate = gates.get(baseUrl);
-  if (!gate) {
-    gate = new Semaphore(MAX_CONCURRENCY);
-    gates.set(baseUrl, gate);
-  }
-  try {
-    return await gate.run(fn, acquireTimeoutMs);
-  } finally {
-    if (gate.idle && gates.get(baseUrl) === gate) gates.delete(baseUrl);
-  }
-}
 
 export interface WikiClientOptions {
   /**
@@ -359,7 +276,7 @@ export class WikiClient {
       try {
         this.throwIfCancelled();
         await this.checkTarget();
-        return await gated(this.baseUrl, () => this.send<T>(query, variables), this.timeoutMs);
+        return await gated(this.baseUrl, MAX_CONCURRENCY, () => this.send<T>(query, variables), this.timeoutMs);
       } catch (err) {
         const retryable =
           err instanceof WikiConnectionError && !(err instanceof WikiRedirectError) && (readOnly || err.nothingSent);
@@ -445,7 +362,7 @@ export class WikiClient {
   async download(path: string, maxBytes = Infinity): Promise<{ data: Uint8Array; mime: string }> {
     this.throwIfCancelled();
     await this.checkTarget();
-    return gated(this.baseUrl, async () => {
+    return gated(this.baseUrl, MAX_CONCURRENCY, async () => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       try {
@@ -493,7 +410,7 @@ export class WikiClient {
   }): Promise<{ succeeded: boolean; message?: string }> {
     this.throwIfCancelled();
     await this.checkTarget();
-    return gated(this.baseUrl, async () => {
+    return gated(this.baseUrl, MAX_CONCURRENCY, async () => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       try {
