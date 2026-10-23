@@ -61,6 +61,9 @@ function generatePassword(): string {
 }
 
 const USER_MINIMAL = 'id name email providerKey isSystem isActive createdAt lastLoginAt';
+/** Wiki.js users.list has no limit argument: cap what reaches the model context (audit A-26). */
+const DEFAULT_USERS_LIMIT = 100;
+const MAX_USERS_LIMIT = 1000;
 
 // The Wiki.js users.search resolver only SELECTs id/email/name/providerKey/createdAt.
 // UserMinimal.isSystem and .isActive are Boolean! — requesting them on a search hit yields
@@ -110,13 +113,23 @@ export const userTools: ToolDef[] = [
     inputSchema: {
       filter: z.string().optional(),
       orderBy: z.string().optional(),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(MAX_USERS_LIMIT)
+        .optional()
+        .describe(`Max number of users returned (default ${DEFAULT_USERS_LIMIT}, up to ${MAX_USERS_LIMIT}).`),
     },
     handler: async (a, ctx) => {
       const data = await ctx.client.request(
         `query($filter:String,$orderBy:String){ users { list(filter:$filter,orderBy:$orderBy){ ${USER_MINIMAL} } } }`,
         { filter: a.filter, orderBy: a.orderBy },
       );
-      return ok(data.users.list);
+      const users: unknown[] = data.users.list ?? [];
+      const limit = a.limit ?? DEFAULT_USERS_LIMIT;
+      if (users.length <= limit) return ok(users);
+      return ok(users.slice(0, limit), `Showing ${limit} of ${users.length} users — pass a higher "limit" (max ${MAX_USERS_LIMIT}) or a filter.`);
     },
   },
   {

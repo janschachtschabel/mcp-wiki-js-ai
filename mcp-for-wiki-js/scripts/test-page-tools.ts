@@ -148,7 +148,7 @@ function fakeWiki(pages: FakePage[], extra?: Responder, opts: { forbidSingle?: b
     if (x !== undefined) return x;
     if (q.includes('list(tags:$tags)')) {
       const tag = (v.tags as string[])[0];
-      return { pages: { list: pages.filter((p) => p.tags?.includes(tag)).map((p) => ({ id: p.id, path: p.path })) } };
+      return { pages: { list: pages.filter((p) => p.tags?.includes(tag)).map((p) => ({ id: p.id, path: p.path, locale: p.locale })) } };
     }
     if (q.includes('list(locale:$locale)')) {
       return {
@@ -416,6 +416,7 @@ async function reauditPageTests(): Promise<void> {
 
   await a01TeamUserTests(tool);
   await phase1FollowUpTests(tool);
+  await s4Tests(tool);
 
   const upload = tool('wiki_asset_upload');
   const uploads: number[] = [];
@@ -572,3 +573,117 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+
+// ---------------------------------------------------------------------------
+// Audit 2026-10-23 package S4: A-08, A-18, A-23, A-26, A-27
+// ---------------------------------------------------------------------------
+async function s4Tests(tool: (name: string) => ToolDef): Promise<void> {
+  const { clearSiteLocaleCache } = await import('../lib/wikijs/site-locale');
+  const mutation = (wk: ReturnType<typeof fakeWiki>, field: string) => wk.mutations.find((m) => m.q.includes(`${field}(`));
+
+  // ---- A-08: bulk delete inputs are bounded; lookups stay linear --------------
+  const batchSchema = z.object(tool('wiki_pages_delete_batch').inputSchema);
+  const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
+  check('A-08: more than 1000 ids are rejected', !batchSchema.safeParse({ ids: range(1001) }).success);
+  check('A-08: more than 1000 paths are rejected', !batchSchema.safeParse({ paths: range(1001).map((i) => `p${i}`) }).success);
+  check('A-08: an overlong path is rejected', !batchSchema.safeParse({ paths: ['x'.repeat(513)] }).success);
+  check('A-08: 1000 ids are accepted', batchSchema.safeParse({ ids: range(1000) }).success);
+  const many: FakePage[] = range(3000).map((i) => ({ id: i, path: `bulk/p${i}`, locale: 'en' }));
+  let w = fakeWiki(many);
+  let r = await outcome(
+    tool('wiki_pages_delete_batch'),
+    { ids: [1, 2, 99999], paths: ['bulk/p3', '/bulk/p4/', 'bulk/missing'], locale: 'en' },
+    stubCtx(w.respond, 's4a'),
+  );
+  check('A-08: ids and paths still resolve (found + notFound)', !r.isError && sorted(w.deleted) === '1,2,3,4' && r.text.includes('#99999') && r.text.includes('bulk/missing'));
+
+  // ---- A-18: Wiki.js drops all tags on restore and returns none for versions --
+  w = fakeWiki([{ id: 1, path: 'docs/a', locale: 'en', content: 'x', tags: ['team', 'howto'] }]);
+  r = await outcome(tool('wiki_page_restore'), { pageId: 1, versionId: 2 }, stubCtx(w.respond, 's4r'));
+  check('A-18: restore runs and names the tags Wiki.js removed', !r.isError && mutation(w, 'restore') !== undefined && /tags/i.test(r.text) && r.text.includes('team') && r.text.includes('howto'));
+  w = fakeWiki([{ id: 1, path: 'docs/a', locale: 'en', content: 'x' }]);
+  r = await outcome(tool('wiki_page_restore'), { pageId: 1, versionId: 2 }, stubCtx(w.respond, 's4r2'));
+  check('A-18: restore of an untagged page has no tag warning', !r.isError && !/removed/i.test(r.text));
+  w = fakeWiki([{ id: 1, path: 'docs/a', locale: 'en', content: 'x' }], (q) =>
+    q.includes('version(') ? { pages: { version: { versionId: 2, pageId: 1, path: 'docs/a', content: 'old' } } } : undefined,
+  );
+  r = await outcome(tool('wiki_page_version'), { pageId: 1, versionId: 2 }, stubCtx(w.respond, 's4v'));
+  check('A-18: page_version no longer asks for the always-empty version tags', !r.isError && !w.queries.some((q) => q.includes('version(') && /\btags\b/.test(q)));
+
+  // ---- A-23: comments of blocked pages, addressed by comment id ----------------
+  const pagesWithComments: FakePage[] = [
+    { id: 5, path: 'intern/geheim', locale: 'en', tags: ['kein-ki'] },
+    { id: 6, path: 'docs/ok', locale: 'en' },
+  ];
+  const commentCalls: string[] = [];
+  const comments = (q: string, v: Record<string, unknown>) => {
+    if (q.includes('comments { list')) return { comments: { list: v.path === 'intern/geheim' ? [{ id: 41 }, { id: 42 }] : [{ id: 7 }] } };
+    if (q.includes('comments { single')) {
+      commentCalls.push('single');
+      return { comments: { single: v.id === 77 ? null : { id: v.id, content: 'c' } } };
+    }
+    if (q.includes('comments { update')) {
+      commentCalls.push('update');
+      return { comments: { update: { responseResult: { succeeded: true }, render: '' } } };
+    }
+    if (q.includes('comments { delete')) {
+      commentCalls.push('delete');
+      return { comments: { delete: { responseResult: { succeeded: true } } } };
+    }
+    return undefined;
+  };
+  const commentRun = async (name: string, args: Record<string, unknown>, key: string) => {
+    commentCalls.length = 0;
+    const wk = fakeWiki(pagesWithComments, comments);
+    return outcome(tool(name), args, stubCtx(wk.respond, key));
+  };
+  r = await commentRun('wiki_comment_get', { id: 41 }, 's4c1');
+  check('A-23: reading a comment of a blocked page by id is refused', r.isError && commentCalls.length === 0);
+  r = await commentRun('wiki_comment_update', { id: 42, content: 'x' }, 's4c2');
+  check('A-23: editing a comment of a blocked page is refused', r.isError && commentCalls.length === 0);
+  r = await commentRun('wiki_comment_delete', { id: 41 }, 's4c3');
+  check('A-23: deleting a comment of a blocked page is refused', r.isError && commentCalls.length === 0);
+  r = await commentRun('wiki_comment_get', { id: 7 }, 's4c4');
+  check('A-23: a comment of an unblocked page still loads', !r.isError && commentCalls.includes('single'));
+  r = await commentRun('wiki_comment_delete', { id: 7 }, 's4c5');
+  check('A-23: a comment of an unblocked page can still be deleted', !r.isError && commentCalls.includes('delete'));
+
+  // ---- A-27: an unreadable comment is an error, not ok(null) --------------------
+  r = await commentRun('wiki_comment_get', { id: 77 }, 's4c6');
+  check('A-27: comment_get of an unknown/unreadable id is an error', r.isError && r.text.includes('77'));
+
+  // ---- A-26: default limits ------------------------------------------------------
+  const listed = range(250).map((i) => ({ id: i, path: `list/x${i}y`, locale: 'en', title: `T${i}` }));
+  let sentLimit: unknown;
+  w = fakeWiki([], (q, v) => {
+    if (!q.includes('orderBy')) return undefined;
+    sentLimit = v.limit;
+    return { pages: { list: listed.slice(0, (v.limit as number | undefined) ?? listed.length) } };
+  });
+  r = await outcome(tool('wiki_pages_list'), {}, stubCtx(w.respond, 's4l1'));
+  check('A-26: pages_list sends a default limit of 100', sentLimit === 100);
+  check('A-26: a full page of results says that more may exist', !r.isError && /limit/i.test(r.text) && r.text.includes('list/x100y') && !r.text.includes('list/x101y'));
+  r = await outcome(tool('wiki_pages_list'), { limit: 500 }, stubCtx(w.respond, 's4l2'));
+  check('A-26: an explicit limit wins; a short result has no note', sentLimit === 500 && !r.isError && !/more may exist/i.test(r.text));
+  const links = range(600).map((i) => ({ id: i, path: `en/links/x${i}y`, title: `L${i}`, links: [] }));
+  w = fakeWiki([], (q) => (q.includes('links(locale') ? { pages: { links } } : undefined));
+  r = await outcome(tool('wiki_pages_links'), { locale: 'en' }, stubCtx(w.respond, 's4l3'));
+  check('A-26: pages_links returns at most 500 entries by default and says so', !r.isError && r.text.includes('links/x500y') && !r.text.includes('links/x501y') && /limit/i.test(r.text));
+
+  // ---- A-26: the default locale is the site locale, not a hard "en" --------------
+  check('A-26: page_get no longer injects locale "en"', z.object(tool('wiki_page_get').inputSchema).parse({ path: 'x' }).locale === undefined);
+  clearSiteLocaleCache();
+  w = fakeWiki([{ id: 3, path: 'start', locale: 'de', title: 'Start', content: 'x' }], (q) =>
+    q.includes('localization') ? { localization: { config: { locale: 'de' } } } : undefined,
+  );
+  r = await outcome(tool('wiki_page_get'), { path: 'start' }, stubCtx(w.respond, 's4loc1'));
+  check('A-26: without locale, a path lookup uses the site locale', !r.isError && r.text.includes('Start'));
+  clearSiteLocaleCache();
+  w = fakeWiki([{ id: 3, path: 'start', locale: 'en', title: 'Start', content: 'x' }], (q) => {
+    if (q.includes('localization')) throw new Error('Forbidden');
+    return undefined;
+  });
+  r = await outcome(tool('wiki_page_get'), { path: 'start' }, stubCtx(w.respond, 's4loc2'));
+  check('A-26: an unreadable site locale falls back to "en"', !r.isError && r.text.includes('Start'));
+  clearSiteLocaleCache();
+}

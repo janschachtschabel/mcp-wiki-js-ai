@@ -1,5 +1,6 @@
 import type { WikiContext } from '../../context';
 import { DEFAULT_RESPONSE } from '../types';
+import { localeOrSite } from '../../wikijs/site-locale';
 
 export const PAGE_META_FIELDS =
   'id path title description isPrivate isPublished locale contentType createdAt updatedAt authorId authorName creatorId creatorName tags { tag title }';
@@ -108,8 +109,9 @@ export async function requirePageId(
 ): Promise<number> {
   if (a.id != null) return a.id;
   if (a.path) {
-    const id = await resolvePathToId(ctx, a.path, a.locale ?? 'en');
-    if (id == null) throw new Error(`No page at ${a.path} (${a.locale ?? 'en'}).`);
+    const locale = await localeOrSite(ctx, a.locale);
+    const id = await resolvePathToId(ctx, a.path, locale);
+    if (id == null) throw new Error(`No page at ${a.path} (${locale}).`);
     return id;
   }
   throw new Error('Provide either "id" or "path".');

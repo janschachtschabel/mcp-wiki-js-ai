@@ -290,9 +290,9 @@ nur noch für Legacy-Handle-Zugänge (`WIKIJS_PROFILES`).
 
 - Ein-Klick-SSO setzt **gleiche Domain** für Wiki und MCP voraus (Appliance
   macht das automatisch); sonst erscheint das Login-Formular.
-- Von der **Tag**-Sperre ausgenommen sind `wiki_comment_get`/`_update`/
-  `_delete` (per Kommentar-ID; Wiki.js liefert dort keine Seiten-ID) und
-  `wiki_graphql` (für harte Sperren Pfad-Rules nutzen); `wiki_graphql` ist in
+- Von der **Tag**-Sperre ausgenommen ist `wiki_graphql` (für harte Sperren
+  Pfad-Rules nutzen); Kommentare per ID werden gegen die Kommentare der
+  gesperrten Seiten geprüft; `wiki_graphql` ist in
   allen Rollen außer `systemadmin`/`full` gesperrt (auch in der OAuth-Rolle
   `wiki`).
 - Im Wiki keine Seiten unter `me/`, `oauth/`, `mcp`, `api/` anlegen

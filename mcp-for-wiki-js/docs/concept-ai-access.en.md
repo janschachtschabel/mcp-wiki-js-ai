@@ -253,9 +253,9 @@ legacy handle access (`WIKIJS_PROFILES`).
 
 - One-click SSO requires the **same domain** for wiki and MCP (the appliance
   does this automatically); otherwise the login form appears.
-- Exempt from the **tag** guardrail: `wiki_comment_get`/`_update`/`_delete`
-  (addressed by comment id; Wiki.js returns no page id there) and
-  `wiki_graphql` (use path rules for hard blocking); `wiki_graphql` is
+- Exempt from the **tag** guardrail: `wiki_graphql` (use path rules for hard
+  blocking); comments addressed by id are checked against the comments of
+  the blocked pages; `wiki_graphql` is
   blocked in every role except `systemadmin`/`full` (including the OAuth role
   `wiki`).
 - Do not create wiki pages under `me/`, `oauth/`, `mcp`, `api/` —

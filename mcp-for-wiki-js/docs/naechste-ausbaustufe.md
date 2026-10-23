@@ -26,8 +26,8 @@ die bewusst zurückgestellt wurden.
 - [ ] **DNS-Rebinding im reinen BYOK-Betrieb** vollständig schließen: eigener undici-Dispatcher mit
   `connect.lookup`, der die tatsächlich verbundene Adresse prüft (derzeit: Prüfung vor dem Request,
   `fetch` löst erneut auf). Betrifft nur Betrieb ohne `WIKIJS_URL`/`WIKIJS_ALLOWED_URLS`.
-- [ ] **Kommentar-Tools per ID** (`wiki_comment_get/update/delete`) gegen die Tag-Sperre prüfen —
-  Wiki.js liefert dort keine Seiten-ID; Weg: Kommentar-IDs der gesperrten Seiten sammeln.
+- [x] **Kommentar-Tools per ID** (`wiki_comment_get/update/delete`) gegen die Tag-Sperre prüfen —
+  erledigt (Audit 2026-10-23 A-23): Kommentar-IDs der gesperrten Seiten werden gesammelt.
 - [ ] **Massenlöschen:** Bestätigung zusätzlich über einen Hash der Ziel-IDs binden
   (`expectedHash`), nicht nur über die Anzahl.
 - [ ] **`wiki_graphql`:** Secrets direkt im Query-Text (nicht in `variables`) werden in der

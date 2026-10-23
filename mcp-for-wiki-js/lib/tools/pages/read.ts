@@ -9,9 +9,14 @@ import {
   filterBlockedPages,
 } from '../../guardrails';
 import { DEFAULT_MAX_CONTENT, fetchLatestPage, findListedPage, isViewForbidden, rethrowMissingPage, singleSelection } from './shared';
+import { localeOrSite } from '../../wikijs/site-locale';
 
 /** Upper bounds for caller-chosen page sizes (audit R-46). */
 const MAX_LIST_LIMIT = 1000;
+/** Without a limit Wiki.js returns every page into the model context (audit A-26). */
+const DEFAULT_LIST_LIMIT = 100;
+const DEFAULT_LINKS_LIMIT = 500;
+const MAX_LINKS_LIMIT = 10_000;
 const MAX_HISTORY_PAGE = 500;
 
 export const pageReadTools: ToolDef[] = [
@@ -49,7 +54,7 @@ export const pageReadTools: ToolDef[] = [
     inputSchema: {
       id: z.number().int().optional().describe('Page id (mutually exclusive with path).'),
       path: z.string().optional().describe('Page path, e.g. "docs/intro" (requires locale).'),
-      locale: z.string().default('en').describe('Locale for path lookup. Default "en".'),
+      locale: z.string().optional().describe("Locale for path lookup. Default: the wiki's site locale."),
       metadataOnly: z.boolean().default(false).describe('If true, omit the page content/body.'),
       includeRender: z.boolean().default(false).describe('If true, also return the rendered HTML.'),
       maxContentChars: z
@@ -63,7 +68,7 @@ export const pageReadTools: ToolDef[] = [
       if (a.id == null && !a.path) throw new Error('Provide either "id" or "path".');
       const selection = singleSelection(!a.metadataOnly, !!a.includeRender);
       const limit = a.maxContentChars ?? DEFAULT_MAX_CONTENT;
-      const locale = a.locale ?? 'en';
+      const locale = a.id == null ? await localeOrSite(ctx, a.locale) : (a.locale ?? '');
       const what = a.id != null ? `Page ${a.id}` : `Page ${a.path}`;
       const notFound = a.id != null ? `No page with id ${a.id}` : `No page at ${a.path} (${locale})`;
       let page: { tags?: unknown; content?: string } | null;
@@ -97,7 +102,7 @@ export const pageReadTools: ToolDef[] = [
     description: 'List pages with optional filtering by locale/tags and ordering.',
     category: 'read',
     inputSchema: {
-      limit: z.number().int().positive().max(MAX_LIST_LIMIT).optional().describe(`Max number of pages (up to ${MAX_LIST_LIMIT}).`),
+      limit: z.number().int().positive().max(MAX_LIST_LIMIT).optional().describe(`Max number of pages (default ${DEFAULT_LIST_LIMIT}, up to ${MAX_LIST_LIMIT}).`),
       locale: z.string().optional(),
       tags: z.array(z.string()).optional().describe('Only pages carrying all of these tags.'),
       orderBy: z.enum(['CREATED', 'ID', 'PATH', 'TITLE', 'UPDATED']).default('TITLE'),
@@ -106,10 +111,11 @@ export const pageReadTools: ToolDef[] = [
       authorId: z.number().int().optional(),
     },
     handler: async (a, ctx) => {
+      const limit = a.limit ?? DEFAULT_LIST_LIMIT;
       const data = await ctx.client.request(
         `query($limit:Int,$orderBy:PageOrderBy,$orderByDirection:PageOrderByDirection,$tags:[String!],$locale:String,$creatorId:Int,$authorId:Int){ pages { list(limit:$limit,orderBy:$orderBy,orderByDirection:$orderByDirection,tags:$tags,locale:$locale,creatorId:$creatorId,authorId:$authorId){ id path locale title description contentType isPublished isPrivate createdAt updatedAt tags } } }`,
         {
-          limit: a.limit,
+          limit,
           orderBy: a.orderBy ?? 'TITLE',
           orderByDirection: a.orderByDirection ?? 'ASC',
           tags: a.tags,
@@ -124,7 +130,11 @@ export const pageReadTools: ToolDef[] = [
       const blocked = await blockedPageSets(ctx);
       const { visible } = filterBlockedPages(pages.filter((p) => !blocked.ids.has(Number(p.id))));
       const hidden = pages.length - visible.length;
-      return ok(hidden > 0 ? { pages: visible, hiddenByTagGuardrail: hidden } : visible);
+      const more =
+        pages.length >= limit
+          ? `Showing the first ${limit} pages — more may exist; pass a higher "limit" (max ${MAX_LIST_LIMIT}) or filter.`
+          : undefined;
+      return ok(hidden > 0 ? { pages: visible, hiddenByTagGuardrail: hidden } : visible, more);
     },
   },
   {
@@ -135,7 +145,7 @@ export const pageReadTools: ToolDef[] = [
       path: z.string().optional().describe('Folder path to list under (root = "").'),
       parent: z.number().int().optional().describe('Parent folder id (alternative to path).'),
       mode: z.enum(['FOLDERS', 'PAGES', 'ALL']).default('ALL'),
-      locale: z.string().default('en'),
+      locale: z.string().optional().describe("Default: the wiki's site locale."),
       includeAncestors: z.boolean().default(false),
     },
     handler: async (a, ctx) => {
@@ -145,7 +155,7 @@ export const pageReadTools: ToolDef[] = [
           path: a.parent != null ? undefined : (a.path ?? ''),
           parent: a.parent,
           mode: a.mode ?? 'ALL',
-          locale: a.locale ?? 'en',
+          locale: await localeOrSite(ctx, a.locale),
           includeAncestors: !!a.includeAncestors,
         },
       );
@@ -194,15 +204,15 @@ export const pageReadTools: ToolDef[] = [
         .describe(`Truncate content above this many chars (default ${DEFAULT_MAX_CONTENT}; 0 = unlimited).`),
     },
     handler: async (a, ctx) => {
-      // Guard against BOTH the current tags and the historical version's tags.
+      // Wiki.js returns no tags for versions (getVersion sets tags: []), so only the
+      // page's CURRENT tags can be checked (audit A-18).
       await assertPageIdNotBlocked(ctx, a.pageId, `Page ${a.pageId}`);
       const data = await ctx.client
         .request(
-          `query($pageId:Int!,$versionId:Int!){ pages { version(pageId:$pageId,versionId:$versionId){ versionId pageId path title description content contentType editor locale isPrivate isPublished tags action authorName versionDate createdAt } } }`,
+          `query($pageId:Int!,$versionId:Int!){ pages { version(pageId:$pageId,versionId:$versionId){ versionId pageId path title description content contentType editor locale isPrivate isPublished action authorName versionDate createdAt } } }`,
           { pageId: a.pageId, versionId: a.versionId },
         )
         .catch((err: unknown) => rethrowMissingPage(err, a.pageId));
-      if (data.pages.version) assertTagsNotBlocked(data.pages.version.tags, `Page ${a.pageId}`);
       return ok(truncateContent(data.pages.version, a.maxContentChars ?? DEFAULT_MAX_CONTENT));
     },
   },
@@ -210,11 +220,20 @@ export const pageReadTools: ToolDef[] = [
     name: 'wiki_pages_links',
     description: 'List all internal links between pages for a locale (useful for finding broken links).',
     category: 'read',
-    inputSchema: { locale: z.string().default('en') },
+    inputSchema: {
+      locale: z.string().optional().describe("Default: the wiki's site locale."),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(MAX_LINKS_LIMIT)
+        .optional()
+        .describe(`Max number of pages returned (default ${DEFAULT_LINKS_LIMIT}, up to ${MAX_LINKS_LIMIT}).`),
+    },
     handler: async (a, ctx) => {
       const data = await ctx.client.request(
         `query($locale:String!){ pages { links(locale:$locale){ id path title links } } }`,
-        { locale: a.locale ?? 'en' },
+        { locale: await localeOrSite(ctx, a.locale) },
       );
       // Entries are "<locale>/<path>"; drop blocked pages and every link pointing at one.
       const blocked = await blockedPageSets(ctx);
@@ -223,7 +242,9 @@ export const pageReadTools: ToolDef[] = [
       const visible = all
         .filter((p) => !blocked.ids.has(Number(p.id)) && !isBlockedRef(p.path))
         .map((p) => ({ ...p, links: (p.links ?? []).filter((l) => !isBlockedRef(l)) }));
-      return ok(visible);
+      const limit = a.limit ?? DEFAULT_LINKS_LIMIT;
+      if (visible.length <= limit) return ok(visible);
+      return ok(visible.slice(0, limit), `Showing ${limit} of ${visible.length} pages — pass a higher "limit" (max ${MAX_LINKS_LIMIT}).`);
     },
   },
   {

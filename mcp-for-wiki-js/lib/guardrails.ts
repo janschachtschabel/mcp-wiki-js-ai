@@ -80,6 +80,8 @@ export interface BlockedPageSets {
    *  a locale migration Wiki.js does not reindex), so id-only filtering would
    *  leak title/path of a blocked page under an outdated id — paths close that. */
   paths: Set<string>;
+  /** The blocked pages themselves (path + locale), e.g. to list their comments. */
+  pages: { path: string; locale: string }[];
 }
 
 /**
@@ -109,18 +111,19 @@ function cacheKey(ctx: WikiContext): string {
  */
 export async function blockedPageSets(ctx: WikiContext, opts: { fresh?: boolean } = {}): Promise<BlockedPageSets> {
   const blocked = blockedTags();
-  if (blocked.size === 0) return { ids: new Set(), paths: new Set() };
+  if (blocked.size === 0) return { ids: new Set(), paths: new Set(), pages: [] };
   const key = cacheKey(ctx);
   const cached = cache.get(key);
   if (!opts.fresh && cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.sets;
 
-  const sets: BlockedPageSets = { ids: new Set(), paths: new Set() };
+  const sets: BlockedPageSets = { ids: new Set(), paths: new Set(), pages: [] };
   for (const tag of blocked) {
-    const data = await ctx.client.request<{ pages: { list: { id: number; path: string }[] } }>(
-      `query($tags:[String!]){ pages { list(tags:$tags) { id path } } }`,
+    const data = await ctx.client.request<{ pages: { list: { id: number; path: string; locale: string }[] } }>(
+      `query($tags:[String!]){ pages { list(tags:$tags) { id path locale } } }`,
       { tags: [tag] },
     );
     for (const p of data.pages.list) {
+      if (!sets.ids.has(p.id)) sets.pages.push({ path: p.path, locale: p.locale });
       sets.ids.add(p.id);
       sets.paths.add(blockedPathKey(p.path));
     }
@@ -181,6 +184,25 @@ export async function assertNotInBlockedSet(ctx: WikiContext, page: { id?: numbe
   if ((page.id != null && sets.ids.has(page.id)) || (page.path != null && sets.paths.has(blockedPathKey(page.path)))) {
     throw blockedPageError(what);
   }
+}
+
+/**
+ * For comment tools that only have a comment id: CommentPost carries no pageId, so
+ * the comments of every blocked page are listed and the id looked up (audit A-23).
+ * Always fresh. Fails closed — an error listing a blocked page's comments propagates.
+ */
+export async function assertCommentNotBlocked(ctx: WikiContext, commentId: number, what: string): Promise<void> {
+  if (blockedTags().size === 0) return;
+  const { pages } = await blockedPageSets(ctx, { fresh: true });
+  const lists = await Promise.all(
+    pages.map((p) =>
+      ctx.client.request<{ comments: { list: { id: number }[] } }>(
+        `query($locale:String!,$path:String!){ comments { list(locale:$locale,path:$path){ id } } }`,
+        { locale: p.locale, path: p.path },
+      ),
+    ),
+  );
+  if (lists.some((l) => l.comments.list.some((c) => c.id === commentId))) throw blockedPageError(what);
 }
 
 /** Test hook. */

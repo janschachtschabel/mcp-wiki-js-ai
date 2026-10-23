@@ -86,6 +86,9 @@ async function main(): Promise<void> {
     post('/mcp?token=handle', streamed(MCP_BODY_LIMIT + 1, 256 * KB), { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }),
   );
   check('/mcp?token=…: oversized body → 413 (before routing/auth)', mcpRes.status === 413);
+  // A-27: MCP clients parse JSON-RPC, not a plain-text 413 body.
+  const rpc = JSON.parse(await mcpRes.text()) as { jsonrpc?: string; id?: unknown; error?: { code?: number; message?: string } };
+  check('A-27: /mcp answers 413 with a JSON-RPC error body', mcpRes.headers.get('content-type')?.includes('application/json') === true && rpc.jsonrpc === '2.0' && rpc.id === null && typeof rpc.error?.code === 'number' && /too large/i.test(rpc.error?.message ?? ''));
   // A-05/A-29: the plain header path (no query params) is capped as well — mcp-handler
   // would otherwise buffer the whole body via req.clone().json().
   const headerRes = await mcpPost(

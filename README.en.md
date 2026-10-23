@@ -182,7 +182,7 @@ requarks/wiki) and `mcp2/` (community MCP servers used for comparison).
 |---|---|---|
 | Access rights | **Wiki.js** (groups, page rules — per person) | hard, server-side; applies to AI sessions too |
 | Area lock-out | Wiki.js: path-based **deny page rule** (e.g. `/internal/*`) | reliable, including search |
-| Tag guardrail | Tag (e.g. `kein-ki`) on the page + `WIKIJS_BLOCKED_TAGS` on the MCP server | MCP hides the page from agents (search/list/tree/links/read) and refuses writes/moves/deletes; exception: comments addressed only by their comment id |
+| Tag guardrail | Tag (e.g. `kein-ki`) on the page + `WIKIJS_BLOCKED_TAGS` on the MCP server | MCP hides the page from agents (search/list/tree/links/read) and refuses writes/moves/deletes (also comments of blocked pages, even by comment id); exception: `wiki_graphql` |
 | Agent brake | MCP role `wiki` (default for OAuth sessions) | destructive/admin actions return a **dry-run preview** first; they execute only when the AI calls again with `confirm: true` — the AI relays the question to you in chat, but it sets `confirm` itself: a brake, **not** a human approval |
 
 **How the confirm prompt works:** the MCP server never talks to the human

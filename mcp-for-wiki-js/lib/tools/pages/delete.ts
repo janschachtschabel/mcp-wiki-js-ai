@@ -4,6 +4,7 @@ import { ok, fail, assertOk, wildcardMatcher } from '../../wikijs/format';
 import { DEFAULT_RESPONSE, type ToolDef } from '../types';
 import { assertPageIdNotBlocked, assertTagIdNotBlocked, blockedPageIds } from '../../guardrails';
 import { DELETE_PAGE, LIST_ALL_PATHS, requirePageId } from './shared';
+import { localeOrSite } from '../../wikijs/site-locale';
 
 /** Without force, one call deletes at most this many pages (audit R-06). */
 export const MAX_DELETE_WITHOUT_FORCE = 50;
@@ -11,6 +12,8 @@ export const MAX_DELETE_WITHOUT_FORCE = 50;
 const LISTED_TARGETS = 100;
 /** Longest accepted pathPattern — matching cost must stay small per page (review 2026-10-21 #1). */
 const MAX_PATH_PATTERN = 512;
+/** Most ids / paths one batch call may name (audit A-08). */
+const MAX_BATCH_ITEMS = 1000;
 /** ISO-8601 duration (Y M W D, then T H M S) with at least one component. */
 const ISO_DURATION = /^P(?=\d|T\d)(\d+Y)?(\d+M)?(\d+W)?(\d+D)?(T(?=\d)(\d+H)?(\d+M)?(\d+(\.\d+)?S)?)?$/;
 
@@ -44,20 +47,21 @@ async function withoutBlocked(ctx: WikiContext, found: Target[]): Promise<{ targ
 
 /** ids (any locale), paths and pathPattern (both in `locale`) → the pages a batch delete would hit. */
 async function resolveBatchTargets(a: any, ctx: WikiContext): Promise<Resolved> {
-  const locale: string = a.locale ?? 'en';
+  const locale = await localeOrSite(ctx, a.locale);
   const ids: number[] = a.ids ?? [];
   const paths: string[] = a.paths ?? [];
   const all = ids.length > 0 || paths.length > 0 || a.pathPattern ? await listPages(ctx) : [];
+  const byId = new Map(all.map((p) => [p.id, p]));
+  const byPath = new Map(all.filter((p) => p.locale === locale).map((p) => [p.path, p]));
   const found = new Map<number, Target>();
   const notFound: string[] = [];
   for (const id of ids) {
-    const page = all.find((p) => p.id === id);
+    const page = byId.get(id);
     if (page) found.set(id, page);
     else notFound.push(`#${id}`);
   }
   for (const raw of paths) {
-    const path = normalizePath(raw);
-    const page = all.find((p) => p.path === path && p.locale === locale);
+    const page = byPath.get(normalizePath(raw));
     if (page) found.set(page.id, page);
     else notFound.push(raw);
   }
@@ -72,7 +76,7 @@ async function resolveBatchTargets(a: any, ctx: WikiContext): Promise<Resolved> 
 async function resolveTreeTargets(a: any, ctx: WikiContext): Promise<Resolved> {
   const root = normalizePath(String(a.rootPath));
   const mode = a.mode ?? 'children_only';
-  const locale: string = a.locale ?? 'en';
+  const locale = await localeOrSite(ctx, a.locale);
   let found = (await listPages(ctx, locale)).filter(
     (p) => p.locale === locale && (p.path === root || p.path.startsWith(`${root}/`)),
   );
@@ -172,7 +176,7 @@ export const pageDeleteTools: ToolDef[] = [
     inputSchema: {
       id: z.number().int().optional().describe('Page id (or use path+locale).'),
       path: z.string().optional().describe('Page path (alternative to id).'),
-      locale: z.string().default('en').describe('Locale for path lookup.'),
+      locale: z.string().optional().describe("Locale for path lookup. Default: the wiki's site locale."),
     },
     handler: async (a, ctx) => {
       const id = await requirePageId(ctx, a);
@@ -192,14 +196,14 @@ export const pageDeleteTools: ToolDef[] = [
       EXPECTED_COUNT_HINT,
     category: 'delete',
     inputSchema: {
-      ids: z.array(z.number().int()).optional(),
-      paths: z.array(z.string()).optional(),
+      ids: z.array(z.number().int()).max(MAX_BATCH_ITEMS).optional(),
+      paths: z.array(z.string().max(MAX_PATH_PATTERN)).max(MAX_BATCH_ITEMS).optional(),
       pathPattern: z
         .string()
         .max(MAX_PATH_PATTERN)
         .optional()
         .describe('Wildcard against page paths: "*", "?" (one segment), "**" (any depth).'),
-      locale: z.string().default('en').describe('Locale for "paths" and "pathPattern" (ids are locale-independent).'),
+      locale: z.string().optional().describe('Locale for "paths" and "pathPattern" (ids are locale-independent). Default: the site locale.'),
       force: forceField,
       expectedCount: expectedCountField,
     },
@@ -216,7 +220,7 @@ export const pageDeleteTools: ToolDef[] = [
     inputSchema: {
       rootPath: z.string().min(1),
       mode: z.enum(['children_only', 'include_root', 'root_only']).default('children_only'),
-      locale: z.string().default('en').describe('Locale of the subtree.'),
+      locale: z.string().optional().describe("Locale of the subtree. Default: the wiki's site locale."),
       force: forceField,
       expectedCount: expectedCountField,
     },

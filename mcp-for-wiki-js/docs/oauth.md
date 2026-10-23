@@ -177,9 +177,9 @@ für: search, get, list, history, version, render, update, move, convert,
 restore, delete (einzeln/batch/tree); tree/links blenden gesperrte Seiten aus
 (`wiki_pages_tree` liefert dann `{ tree, hiddenByTagGuardrail }`);
 `wiki_comments_list` und `wiki_comment_create` werden für gesperrte Seiten
-abgelehnt. **Nicht** geprüft: `wiki_comment_get`/`_update`/`_delete` (per
-Kommentar-ID; Wiki.js liefert dort keine Seiten-ID) und `wiki_graphql`
-(Escape-Hatch; in der OAuth-Rolle `wiki` und allen anderen Rollen außer
+abgelehnt, ebenso `wiki_comment_get`/`_update`/`_delete` für Kommentare
+gesperrter Seiten (abgeglichen über deren Kommentarlisten). **Nicht** geprüft:
+`wiki_graphql` (Escape-Hatch; in der OAuth-Rolle `wiki` und allen anderen Rollen außer
 `systemadmin`/`full` gesperrt). Ablehnungen der Tag-Sperre bei schreibenden
 Tools stehen im Audit-Log als `blocked`. KI-Zugänge sollten nie
 `manage:system` in Wiki.js haben — das hebelt dort ALLE Page-Rules aus.

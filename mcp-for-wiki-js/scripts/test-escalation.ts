@@ -311,6 +311,19 @@ async function main(): Promise<void> {
   ));
   check('A-31: a javascript: navigation target is refused before any request', jsLink.isError && s.calls.requests.length === 0);
 
+  // ---- A-26 / A-27 (S4): users_list limit, honest connection status -------------
+  const users = Array.from({ length: 150 }, (_, i) => ({ id: i + 1, name: `U${i + 1}` }));
+  s = stubCtx('systemadmin', { fallback: { users: { list: users } } });
+  const ul = JSON.stringify(await tool('wiki_users_list').handler({}, s.ctx));
+  check('A-26: users_list returns at most 100 users by default and says so', /U100\b/.test(ul) && !/U101\b/.test(ul) && /limit/.test(ul));
+  s = stubCtx('systemadmin', { fallback: { users: { list: users } } });
+  const ul2 = JSON.stringify(await tool('wiki_users_list').handler({ limit: 200 }, s.ctx));
+  check('A-26: users_list honours an explicit limit', /U150\b/.test(ul2));
+  s = stubCtx('systemadmin', { fallback: { pages: { list: [] } } });
+  (s.ctx as { hasToken: boolean }).hasToken = false;
+  const anon = await tool('wiki_connection_status').handler({}, s.ctx);
+  check('A-27: connection_status without a token does not claim "authenticated"', /"authenticated": false/.test((anon.content[0] as { text: string }).text));
+
   if (failed === 0) {
     console.log(`\n${pass} escalation assertions passed.`);
   } else {

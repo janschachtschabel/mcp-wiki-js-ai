@@ -7,6 +7,7 @@ import { parameterGate } from '../gate';
 import { assertPageIdNotBlocked, assertTagIdNotBlocked, assertTagsNotBlocked } from '../../guardrails';
 import { MCP_BODY_LIMIT } from '../../body-limit';
 import { fetchLatestPage, findListedPage, isViewForbidden, requirePageId } from './shared';
+import { localeOrSite } from '../../wikijs/site-locale';
 
 /**
  * Page JS/CSS runs for every visitor of the page (stored XSS in the wiki origin),
@@ -67,7 +68,7 @@ export const pageWriteTools: ToolDef[] = [
       content: z.string().describe('Page body (markdown by default).'),
       description: z.string().default(''),
       editor: z.string().default('markdown').describe('Editor type: markdown | html | ...'),
-      locale: z.string().default('en'),
+      locale: z.string().optional().describe("Default: the wiki's site locale."),
       tags: z.array(z.string()).default([]),
       isPublished: z.boolean().default(true),
       isPrivate: z.boolean().default(false),
@@ -86,7 +87,7 @@ export const pageWriteTools: ToolDef[] = [
           editor: a.editor ?? 'markdown',
           isPublished: a.isPublished ?? true,
           isPrivate: a.isPrivate ?? false,
-          locale: a.locale ?? 'en',
+          locale: await localeOrSite(ctx, a.locale),
           path: a.path,
           tags: a.tags ?? [],
           title: a.title,
@@ -211,7 +212,7 @@ export const pageWriteTools: ToolDef[] = [
     inputSchema: {
       id: z.number().int().optional().describe('Page id (or use path+locale).'),
       path: z.string().optional().describe('Current page path (alternative to id).'),
-      locale: z.string().default('en').describe('Current locale (for path lookup).'),
+      locale: z.string().optional().describe("Current locale (for path lookup). Default: the wiki's site locale."),
       destinationPath: z.string().min(1),
       destinationLocale: z.string().optional().describe('Target locale. Default: the page keeps its current locale.'),
     },
@@ -220,7 +221,7 @@ export const pageWriteTools: ToolDef[] = [
       await assertPageIdNotBlocked(ctx, id, `Page ${id}`);
       // Without an explicit target the page stays in its own locale (audit R-29).
       let destinationLocale: string | undefined = a.destinationLocale;
-      if (!destinationLocale && a.id == null) destinationLocale = a.locale ?? 'en';
+      if (!destinationLocale && a.id == null) destinationLocale = await localeOrSite(ctx, a.locale);
       if (!destinationLocale) {
         const cur = await findListedPage(ctx, { id });
         if (!cur) throw new Error(`No page with id ${id}`);
@@ -257,12 +258,19 @@ export const pageWriteTools: ToolDef[] = [
     inputSchema: { pageId: z.number().int(), versionId: z.number().int() },
     handler: async (a, ctx) => {
       await assertPageIdNotBlocked(ctx, a.pageId, `Page ${a.pageId}`);
+      // Wiki.js restores through updatePage with the version's tags, and versions carry
+      // none: every tag is dropped (audit A-18). Name them so they can be re-applied.
+      const { tags } = await fetchLatestPage(ctx, a.pageId);
       const data = await ctx.client.request(
         `mutation($pageId:Int!,$versionId:Int!){ pages { restore(pageId:$pageId,versionId:$versionId){ ${DEFAULT_RESPONSE} } } }`,
         { pageId: a.pageId, versionId: a.versionId },
       );
       assertOk(data.pages.restore.responseResult, 'Restore page');
-      return ok({ pageId: a.pageId, versionId: a.versionId }, '✅ Page restored.');
+      if (tags.length === 0) return ok({ pageId: a.pageId, versionId: a.versionId }, '✅ Page restored.');
+      return ok(
+        { pageId: a.pageId, versionId: a.versionId, tagsRemoved: tags },
+        `✅ Page restored. ⚠️ Wiki.js removed all tags on restore (${tags.join(', ')}) — re-apply them with wiki_page_update (tags).`,
+      );
     },
   },
   {

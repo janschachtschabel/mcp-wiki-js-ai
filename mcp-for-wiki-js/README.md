@@ -353,7 +353,11 @@ Eigene Rolle anlegen: Eintrag in `config/roles.json` (oder `extends` einer beste
 
 **Geschwärzt** werden in Vorschauen und `wiki_graphql`-Ergebnissen Felder wie `password`, `passwd`, `secret`, `token`, `privateKey`, `apiKey`, `credential`, `jwt` sowie der `value` von `{ key, value }`-Paaren mit solchem Schlüssel.
 
-**Massenlöschen** (`wiki_pages_delete_batch`, `wiki_pages_delete_tree`): `pathPattern` mit `*`/`?` innerhalb eines Pfadsegments, `**` über beliebige Tiefe (`drafts/*` = direkte Kinder, `drafts/**` = alles darunter). `locale` (Default `en`) gilt für `paths`, `pathPattern` und den Tree; `ids` gelten locale-übergreifend. Mehr als 50 Ziele nur mit `force: true`. Die `confirm`-Vorschau zeigt die tatsächlich betroffenen Seiten (Anzahl + bis zu 100 Pfade). Ergebnis-Pfade als `locale/pfad`; nicht gefundene `ids`/`paths` stehen in `notFound`.
+**Massenlöschen** (`wiki_pages_delete_batch`, `wiki_pages_delete_tree`): `pathPattern` mit `*`/`?` innerhalb eines Pfadsegments, `**` über beliebige Tiefe (`drafts/*` = direkte Kinder, `drafts/**` = alles darunter). `locale` gilt für `paths`, `pathPattern` und den Tree; `ids` gelten locale-übergreifend. Höchstens 1000 `ids` bzw. `paths` pro Aufruf; mehr als 50 Ziele nur mit `force: true`. Die `confirm`-Vorschau zeigt die tatsächlich betroffenen Seiten (Anzahl + bis zu 100 Pfade). Ergebnis-Pfade als `locale/pfad`; nicht gefundene `ids`/`paths` stehen in `notFound`.
+
+**Locale und Listen:** Ohne `locale` nutzen die Tools die Standardsprache des Wikis (Admin → Locale), nicht mehr fest `en`. `wiki_pages_list` liefert ohne `limit` die ersten 100 Seiten, `wiki_users_list` die ersten 100 Konten, `wiki_pages_links` die ersten 500 Einträge; ist mehr vorhanden, steht ein Hinweis im Ergebnis.
+
+**Wiki.js-Eigenheiten:** `wiki_page_restore` entfernt in Wiki.js alle Tags der Seite; das Ergebnis nennt sie (`tagsRemoved`), damit sie per `wiki_page_update` zurückgesetzt werden können. Kommentare gesperrter Seiten (`WIKIJS_BLOCKED_TAGS`) sind auch über ihre ID nicht lesbar, änderbar oder löschbar.
 
 Mehr zu den Admin-Domänen (Theming/Storage/Mail/Search/…): [docs/admin-extension.md](./docs/admin-extension.md).
 

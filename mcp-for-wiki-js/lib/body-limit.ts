@@ -10,16 +10,27 @@ export const FORM_BODY_LIMIT = 64 * 1024;
 /** Matches the MCP SDK's default (DEFAULT_MAX_REQUEST_BODY_SIZE). */
 export const MCP_BODY_LIMIT = 4 * 1024 * 1024;
 
-function payloadTooLarge(limit: number): Response {
-  return new Response(`Payload Too Large: request body must not exceed ${limit} bytes.`, {
+/** 'jsonrpc' for /mcp: MCP clients parse JSON-RPC, not a plain-text body (audit A-27). */
+export type BodyErrorFormat = 'text' | 'jsonrpc';
+
+function payloadTooLarge(limit: number, format: BodyErrorFormat): Response {
+  const message = `Payload Too Large: request body must not exceed ${limit} bytes.`;
+  if (format === 'jsonrpc') {
+    // Same shape and code the MCP SDK uses for its own 413 (code -32000, id null).
+    return new Response(JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message }, id: null }), {
+      status: 413,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+    });
+  }
+  return new Response(message, {
     status: 413,
     headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
   });
 }
 
 /** The body as text, or a ready 413 response if it exceeds `limit` bytes. */
-export async function readBody(req: Request, limit: number): Promise<string | Response> {
-  if (Number(req.headers.get('content-length')) > limit) return payloadTooLarge(limit);
+export async function readBody(req: Request, limit: number, format: BodyErrorFormat = 'text'): Promise<string | Response> {
+  if (Number(req.headers.get('content-length')) > limit) return payloadTooLarge(limit, format);
   if (!req.body) return '';
   const reader = req.body.getReader();
   const decoder = new TextDecoder();
@@ -32,7 +43,7 @@ export async function readBody(req: Request, limit: number): Promise<string | Re
       received += value.byteLength;
       if (received > limit) {
         await reader.cancel();
-        return payloadTooLarge(limit);
+        return payloadTooLarge(limit, format);
       }
       text += decoder.decode(value, { stream: true });
     }

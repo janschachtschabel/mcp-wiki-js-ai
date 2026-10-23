@@ -15,7 +15,15 @@ export const systemTools: ToolDef[] = [
     handler: async (_a, ctx) => {
       try {
         await ctx.client.request(`query{ pages { list(limit:1){ id } } }`);
-        return ok({ connected: true, authenticated: true, baseUrl: ctx.baseUrl, hasToken: ctx.hasToken, profile: ctx.profile ?? null });
+        // Wiki.js answers guests too: without a credential "connected" is not "authenticated" (A-27).
+        return ok({
+          connected: true,
+          authenticated: ctx.hasToken,
+          baseUrl: ctx.baseUrl,
+          hasToken: ctx.hasToken,
+          profile: ctx.profile ?? null,
+          ...(ctx.hasToken ? {} : { note: 'No credential: calls run with Wiki.js guest rights.' }),
+        });
       } catch (e) {
         return ok({
           connected: false,

@@ -1,11 +1,12 @@
 import { z } from 'zod';
-import { ok, assertOk } from '../wikijs/format';
+import { ok, fail, assertOk } from '../wikijs/format';
 import { DEFAULT_RESPONSE, type ToolDef } from './types';
-import { assertNotInBlockedSet } from '../guardrails';
+import { assertCommentNotBlocked, assertNotInBlockedSet } from '../guardrails';
+import { localeOrSite } from '../wikijs/site-locale';
 
-// Tag guardrail (audit R-27): list (by path) and create (by pageId) are checked.
-// CommentPost exposes no pageId, so single/update/delete by comment id cannot be
-// mapped to their page via GraphQL — documented limitation.
+// Tag guardrail (audit R-27): list (by path) and create (by pageId) are checked;
+// single/update/delete by comment id are checked against the comments of the
+// blocked pages (audit A-23), since CommentPost exposes no pageId.
 
 // authorEmail is deliberately excluded: it is PII (incl. guest emails) that an
 // agent listing comments rarely needs, and it would flow into the model context
@@ -17,12 +18,12 @@ export const commentTools: ToolDef[] = [
     name: 'wiki_comments_list',
     description: 'List comments on a page (by path + locale).',
     category: 'read',
-    inputSchema: { path: z.string().min(1), locale: z.string().default('en') },
+    inputSchema: { path: z.string().min(1), locale: z.string().optional().describe("Default: the wiki's site locale.") },
     handler: async (a, ctx) => {
       await assertNotInBlockedSet(ctx, { path: a.path }, `Comments of page ${a.path}`);
       const data = await ctx.client.request(
         `query($locale:String!,$path:String!){ comments { list(locale:$locale,path:$path){ ${COMMENT_FIELDS} } } }`,
-        { locale: a.locale ?? 'en', path: a.path },
+        { locale: await localeOrSite(ctx, a.locale), path: a.path },
       );
       return ok(data.comments.list);
     },
@@ -33,10 +34,13 @@ export const commentTools: ToolDef[] = [
     category: 'read',
     inputSchema: { id: z.number().int() },
     handler: async (a, ctx) => {
+      await assertCommentNotBlocked(ctx, a.id, `Comment ${a.id}`);
       const data = await ctx.client.request(
         `query($id:Int!){ comments { single(id:$id){ ${COMMENT_FIELDS} } } }`,
         { id: a.id },
       );
+      // Wiki.js answers null when the caller may not read the comment's page (A-27).
+      if (!data.comments.single) return fail(`No comment with id ${a.id}, or it is not readable with these permissions.`);
       return ok(data.comments.single);
     },
   },
@@ -67,6 +71,7 @@ export const commentTools: ToolDef[] = [
     category: 'write',
     inputSchema: { id: z.number().int(), content: z.string().min(1) },
     handler: async (a, ctx) => {
+      await assertCommentNotBlocked(ctx, a.id, `Comment ${a.id}`);
       const data = await ctx.client.request(
         `mutation($id:Int!,$content:String!){ comments { update(id:$id,content:$content){ ${DEFAULT_RESPONSE} render } } }`,
         { id: a.id, content: a.content },
@@ -81,6 +86,7 @@ export const commentTools: ToolDef[] = [
     category: 'delete',
     inputSchema: { id: z.number().int() },
     handler: async (a, ctx) => {
+      await assertCommentNotBlocked(ctx, a.id, `Comment ${a.id}`);
       const data = await ctx.client.request(
         `mutation($id:Int!){ comments { delete(id:$id){ ${DEFAULT_RESPONSE} } } }`,
         { id: a.id },

@@ -180,7 +180,7 @@ von requarks/wiki) und `mcp2/` (Community-MCP-Server zum Vergleich).
 |---|---|---|
 | Zugriffsrechte | **Wiki.js** (Gruppen, Page-Rules — pro Person) | hart, serverseitig; gilt auch für KI-Sessions |
 | Bereichs-Sperre | Wiki.js: pfadbasierte **deny-Page-Rule** (z. B. `/intern/*`) | zuverlässig inkl. Suche |
-| Tag-Sperre | Tag `kein-ki` auf der Seite (+ `WIKIJS_BLOCKED_TAGS`) | MCP filtert Lesen/Suche/Baum/Links und verweigert Schreiben/Löschen; Ausnahme: Kommentare, die nur per Kommentar-ID angesprochen werden |
+| Tag-Sperre | Tag `kein-ki` auf der Seite (+ `WIKIJS_BLOCKED_TAGS`) | MCP filtert Lesen/Suche/Baum/Links und verweigert Schreiben/Löschen (auch Kommentare gesperrter Seiten, selbst per Kommentar-ID); Ausnahme: `wiki_graphql` |
 | Agenten-Schutz | MCP-Rolle `wiki` (Default für OAuth-Sessions) | destruktive/Admin-Aktionen erst nach `confirm:true` (Dry-Run) — eine Bremse gegen Versehen, **keine** menschliche Freigabe: das Modell setzt `confirm` selbst |
 
 Wichtig: KI-Zugängen in Wiki.js **nie** `manage:system` geben — das umgeht dort

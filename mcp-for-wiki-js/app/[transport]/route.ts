@@ -105,7 +105,7 @@ async function handler(req: Request): Promise<Response> {
         if (value && !guards.some((g) => headers.has(g))) headers.set(header, value);
       }
     }
-    const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : await readBody(req, MCP_BODY_LIMIT);
+    const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : await readBody(req, MCP_BODY_LIMIT, 'jsonrpc');
     if (body instanceof Response) return body;
     // The body is now a decoded string: the original framing headers no longer describe it.
     headers.delete('content-length');
