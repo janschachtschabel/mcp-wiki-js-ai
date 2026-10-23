@@ -245,6 +245,21 @@ async function main(): Promise<void> {
   const meBlocked = await meLogin.POST(post('/me/login', { username: 'bob', password: 'x' }));
   check('R-11: /me/login shares the per-user limit', query(meBlocked).get('login_error') === 'rate_limited');
   check('R-11: client IP = right-most X-Forwarded-For hop (set by our proxy)', clientIp(new Headers({ 'x-forwarded-for': '6.6.6.6, 198.51.100.9' })) === '198.51.100.9');
+  {
+    const { limiterKey, registrationAttempt } = await import('../lib/oauth/rate-limit');
+    const h = (ip: string) => new Headers({ 'x-forwarded-for': ip });
+    check('A-06: IPv6 addresses of one /64 share a limiter key', limiterKey(h('2001:db8:1:2::1')) === limiterKey(h('2001:db8:1:2:ffff:ffff:ffff:ffff')));
+    check('A-06: … the compressed and expanded spelling too', limiterKey(h('2001:db8:1:2::1')) === limiterKey(h('2001:0db8:0001:0002:0000:0000:0000:0001')));
+    check('A-06: different /64 networks get different keys', limiterKey(h('2001:db8:1:2::1')) !== limiterKey(h('2001:db8:1:3::1')));
+    check('A-06: IPv4 (also IPv4-mapped IPv6) keys by the full address', limiterKey(h('198.51.100.9')) === limiterKey(h('::ffff:198.51.100.9')) && limiterKey(h('198.51.100.9')) !== limiterKey(h('198.51.100.10')));
+    let blocked = 0;
+    for (let i = 0; i < 20; i++) registrationAttempt(h(`2001:db8:aa:bb::${i + 1}`));
+    blocked = registrationAttempt(h('2001:db8:aa:bb::ffff'));
+    check('A-06: rotating addresses inside one /64 cannot lift the registration limit', blocked > 0);
+    let globalStop = 0;
+    for (let i = 0; i < 1000 && !globalStop; i++) globalStop = registrationAttempt(h(`203.0.${Math.floor(i / 250)}.${(i % 250) + 1}`));
+    check('A-06: a global registration cap stops a flood from many addresses', globalStop > 0);
+  }
 
   // ---- success + R-21 cookies --------------------------------------------------------
   const okHttps = await decision.POST(post('/oauth/authorize/decision', creds('alice', 'right'), { https: true }));

@@ -12,7 +12,7 @@
  * config/roles.json ← process.env.WIKIJS_ROLES).
  */
 import { ROLES, PRESETS } from './permissions';
-import { MIN_SECRET_LENGTH } from './oauth/crypto';
+import { MIN_SECRET_LENGTH, RECOMMENDED_SECRET_LENGTH } from './oauth/crypto';
 import { pureByok } from './caller-url';
 
 type Env = Record<string, string | undefined>;
@@ -100,6 +100,21 @@ function checkHttpOnly(env: Env, errors: string[], warnings: string[]): void {
   }
   if (secret && secret.length >= MIN_SECRET_LENGTH && !set(env, 'PUBLIC_BASE_URL')) {
     warnings.push('OAuth is on but PUBLIC_BASE_URL is unset — the issuer is derived from X-Forwarded-* headers.');
+  }
+  // Every wiki user gets a cookie encrypted under a key derived from the secret,
+  // i.e. an offline guessing oracle — a short or human-chosen secret is weak (A-22).
+  if (secret && secret.length >= MIN_SECRET_LENGTH && secret.length < RECOMMENDED_SECRET_LENGTH) {
+    warnings.push(
+      `MCP_SESSION_SECRET is shorter than ${RECOMMENDED_SECRET_LENGTH} characters — use random bytes, e.g. \`openssl rand -base64 48\`.`,
+    );
+  }
+  // Open dynamic client registration + one-click consent = a phishing link can
+  // hand a stranger's redirect URI a token for the victim's wiki account (A-03).
+  if (secret && secret.length >= MIN_SECRET_LENGTH && !set(env, 'MCP_ALLOWED_REDIRECT_HOSTS')) {
+    warnings.push(
+      'MCP_ALLOWED_REDIRECT_HOSTS is empty — any client may register any https redirect target. ' +
+        'Set the hosts of the AI clients you use, e.g. "claude.ai,chatgpt.com" (loopback clients stay allowed).',
+    );
   }
   const envToken = set(env, 'WIKIJS_TOKEN') || set(env, 'WIKIJS_API_KEY');
   // Mirrors lib/context.ts: per-user handles disable the anonymous env-token fallback (R-15).

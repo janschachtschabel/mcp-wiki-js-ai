@@ -148,6 +148,14 @@ check(
   check('HTTP (default): the same shared .env still aborts', checkConfig(shared).errors.length > 0);
 }
 
+// Audit 2026-10-23: A-22 (weak secret) and A-03 (open client registration).
+const warns = (env: Record<string, string | undefined>) => checkConfig(env).warnings;
+check('A-22: a 16–31 character secret is accepted but warned about', errs({ MCP_SESSION_SECRET: 'y'.repeat(20) }).length === 0 && warns({ MCP_SESSION_SECRET: 'y'.repeat(20) }).some((w) => /32/.test(w) && /MCP_SESSION_SECRET/.test(w)));
+check('A-22: a 32+ character secret is not warned about', !warns({ MCP_SESSION_SECRET: SECRET }).some((w) => /MCP_SESSION_SECRET is shorter/.test(w)));
+check('A-03: OAuth without MCP_ALLOWED_REDIRECT_HOSTS warns about open registration', warns({ MCP_SESSION_SECRET: SECRET }).some((w) => /MCP_ALLOWED_REDIRECT_HOSTS/.test(w)));
+check('A-03: no warning once the allowlist is set', !warns({ MCP_SESSION_SECRET: SECRET, MCP_ALLOWED_REDIRECT_HOSTS: 'claude.ai' }).some((w) => /MCP_ALLOWED_REDIRECT_HOSTS/.test(w)));
+check('A-03: no allowlist warning without OAuth', !warns({}).some((w) => /MCP_ALLOWED_REDIRECT_HOSTS/.test(w)));
+
 // 6. assertConfig aborts with ALL errors in one message.
 check(
   'assertConfig throws listing every error',

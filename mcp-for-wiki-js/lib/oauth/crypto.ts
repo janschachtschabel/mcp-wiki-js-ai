@@ -41,6 +41,8 @@ let cachedKeys: Partial<Record<Purpose, Buffer>> = {};
 let cachedSecret: string | null = null;
 
 export const MIN_SECRET_LENGTH = 16;
+/** Below this the server still starts but warns (audit A-22). */
+export const RECOMMENDED_SECRET_LENGTH = 32;
 
 /**
  * The deployment secret that everything derives from. OAuth is OFF without it.
@@ -84,10 +86,13 @@ export function encryptString(plain: string, purpose: Purpose): string {
 /** Inverse of encryptString. Throws on tampering or a different purpose (GCM auth failure). */
 export function decryptString(payload: string, purpose: Purpose): string {
   const raw = Buffer.from(payload, 'base64url');
+  // Payloads come from cookies (attacker input): without a fixed tag length Node
+  // would accept a 4-byte tag and check only that much (audit A-21).
+  if (raw.length < IV_BYTES + TAG_BYTES) throw new Error('Ciphertext too short.');
   const iv = raw.subarray(0, IV_BYTES);
   const tag = raw.subarray(IV_BYTES, IV_BYTES + TAG_BYTES);
   const ct = raw.subarray(IV_BYTES + TAG_BYTES);
-  const decipher = createDecipheriv('aes-256-gcm', key(purpose), iv);
+  const decipher = createDecipheriv('aes-256-gcm', key(purpose), iv, { authTagLength: TAG_BYTES });
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
 }

@@ -1,14 +1,15 @@
 import { SERVER_INFO } from '../../../lib/meta';
 import { oauthEnabled } from '../../../lib/oauth/store';
-import { resolveIssuer } from '../../../lib/oauth/metadata';
+import { metadataResponse, resolveIssuer } from '../../../lib/oauth/metadata';
 
 export const dynamic = 'force-dynamic';
 
-/** Lightweight discovery document advertising the Streamable HTTP endpoint. */
+/** Lightweight discovery document advertising the Streamable HTTP endpoint. Same
+ *  caching rule as the OAuth metadata: no-store while the URL comes from headers (A-40). */
 const handler = async (request: Request) => {
   const baseUrl = resolveIssuer(request);
 
-  return Response.json({
+  return metadataResponse({
     name: SERVER_INFO.name,
     version: SERVER_INFO.version,
     description:

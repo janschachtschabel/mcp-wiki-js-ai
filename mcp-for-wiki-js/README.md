@@ -117,10 +117,10 @@ Im Mehrbenutzer-Modus liegen die echten Keys **als Env-Variable in Vercel** (Ver
 | `WIKIJS_AUDIT` | nein | `true` | Audit-Log für write/delete/admin (`false` = aus; nie Secrets) |
 | `WIKIJS_MCP_VERBOSE` | nein | `false` | MCP-Request-Logging (`true`) |
 | `PUBLIC_BASE_URL` | mit OAuth hinter Proxy: ja | aus `X-Forwarded-*` | Öffentliche Adresse des MCP-Servers (OAuth-Issuer, Connector-URL, Discovery) — dieselbe Domain wie das Wiki, damit die Wiki-Sitzung den Login zum Ein-Klick macht |
-| `MCP_SESSION_SECRET` | für OAuth | – | Schaltet OAuth ein (Login = Wiki.js-Login) und verschlüsselt den Session-Store. Mind. 16 Zeichen, sonst startet der Server nicht. **Secret** |
+| `MCP_SESSION_SECRET` | für OAuth | – | Schaltet OAuth ein (Login = Wiki.js-Login) und verschlüsselt den Session-Store. Mind. 16 Zeichen, sonst startet der Server nicht; unter 32 Zeichen warnt er beim Start (zufällige Bytes nehmen, z. B. `openssl rand -base64 48`). **Secret** |
 | `MCP_DATA_DIR` | nein | `./data` (Docker: `/data`) | Ablage des Session-Stores und Audit-Logs (sqlite) — muss ein persistentes Volume sein |
 | `WIKIJS_OAUTH_ROLE` | nein | `wiki` | Agenten-Schutzrolle für OAuth-Sitzungen (Rolle aus `config/roles.json`); die eigentlichen Rechte kommen aus Wiki.js |
-| `MCP_ALLOWED_REDIRECT_HOSTS` | nein | – (jeder https-Host) | Kommaliste von Hostnamen, an die OAuth-Clients weiterleiten dürfen (z. B. `claude.ai,chatgpt.com`); Loopback ist immer erlaubt |
+| `MCP_ALLOWED_REDIRECT_HOSTS` | nein | – (jeder https-Host) | Kommaliste von Hostnamen, an die OAuth-Clients weiterleiten dürfen (z. B. `claude.ai,chatgpt.com`); Loopback ist immer erlaubt. Leer bei aktivem OAuth → Startwarnung, weil dann jeder Client per Phishing-Link ein Token für ein fremdes Wiki-Konto erhalten könnte |
 | `NODE_EXTRA_CA_CERTS` | nein | – | Node-Standardvariable: Pfad zu einer PEM-Datei mit zusätzlichen Zertifizierungsstellen. Nötig, wenn `WIKIJS_URL` eine Domain mit firmeninternem Zertifikat ist (Datei in den Container mounten) |
 | `TZ` | nein | `UTC` (Container) | Zeitzone der Zeitangaben auf `/me`, z. B. `Europe/Berlin` |
 

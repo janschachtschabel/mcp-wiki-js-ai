@@ -172,6 +172,10 @@ async function main(): Promise<void> {
   check('R-58: mcp.json uses the normalized origin (no "//mcp" from a trailing slash)', disco.transport.url === 'https://mcp.example.org/mcp');
   check('R-58: resolveIssuer works from bare headers (server components)', resolveIssuer({ headers: new Headers({ host: 'x.example' }) }) === 'https://mcp.example.org');
   delete process.env.PUBLIC_BASE_URL;
+  {
+    const derivedDisco = await mcpJson.GET(new Request(`${ORIGIN}/.well-known/mcp.json`, { headers: { 'x-forwarded-host': 'evil.example', 'x-forwarded-proto': 'https' } }));
+    check('A-40: header-derived mcp.json is not cacheable (no-store)', /no-store/.test(derivedDisco.headers.get('cache-control') ?? ''));
+  }
   check(
     'R-58: without PUBLIC_BASE_URL bare headers resolve via X-Forwarded-*',
     resolveIssuer({ headers: new Headers({ host: 'internal:3000', 'x-forwarded-host': 'wiki.example.org', 'x-forwarded-proto': 'https' }) }) === 'https://wiki.example.org',

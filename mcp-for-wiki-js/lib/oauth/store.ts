@@ -129,6 +129,11 @@ export function dbPragma(name: string): unknown {
   return row ? Object.values(row)[0] : undefined;
 }
 
+/** Test hook: whether a code row (live or tombstone) is still stored. */
+export function codeExists(codeHash: string): boolean {
+  return getDb().prepare('SELECT 1 FROM oauth_codes WHERE code_hash = ?').get(codeHash) !== undefined;
+}
+
 /** Test hook: names of all indexes in the store. */
 export function indexNames(): string[] {
   return getDb()
@@ -167,7 +172,10 @@ export function getClient(id: string): ClientRow | undefined {
 // -------------------------------------------------------------------- codes ---
 
 export function insertCode(c: CodeRow): void {
-  getDb()
+  const d = getDb();
+  // Unredeemed codes would otherwise linger until the next redemption (A-25).
+  d.prepare('DELETE FROM oauth_codes WHERE expires_at < ?').run(now() - CODE_TOMBSTONE_MS);
+  d
     .prepare(
       'INSERT INTO oauth_codes (code_hash, client_id, redirect_uri, challenge, enc_jwt, user_label, user_email, user_id, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     )
@@ -329,8 +337,9 @@ export function touchSession(id: string, at: number = now()): void {
   getDb().prepare('UPDATE oauth_sessions SET last_used_at = ? WHERE id = ?').run(at, id);
 }
 
+/** Revoke and drop the encrypted wiki JWT: a later DB + secret leak yields nothing for it (A-38). */
 export function revokeSession(id: string): void {
-  getDb().prepare('UPDATE oauth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL').run(now(), id);
+  getDb().prepare("UPDATE oauth_sessions SET revoked_at = ?, enc_jwt = '' WHERE id = ? AND revoked_at IS NULL").run(now(), id);
 }
 
 /**

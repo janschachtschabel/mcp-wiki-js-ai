@@ -85,13 +85,13 @@ see the repo-root [README.en.md](../README.en.md) and `docker-compose.yml`.
 | Variable | Purpose |
 |---|---|
 | `WIKIJS_URL` | Base URL of the Wiki.js instance |
-| `MCP_SESSION_SECRET` | Enables OAuth mode (≥ 16 chars — a shorter value aborts startup; sessions encrypted with it) |
+| `MCP_SESSION_SECRET` | Enables OAuth mode (≥ 16 chars — a shorter value aborts startup, below 32 a startup warning; use random bytes, e.g. `openssl rand -base64 48`; sessions encrypted with it) |
 | `PUBLIC_BASE_URL` | Public origin (OAuth issuer) — required behind a proxy |
 | `WIKIJS_OAUTH_ROLE` | Safety overlay for OAuth sessions (default `wiki`: delete/admin → confirm) |
 | `WIKIJS_PERMISSION_PRESET` | Global tool-visibility ceiling — keep `full` in OAuth mode |
 | `WIKIJS_BLOCKED_TAGS` | Comma-separated no-AI tags (empty = off) |
 | `MCP_DATA_DIR` | sqlite session store location (default `./data`, Docker `/data`) |
-| `MCP_ALLOWED_REDIRECT_HOSTS` | Optional comma-separated host names OAuth clients may redirect to (loopback always allowed; unset = any https host) |
+| `MCP_ALLOWED_REDIRECT_HOSTS` | Optional comma-separated host names OAuth clients may redirect to (loopback always allowed; unset = any https host, which logs a startup warning while OAuth is on) |
 
 Complete reference incl. legacy multi-user handles (`WIKIJS_PROFILES`):
 [.env.example](.env.example) and the German [README.md](README.md).

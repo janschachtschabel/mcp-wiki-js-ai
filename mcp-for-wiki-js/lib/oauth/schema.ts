@@ -80,6 +80,18 @@ const MIGRATIONS: Array<(d: SqliteDatabase) => void> = [
       CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
     `);
   },
+  // v2 (audit 2026-10-23): client_id indexes for the unused-client cleanup (A-25);
+  // pre-R-41 sessions without a wiki user id are owned only by an email, which Wiki.js
+  // does not keep unique across auth providers — revoke them (A-39); revoked sessions
+  // no longer keep the encrypted wiki JWT (A-38).
+  (d) => {
+    d.exec(`
+      CREATE INDEX IF NOT EXISTS idx_sessions_client_id ON oauth_sessions(client_id);
+      CREATE INDEX IF NOT EXISTS idx_codes_client_id ON oauth_codes(client_id);
+    `);
+    d.prepare('UPDATE oauth_sessions SET revoked_at = ? WHERE user_id IS NULL AND revoked_at IS NULL').run(Date.now());
+    d.exec("UPDATE oauth_sessions SET enc_jwt = '' WHERE revoked_at IS NOT NULL");
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

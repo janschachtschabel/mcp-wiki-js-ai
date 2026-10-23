@@ -64,6 +64,8 @@ async function main(): Promise<void> {
     const old = store.getSessionById('legacy-session');
     check('R-44: legacy session row is still readable after migration', old?.userLabel === 'Alice');
     check('R-41: legacy rows carry no wiki user id (NULL, not 0)', old !== undefined && old.userId === null);
+    check('A-39: the migration revokes sessions without a wiki user id', old !== undefined && old.revokedAt !== null);
+    check('A-38/A-39: … and drops their encrypted wiki JWT', old !== undefined && old.encJwt === '');
     check(
       'R-41: a legacy row without user id is still listed for its email owner',
       store.listSessionsForUser(7, 'alice@example.org').some((s) => s.id === 'legacy-session'),
@@ -96,6 +98,29 @@ async function main(): Promise<void> {
     check('R-44: index on audit_log(ts) exists', indexes.includes('idx_audit_ts'));
     check('R-44: index on oauth_sessions(last_used_at) exists', indexes.includes('idx_sessions_last_used'));
     check('R-41: index on oauth_sessions(user_id) exists', indexes.includes('idx_sessions_user_id'));
+    check('A-25: index on oauth_sessions(client_id) exists', indexes.includes('idx_sessions_client_id'));
+    check('A-25: index on oauth_codes(client_id) exists', indexes.includes('idx_codes_client_id'));
+
+    // ---- A-38: revoking drops the encrypted wiki JWT -------------------------
+    store.insertSession({
+      id: 'to-revoke', accessHash: 'ra', refreshHash: 'rr', clientId: 'c1', clientName: 'C',
+      userLabel: 'Bob', userEmail: 'bob@example.org', userId: 9, encJwt: 'secret-jwt-ciphertext',
+      accessExpiresAt: now + 3600_000, createdAt: now, lastUsedAt: now, revokedAt: null,
+    });
+    store.revokeSession('to-revoke');
+    const revoked = store.getSessionById('to-revoke');
+    check('A-38: a revoked session keeps no encrypted wiki JWT', revoked?.revokedAt != null && revoked.encJwt === '');
+
+    // ---- A-25: expired codes are cleaned up on insert, not only on redemption --
+    store.insertCode({
+      codeHash: 'stale-code', clientId: 'c1', redirectUri: 'https://x.example/cb', challenge: 'ch', encJwt: 'enc',
+      userLabel: 'Alice', userEmail: 'alice@example.org', userId: 7, expiresAt: now - 2 * 3600_000,
+    });
+    store.insertCode({
+      codeHash: 'fresh-code', clientId: 'c1', redirectUri: 'https://x.example/cb', challenge: 'ch', encJwt: 'enc',
+      userLabel: 'Alice', userEmail: 'alice@example.org', userId: 7, expiresAt: now + 60_000,
+    });
+    check('A-25: inserting a code removes long-expired ones', store.codeExists('stale-code') === false && store.codeExists('fresh-code'));
 
     // ---- R-42: atomic single use + CAS rotation ------------------------------
     store.insertCode({

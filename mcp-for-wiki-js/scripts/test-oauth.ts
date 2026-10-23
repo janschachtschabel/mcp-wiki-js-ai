@@ -51,6 +51,16 @@ async function main(): Promise<void> {
     tampered = true;
   }
   check('tampered ciphertext throws', tampered);
+  // A-21: with a short tag Node would verify only its first bytes (forgery effort 2^-32).
+  const full = Buffer.from(crypto.encryptString('', 'db-jwt'), 'base64url');
+  const shortTag = Buffer.concat([full.subarray(0, 12), full.subarray(12, 16)]).toString('base64url');
+  let shortRejected = false;
+  try {
+    crypto.decryptString(shortTag, 'db-jwt');
+  } catch {
+    shortRejected = true;
+  }
+  check('A-21: a ciphertext with a truncated GCM tag is rejected', shortRejected);
   check('token prefix', crypto.newToken('mcp_at_').startsWith('mcp_at_'));
 
   // ---- PKCE ---------------------------------------------------------------

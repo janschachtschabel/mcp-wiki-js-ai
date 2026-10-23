@@ -14,6 +14,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { isIPv6 } from 'node:net';
 import type { LoginOutcome } from './wiki-login';
 
 export class RateLimiter {
@@ -80,6 +81,8 @@ const loginPerIp = new RateLimiter(10, 15 * MINUTE);
 const loginPerUser = new RateLimiter(5, 15 * MINUTE);
 /** Open dynamic client registration per client IP. */
 const registrationPerIp = new RateLimiter(20, 60 * MINUTE);
+/** …and in total, so a sender with many addresses cannot fill the store (A-06). */
+const registrationTotal = new RateLimiter(500, 60 * MINUTE);
 
 /**
  * The client address as seen by the proxy in front of us: the RIGHT-most
@@ -98,6 +101,36 @@ export function clientIp(headers: Headers): string {
     .map((s) => s.trim())
     .filter(Boolean);
   return hops[hops.length - 1] ?? 'unknown';
+}
+
+/**
+ * The bucket a client is counted in (A-06): an IPv4 address as is, an IPv6 address
+ * by its /64 — one host or customer usually owns a whole /64, so per-address keys
+ * would hand a single sender 2^64 fresh buckets.
+ */
+export function limiterKey(headers: Headers): string {
+  const ip = clientIp(headers).replace(/%.*$/, ''); // drop an IPv6 zone id
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
+  if (mapped) return mapped[1];
+  if (!isIPv6(ip)) return ip;
+  return `${expandIPv6(ip).slice(0, 4).join(':')}::/64`;
+}
+
+/** Eight 4-digit hextets; isIPv6() has already validated the syntax. */
+function expandIPv6(ip: string): string[] {
+  const groups = (part: string) =>
+    part === ''
+      ? []
+      : part.split(':').flatMap((g) => {
+          if (!g.includes('.')) return [g];
+          const [a, b, c, d] = g.split('.').map(Number); // embedded IPv4 tail = two hextets
+          return [((a << 8) | b).toString(16), ((c << 8) | d).toString(16)];
+        });
+  const [head, tail] = ip.split('::');
+  const left = groups(head);
+  const right = tail === undefined ? [] : groups(tail);
+  const zeros = Array<string>(8 - left.length - right.length).fill('0');
+  return [...left, ...zeros, ...right].map((g) => g.toLowerCase().padStart(4, '0'));
 }
 
 /**
@@ -120,7 +153,7 @@ const userKey = limiterUserKey;
  * recordLogin() takes the reservation back unless the attempt failed.
  */
 export function loginAttempt(headers: Headers, username?: string): number {
-  const ip = clientIp(headers);
+  const ip = limiterKey(headers);
   const user = username ? userKey(username) : undefined;
   const wait = loginPerIp.blocked(ip) || (user ? loginPerUser.blocked(user) : 0);
   if (wait) return wait;
@@ -140,7 +173,7 @@ export function loginAttempt(headers: Headers, username?: string): number {
 export function recordLogin(headers: Headers, username: string | undefined, outcome: LoginOutcome): void {
   const failed = outcome.kind === 'error' && outcome.code !== 'unavailable' && outcome.code !== 'rate_limited';
   if (failed) return;
-  loginPerIp.refund(clientIp(headers));
+  loginPerIp.refund(limiterKey(headers));
   if (!username) return;
   if (outcome.kind === 'ok') loginPerUser.reset(userKey(username));
   else loginPerUser.refund(userKey(username));
@@ -148,5 +181,5 @@ export function recordLogin(headers: Headers, username: string | undefined, outc
 
 /** Count a client registration; 0 = go ahead, else seconds to wait. */
 export function registrationAttempt(headers: Headers): number {
-  return registrationPerIp.hit(clientIp(headers));
+  return registrationPerIp.hit(limiterKey(headers)) || registrationTotal.hit('all');
 }
