@@ -20,9 +20,10 @@ export interface WikiContext {
   /** OAuth session id when the request was authenticated via /oauth (for audit). */
   sessionId?: string;
   /**
-   * Non-reversible fingerprint of the upstream credential. Used to partition
-   * caches that hold permission-FILTERED upstream data (lib/guardrails.ts) —
-   * sharing those across users would leak pages between permission levels.
+   * Non-reversible fingerprint of the upstream credential (for OAuth: of the session,
+   * which outlives Wiki.js' rolling JWT renewal — A-35). Used to partition caches that
+   * hold permission-FILTERED upstream data (lib/guardrails.ts) — sharing those across
+   * users would leak pages between permission levels.
    */
   credentialKey?: string;
 }
@@ -43,6 +44,8 @@ export function basePolicy(): Policy {
 export interface ToolExtra {
   requestInfo?: { headers?: Record<string, string | string[] | undefined> };
   authInfo?: { token?: string; extra?: Record<string, unknown> };
+  /** Aborted when the MCP client cancels the call or disconnects (A-15). */
+  signal?: AbortSignal;
 }
 
 /**
@@ -51,11 +54,13 @@ export interface ToolExtra {
  */
 export function toolExtraFromServerContext(ctx: {
   http?: { req?: { headers: Headers }; authInfo?: ToolExtra['authInfo'] };
+  mcpReq?: { signal?: AbortSignal };
 }): ToolExtra {
   const req = ctx.http?.req;
   return {
     requestInfo: req ? { headers: Object.fromEntries(req.headers.entries()) } : undefined,
     authInfo: ctx.http?.authInfo,
+    signal: ctx.mcpReq?.signal,
   };
 }
 
@@ -97,13 +102,13 @@ function oauthContext(extra: ToolExtra | undefined, env: Record<string, string |
     : undefined;
   const oauthRole = roleConfig(env.WIKIJS_OAUTH_ROLE || 'wiki');
   return {
-    client: new WikiClient(baseUrl, extra.authInfo.token, undefined, { onNewJwt }),
+    client: new WikiClient(baseUrl, extra.authInfo.token, undefined, { onNewJwt, signal: extra.signal }),
     policy: withRequestOverlays(BASE_POLICY.withOverlay(oauthRole), headers),
     baseUrl,
     hasToken: true,
     profile: authExtra.label ?? authExtra.email ?? 'oauth-user',
     sessionId,
-    credentialKey: fingerprint(extra.authInfo.token),
+    credentialKey: sessionId ? `session:${fingerprint(sessionId)}` : fingerprint(extra.authInfo.token),
   };
 }
 
@@ -124,7 +129,10 @@ export function resolveContext(extra?: ToolExtra): WikiContext {
     extra?.requestInfo?.headers,
   );
   return {
-    client: new WikiClient(cred.baseUrl, cred.token, undefined, cred.callerTarget ? { assertTarget: assertPublicTarget } : {}),
+    client: new WikiClient(cred.baseUrl, cred.token, undefined, {
+      signal: extra?.signal,
+      ...(cred.callerTarget ? { assertTarget: assertPublicTarget } : {}),
+    }),
     policy,
     baseUrl: cred.baseUrl,
     hasToken: Boolean(cred.token),

@@ -92,6 +92,10 @@ const MIGRATIONS: Array<(d: SqliteDatabase) => void> = [
     d.prepare('UPDATE oauth_sessions SET revoked_at = ? WHERE user_id IS NULL AND revoked_at IS NULL').run(Date.now());
     d.exec("UPDATE oauth_sessions SET enc_jwt = '' WHERE revoked_at IS NOT NULL");
   },
+  // v3 (audit 2026-10-23 A-52): what an audited call acted on (ids/paths, JSON).
+  (d) => {
+    addColumnIfMissing(d, 'audit_log', 'targets', 'TEXT');
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

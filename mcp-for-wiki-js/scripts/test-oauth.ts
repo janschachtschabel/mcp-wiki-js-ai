@@ -311,6 +311,8 @@ async function main(): Promise<void> {
   store.insertAudit({ ts: Date.now(), sessionId: null, profile: 'Alice', tool: 'wiki_page_update', category: 'write', outcome: 'ok', ms: 12 });
   const audit = store.listAudit(10);
   check('listAudit returns entries, newest first', audit.length >= 1 && audit[0].tool === 'wiki_page_update');
+  store.insertAudit({ ts: Date.now(), sessionId: null, profile: 'Alice', tool: 'wiki_page_delete', category: 'delete', outcome: 'ok', ms: 3, targets: '{"id":7}' });
+  check('A-52: audit rows keep their targets', store.listAudit(1)[0]?.targets === '{"id":7}');
 
   // Audit retention: entries older than the window are purged, recent ones kept.
   const ancient = Date.now() - 200 * 24 * 60 * 60 * 1000; // 200 days — beyond the 180d audit window

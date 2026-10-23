@@ -341,6 +341,21 @@ async function main(): Promise<void> {
     'oauth: credentialKey is a per-token fingerprint',
     o1.credentialKey !== 'anon' && o1.credentialKey !== oauth({}, 'other-jwt').credentialKey && !o1.credentialKey?.includes('user-jwt'),
   );
+  check(
+    'A-35: OAuth credentialKey is stable across JWT renewals of one session',
+    oauth({ sessionId: 's9' }, 'jwt-1').credentialKey === oauth({ sessionId: 's9' }, 'jwt-2').credentialKey,
+  );
+  check('A-35: … and differs between sessions', oauth({ sessionId: 's9' }).credentialKey !== oauth({ sessionId: 's10' }).credentialKey);
+  {
+    // A-15: the MCP request's abort signal reaches the Wiki.js client.
+    const ac = new AbortController();
+    check('A-15: toolExtraFromServerContext carries the request signal', toolExtraFromServerContext({ mcpReq: { signal: ac.signal } }).signal === ac.signal);
+    ac.abort();
+    const cancelled = await resolveContext({ signal: ac.signal, authInfo: { token: 'jwt', extra: { oauth: true } } })
+      .client.request('query{ pages { list { id } } }')
+      .then(() => 'RESOLVED', (e: unknown) => (e instanceof Error ? e.message : String(e)));
+    check('A-15: a cancelled request never reaches Wiki.js', /cancel/i.test(cancelled));
+  }
   check('oauth: default role "wiki": write -> allow', o1.policy.resolve('wiki_page_create', 'write') === 'allow');
   check('oauth: default role "wiki": delete -> confirm', o1.policy.resolve('wiki_page_delete', 'delete') === 'confirm');
   check('oauth: default role "wiki": wiki_graphql -> block', o1.policy.resolve('wiki_graphql', 'manage_system') === 'block');

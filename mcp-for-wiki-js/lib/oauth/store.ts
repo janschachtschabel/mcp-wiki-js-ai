@@ -66,6 +66,8 @@ export interface AuditRow {
   category: string;
   outcome: string;
   ms: number;
+  /** JSON of the identifying arguments (ids, paths) — never content or secrets (A-52). */
+  targets?: string | null;
 }
 
 let db: SqliteDatabase | null = null;
@@ -365,14 +367,14 @@ export function listActiveSessions(): SessionRow[] {
 
 export function insertAudit(a: AuditRow): void {
   getDb()
-    .prepare('INSERT INTO audit_log (ts, session_id, profile, tool, category, outcome, ms) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(a.ts, a.sessionId, a.profile, a.tool, a.category, a.outcome, a.ms);
+    .prepare('INSERT INTO audit_log (ts, session_id, profile, tool, category, outcome, ms, targets) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(a.ts, a.sessionId, a.profile, a.tool, a.category, a.outcome, a.ms, a.targets ?? null);
 }
 
 /** Most recent audit entries (admin view on /me), newest first. */
 export function listAudit(limit: number): AuditRow[] {
   return getDb()
-    .prepare('SELECT ts, session_id, profile, tool, category, outcome, ms FROM audit_log ORDER BY id DESC LIMIT ?')
+    .prepare('SELECT ts, session_id, profile, tool, category, outcome, ms, targets FROM audit_log ORDER BY id DESC LIMIT ?')
     .all(limit)
     .map((r) => ({
       ts: Number(r.ts),
@@ -382,5 +384,6 @@ export function listAudit(limit: number): AuditRow[] {
       category: String(r.category),
       outcome: String(r.outcome),
       ms: Number(r.ms),
+      targets: r.targets == null ? null : String(r.targets),
     }));
 }

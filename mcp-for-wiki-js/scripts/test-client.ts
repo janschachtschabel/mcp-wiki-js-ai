@@ -64,7 +64,7 @@ const MUTATION = 'mutation{ pages { delete(id:1){ responseResult { succeeded } }
 const QUERY = 'query{ pages { list { id } } }';
 
 async function main(): Promise<void> {
-  const { WikiClient, WikiConnectionError, envInt } = await import('../lib/wikijs/client');
+  const { WikiClient, WikiConnectionError, AssetTooLargeError, envInt } = await import('../lib/wikijs/client');
 
   // ---- R-36: env parsing ------------------------------------------------------
   check('R-36: envInt keeps 0 when 0 is allowed', envInt('0', 2, 0) === 0);
@@ -273,6 +273,90 @@ async function main(): Promise<void> {
   handler = () => new Response('Payload Too Large', { status: 413 });
   const up413 = await c.upload({ filename: 'a.png', data: new Uint8Array([1]) });
   check('R-54: upload HTTP 413 -> not succeeded, status in message', up413.succeeded === false && /HTTP 413/.test(up413.message ?? ''));
+
+  // ---- Audit 2026-10-23 package S5 --------------------------------------------
+  // A-34: a renewed JWT replaces the old one for the rest of the call.
+  seen.length = 0;
+  let renewals = 0;
+  handler = () => (++renewals === 1 ? json({ data: { a: 1 } }, 200, { 'new-jwt': 'renewed-jwt' }) : json({ data: { b: 1 } }));
+  const renewing = new WikiClient(URL_, 'old-jwt', 2000, { onNewJwt: () => {} });
+  await renewing.request(QUERY);
+  await renewing.request(QUERY);
+  const authOf = (i: number) => (seen[i]?.init.headers as Record<string, string> | undefined)?.authorization;
+  check('A-34: the request after a renewal sends the renewed JWT', authOf(0) === 'Bearer old-jwt' && authOf(1) === 'Bearer renewed-jwt');
+
+  // A-45: downloads without Content-Length are capped while streaming; upload answers too.
+  const streamOf = (chunks: number) =>
+    new ReadableStream<Uint8Array>({
+      start(ctl) {
+        for (let i = 0; i < chunks; i++) ctl.enqueue(new Uint8Array(1000));
+        ctl.close();
+      },
+    });
+  handler = () => new Response(streamOf(6), { status: 200, headers: { 'content-type': 'image/png' } });
+  const dlBig = await new WikiClient(URL_, 't', 2000).download('uploads/a.png', 4000).catch((e: unknown) => e);
+  check('A-45: a download without Content-Length is refused once it passes the cap', dlBig instanceof AssetTooLargeError);
+  handler = () => new Response(streamOf(3), { status: 200, headers: { 'content-type': 'image/png' } });
+  const dlOk = await new WikiClient(URL_, 't', 2000).download('uploads/a.png', 4000);
+  check('A-45: a small download without Content-Length still arrives whole', dlOk.data.byteLength === 3000 && dlOk.mime === 'image/png');
+  handler = () =>
+    new Response(new ReadableStream<Uint8Array>({ pull: (ctl) => ctl.enqueue(new Uint8Array(1024)) }), { status: 500 });
+  const endless = await rejection(new WikiClient(URL_, 't', 2000).upload({ filename: 'a.png', data: new Uint8Array([1]) }), 3000);
+  check(`A-45: an endless upload answer is not buffered (${endless})`, endless !== 'GUARD-TIMEOUT');
+
+  // A-47: proxy 5xx on reads is retried; retries stop at the overall deadline.
+  attempts = 0;
+  handler = () => (++attempts === 1 ? new Response('Service Unavailable', { status: 503 }) : json({ data: { ok: true } }));
+  check('A-47: a proxy 503 on a read is retried', (await rejection(new WikiClient(URL_, 't', 2000, { retries: 2 }).request(QUERY))) === 'RESOLVED' && attempts === 2);
+  attempts = 0;
+  const mut503 = await rejection(new WikiClient(URL_, 't', 2000, { retries: 2 }).request(MUTATION));
+  check('A-47: … but not on a mutation (it may have reached Wiki.js)', attempts === 1 && /HTTP 503/.test(mut503));
+  attempts = 0;
+  handler = async () => {
+    attempts++;
+    await sleep(120);
+    throw netError('ECONNREFUSED');
+  };
+  await rejection(new WikiClient(URL_, 't', 200, { retries: 5 }).request(QUERY), 5000);
+  check(`A-47: retries stop at the overall deadline (${attempts} attempts)`, attempts <= 2);
+
+  // A-15: a cancelled MCP request aborts the upstream call and sends nothing more.
+  const ac = new AbortController();
+  handler = async (_u, init) => {
+    await sleep(50);
+    if (init.signal?.aborted) throw new DOMException('aborted', 'AbortError');
+    return json({ data: {} });
+  };
+  const cancellable = new WikiClient(URL_, 't', 5000, { signal: ac.signal, retries: 2 });
+  const inFlight = rejection(cancellable.request(QUERY));
+  setTimeout(() => ac.abort(), 10);
+  check('A-15: cancelling aborts the in-flight upstream request', /cancel/i.test(await inFlight));
+  seen.length = 0;
+  const afterCancel = await rejection(cancellable.request(QUERY));
+  check('A-15: nothing is sent once the request is cancelled', /cancel/i.test(afterCancel) && seen.length === 0);
+
+  // A-20: one concurrency gate per wiki (WIKIJS_MAX_CONCURRENCY=1 here).
+  let releaseA: () => void = () => {};
+  handler = (url) =>
+    url.startsWith('https://a.example')
+      ? new Promise<Response>((r) => {
+          releaseA = () => r(json({ data: { a: 1 } }));
+        })
+      : json({ data: { b: 1 } });
+  const slowA = new WikiClient('https://a.example', 't', 2000).request(QUERY);
+  const otherWiki = await rejection(new WikiClient('https://b.example', 't', 2000).request(QUERY), 500);
+  releaseA();
+  await slowA;
+  check('A-20: a busy wiki does not block requests to another wiki', otherWiki === 'RESOLVED');
+
+  // A-46: the target check (DNS) is bounded and runs before a slot is taken.
+  handler = () => json({ data: { ok: 1 } });
+  const hang = await rejection(new WikiClient('https://c.example', 't', 200, { assertTarget: () => new Promise(() => {}) }).request(QUERY), 2000);
+  check(`A-46: a hanging target check times out (${hang})`, /timed out/i.test(hang));
+  const hanging = rejection(new WikiClient('https://d.example', 't', 1000, { assertTarget: () => new Promise(() => {}) }).request(QUERY), 3000);
+  const sameHost = await rejection(new WikiClient('https://d.example', 't', 1000).request(QUERY), 500);
+  check('A-46: a hanging target check does not hold the concurrency slot', sameHost === 'RESOLVED');
+  await hanging;
 
   globalThis.fetch = realFetch;
   if (failed === 0) {

@@ -100,6 +100,8 @@ export function blockedPathKey(path: string): string {
 }
 
 const cache = new Map<string, { at: number; sets: BlockedPageSets }>();
+/** Lookups in flight per credential: concurrent callers share one upstream round (A-35). */
+const inflight = new Map<string, Promise<BlockedPageSets>>();
 
 function cacheKey(ctx: WikiContext): string {
   return `${ctx.baseUrl}|${ctx.credentialKey ?? 'anon'}`;
@@ -113,9 +115,25 @@ export async function blockedPageSets(ctx: WikiContext, opts: { fresh?: boolean 
   const blocked = blockedTags();
   if (blocked.size === 0) return { ids: new Set(), paths: new Set(), pages: [] };
   const key = cacheKey(ctx);
-  const cached = cache.get(key);
-  if (!opts.fresh && cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.sets;
+  if (!opts.fresh) {
+    const cached = cache.get(key);
+    if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.sets;
+    // A lookup already running for this credential is newer than any cache entry: join it.
+    // simplify: the joined lookup runs on the first caller's client, so that caller's
+    // cancellation (A-15) also fails the joiners; they can simply retry.
+    const pending = inflight.get(key);
+    if (pending) return pending;
+  }
+  const lookup = loadBlockedSets(ctx, blocked, key);
+  inflight.set(key, lookup);
+  try {
+    return await lookup;
+  } finally {
+    if (inflight.get(key) === lookup) inflight.delete(key);
+  }
+}
 
+async function loadBlockedSets(ctx: WikiContext, blocked: Set<string>, key: string): Promise<BlockedPageSets> {
   const sets: BlockedPageSets = { ids: new Set(), paths: new Set(), pages: [] };
   for (const tag of blocked) {
     const data = await ctx.client.request<{ pages: { list: { id: number; path: string; locale: string }[] } }>(
@@ -208,4 +226,5 @@ export async function assertCommentNotBlocked(ctx: WikiContext, commentId: numbe
 /** Test hook. */
 export function clearBlockedIdCache(): void {
   cache.clear();
+  inflight.clear();
 }

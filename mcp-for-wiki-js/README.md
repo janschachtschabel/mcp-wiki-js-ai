@@ -111,8 +111,8 @@ Im Mehrbenutzer-Modus liegen die echten Keys **als Env-Variable in Vercel** (Ver
 | `WIKIJS_ALLOW_LEGACY` | nein | `false` | Nur mit OAuth relevant: `true` öffnet zusätzlich den Legacy-Weg (BYOK-Key/Handle per Header oder URL). Standardmäßig aus — der Legacy-Handler hat keine eigene Anmeldung |
 | `WIKIJS_KEY_MAP` | nein | – | Legacy-Map Handle→Token (nur Token; Policy aus Env). Die Keys gehen nur an `WIKIJS_URL` (ohne `WIKIJS_URL` sind die Aliase unbrauchbar). Von `WIKIJS_PROFILES` abgelöst |
 | `WIKIJS_TIMEOUT_MS` | nein | `30000` | Timeout pro GraphQL-Request inkl. Lesen der Antwort (AbortController) |
-| `WIKIJS_MAX_CONCURRENCY` | nein | `8` (Compose: `12`) | Max. parallele Upstream-Requests (Overload-Schutz; queued/sheddet bei Überlast) |
-| `WIKIJS_RETRIES` | nein | `2` | Wiederholungen bei Verbindungsfehlern: Lesezugriffe immer, Mutationen nur, wenn der Request sicher nicht gesendet wurde. `0` = aus |
+| `WIKIJS_MAX_CONCURRENCY` | nein | `8` (Compose: `12`) | Max. parallele Upstream-Requests **pro Wiki** (Overload-Schutz; queued/sheddet bei Überlast) |
+| `WIKIJS_RETRIES` | nein | `2` | Wiederholungen bei Verbindungsfehlern und Proxy-502/503/504: Lesezugriffe immer, Mutationen nur, wenn der Request sicher nicht gesendet wurde; insgesamt höchstens eine Timeout-Dauer. `0` = aus |
 | `WIKIJS_MAX_RESPONSE_BYTES` | nein | `16777216` (16 MiB) | Obergrenze für eine GraphQL-Antwort (min. `1024`); größere Antworten werden abgebrochen |
 | `WIKIJS_AUDIT` | nein | `true` | Audit-Log für write/delete/admin (`false` = aus; nie Secrets) |
 | `WIKIJS_MCP_VERBOSE` | nein | `false` | MCP-Request-Logging (`true`) |
@@ -402,8 +402,10 @@ scripts/           gen-profile.mjs (Handle-Generator) · show-roles.ts · smoke*
 - **Auto-Preserve bei `wiki_page_update`** — aktuelle Seite wird vor dem Update geholt; nicht angegebene Felder (content, tags, …) bleiben erhalten (verhindert die Wiki.js-Falle, bei der ein Metadaten-Update den Inhalt löscht).
 - **Request-Timeout** — `WIKIJS_TIMEOUT_MS` (Default 30 s) per `AbortController`, deckt auch das Lesen der Antwort ab; kein hängender Serverless-Aufruf.
 - **Antwort-Limit** — `WIKIJS_MAX_RESPONSE_BYTES` (Default 16 MiB): größere GraphQL-Antworten werden abgebrochen statt gepuffert.
-- **Überlast-Schutz** — `WIKIJS_MAX_CONCURRENCY` (Default 8) cappt parallele Upstream-Requests; Überzahl wird kurz gequeued, bei anhaltender Last mit „busy" abgewiesen (Load-Shedding) statt in einen DB-Pool-Hang zu laufen.
-- **Retry bei Verbindungsfehlern** — `WIKIJS_RETRIES` (Default 2, `0` = aus) mit Backoff: Lesezugriffe bei jedem Verbindungsfehler, Mutationen nur, wenn der Request sicher nicht gesendet wurde (z. B. DNS-Fehler, Verbindung abgelehnt). Nie bei Timeouts, GraphQL-Fehlern oder HTTP-Status.
+- **Überlast-Schutz** — `WIKIJS_MAX_CONCURRENCY` (Default 8) cappt parallele Upstream-Requests je Wiki (ein langsames Wiki blockiert keine anderen); Überzahl wird kurz gequeued, bei anhaltender Last mit „busy" abgewiesen (Load-Shedding) statt in einen DB-Pool-Hang zu laufen.
+- **Retry bei Verbindungsfehlern** — `WIKIJS_RETRIES` (Default 2, `0` = aus) mit Backoff: Lesezugriffe bei jedem Verbindungsfehler, Mutationen nur, wenn der Request sicher nicht gesendet wurde (z. B. DNS-Fehler, Verbindung abgelehnt); Lesezugriffe zusätzlich bei 502/503/504 eines Proxys. Die Wiederholungen enden spätestens nach einer Timeout-Dauer. Nie bei Timeouts, GraphQL-Fehlern oder anderem HTTP-Status.
+- **Abbruch** — bricht der MCP-Client einen Aufruf ab oder trennt die Verbindung, laufen keine weiteren Anfragen an Wiki.js; die laufende wird abgebrochen.
+- **Audit** — die Audit-Zeile nennt die Ziele eines Aufrufs (`id`, `ids`, `path`, `paths`, … — nie Inhalte oder Secrets); auch per Policy oder Tag-Sperre **abgelehnte Lesezugriffe** werden protokolliert. Hinweis: `?token=` in der MCP-URL kann in Zugriffslogs von Proxys landen — wo möglich Header verwenden.
 - **Keine Redirects** — eine Weiterleitung auf `/graphql` bzw. den Upload-Endpunkt `/u` gilt als Fehler.
 - **Navigations-Guard** — `wiki_navigation_update_tree` verweigert destruktive Voll-Ersetzungen ohne `force` und liefert stets den `previous`-Snapshot als Rollback.
 - **Escape-Hatch abgesichert** — `wiki_graphql` gibt rohe Mutationen erst als Dry-Run zurück (echte Ausführung mit `confirm:true`).

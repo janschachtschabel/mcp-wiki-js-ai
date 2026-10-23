@@ -68,12 +68,49 @@ async function confirmPreview(tool: ToolDef, args: Record<string, unknown>, ctx:
   return { content: [{ type: 'text', text }] };
 }
 
-/** Structured, secret-free audit line for write/delete/admin actions (goes to the server logs,
- *  and — when the OAuth store is enabled — to the persistent audit_log table). */
-function audit(tool: ToolDef, profile: string | undefined, sessionId: string | undefined, outcome: string, ms: number): void {
+/** Argument keys that say WHAT a call acts on. Allow-listed: never content, names or secrets (A-52). */
+const TARGET_KEYS = [
+  'id', 'ids', 'pageId', 'versionId', 'path', 'paths', 'pathPattern', 'rootPath', 'locale',
+  'destinationPath', 'destinationLocale', 'folderId', 'replaceId', 'groupId', 'userId',
+];
+const MAX_TARGET_ITEMS = 20;
+const MAX_TARGET_CHARS = 200;
+
+function auditTargets(args: Record<string, unknown>): string | undefined {
+  const out: Record<string, unknown> = {};
+  for (const key of TARGET_KEYS) {
+    const v = args[key];
+    if (typeof v === 'number' || typeof v === 'boolean') out[key] = v;
+    else if (typeof v === 'string') out[key] = v.slice(0, MAX_TARGET_CHARS);
+    else if (Array.isArray(v)) {
+      out[key] = v.slice(0, MAX_TARGET_ITEMS).map((x) => (typeof x === 'string' ? x.slice(0, MAX_TARGET_CHARS) : x));
+      if (v.length > MAX_TARGET_ITEMS) out[`${key}Total`] = v.length;
+    }
+  }
+  return Object.keys(out).length > 0 ? JSON.stringify(out) : undefined;
+}
+
+/** Structured, secret-free audit line for write/delete/admin actions and blocked attempts (goes to
+ *  the server logs, and — when the OAuth store is enabled — to the persistent audit_log table). */
+function audit(
+  tool: ToolDef,
+  profile: string | undefined,
+  sessionId: string | undefined,
+  outcome: string,
+  ms: number,
+  targets: string | undefined,
+): void {
   if (process.env.WIKIJS_AUDIT === 'false') return;
   console.log(
-    JSON.stringify({ audit: 'wikijs-mcp', tool: tool.name, category: tool.category, profile: profile ?? null, outcome, ms }),
+    JSON.stringify({
+      audit: 'wikijs-mcp',
+      tool: tool.name,
+      category: tool.category,
+      profile: profile ?? null,
+      outcome,
+      ms,
+      ...(targets ? { targets: JSON.parse(targets) } : {}),
+    }),
   );
   if (oauthEnabled()) {
     // Fire-and-forget: auditing must never fail or slow the tool call — but a
@@ -88,6 +125,7 @@ function audit(tool: ToolDef, profile: string | undefined, sessionId: string | u
           category: tool.category,
           outcome,
           ms,
+          targets: targets ?? null,
         }),
       )
       .catch((e) => console.error(`Audit log write failed (tool ${tool.name}, outcome ${outcome}):`, e));
@@ -150,10 +188,11 @@ export function registerAll(server: McpServer): void {
           outcome = e instanceof GuardrailError ? 'blocked' : 'error';
           return fail(e instanceof Error ? e.message : String(e));
         } finally {
-          // Audit state-changing actions (executions + blocked attempts); skip reads,
-          // read-only manage_* tools (R-56) and dry-run previews.
-          if (!isReadOnly(tool) && outcome !== 'preview') {
-            audit(tool, profile, sessionId, outcome, Date.now() - startedAt);
+          // Audit state-changing actions (executions + blocked attempts) and every blocked
+          // call, reads included (A-52); skip allowed reads, read-only manage_* tools (R-56)
+          // and dry-run previews.
+          if ((!isReadOnly(tool) && outcome !== 'preview') || outcome === 'blocked') {
+            audit(tool, profile, sessionId, outcome, Date.now() - startedAt, auditTargets(args ?? {}));
           }
         }
       },

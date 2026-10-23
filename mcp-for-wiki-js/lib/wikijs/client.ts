@@ -4,9 +4,10 @@
  * Uses the global `fetch` (Node >=18 and the Vercel/Next runtime), so it works
  * in serverless functions without bundling a GraphQL client library.
  *
- * OVERLOAD PROTECTION: all upstream requests pass through a process-wide concurrency
- * gate (WIKIJS_MAX_CONCURRENCY). This caps how many simultaneous GraphQL requests the
- * server fires at Wiki.js so it can never exhaust the Wiki.js DB connection pool. When the
+ * OVERLOAD PROTECTION: all upstream requests pass through a concurrency gate per wiki
+ * (WIKIJS_MAX_CONCURRENCY per base URL — audit A-20). This caps how many simultaneous
+ * GraphQL requests the server fires at one Wiki.js so it can never exhaust that wiki's DB
+ * connection pool, while a slow wiki cannot starve requests to another one (BYOK). When the
  * gate is full, requests queue briefly; if no slot frees within the timeout, the request is
  * shed with a clear "busy" error instead of piling up into a 60 s pool-acquire hang.
  *
@@ -42,6 +43,11 @@ const MAX_CONCURRENCY = envInt(process.env.WIKIJS_MAX_CONCURRENCY, 8, 1);
 const MAX_RETRIES = envInt(process.env.WIKIJS_RETRIES, 2, 0);
 /** Cap on a buffered GraphQL response body (audit R-45). */
 const MAX_RESPONSE_BYTES = envInt(process.env.WIKIJS_MAX_RESPONSE_BYTES, 16 * 1024 * 1024, 1024);
+/** The /u upload endpoint answers "ok" or a small JSON object (audit A-45). */
+const MAX_UPLOAD_RESPONSE_BYTES = 64 * 1024;
+/** What a proxy in front of a (re)starting Wiki.js answers; worth retrying for reads (A-47). */
+const PROXY_UNAVAILABLE = new Set([502, 503, 504]);
+const CANCELLED = 'Request cancelled by the MCP client — nothing more is sent to Wiki.js.';
 
 /**
  * Node fetch failure codes (`err.cause.code`) raised BEFORE any request byte is
@@ -117,22 +123,19 @@ function fetchFailure(err: unknown, url: string): Error {
 }
 
 /**
- * Read a response body as text, refusing more than `maxBytes` (declared or
- * actual) instead of buffering it — a huge upstream answer must not tie up
- * memory and the concurrency slot (audit R-45).
+ * Read a response body, refusing more than `maxBytes` (declared or actual)
+ * instead of buffering it — a huge upstream answer must not tie up memory and
+ * the concurrency slot (audit R-45, A-45). `tooLarge` builds the refusal.
  */
-async function readCapped(res: Response, maxBytes: number): Promise<string> {
-  const tooLarge = () =>
-    new Error(`Wiki.js response too large (over ${maxBytes} bytes; see WIKIJS_MAX_RESPONSE_BYTES).`);
+async function readCappedBytes(res: Response, maxBytes: number, tooLarge: () => Error): Promise<Uint8Array> {
   if (exceedsByteLimit(res.headers.get('content-length'), maxBytes)) {
     await res.body?.cancel().catch(() => {});
     throw tooLarge();
   }
-  if (!res.body) return '';
+  if (!res.body) return new Uint8Array();
   const reader = res.body.getReader();
-  const decoder = new TextDecoder();
+  const chunks: Uint8Array[] = [];
   let received = 0;
-  let text = '';
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -141,9 +144,24 @@ async function readCapped(res: Response, maxBytes: number): Promise<string> {
       await reader.cancel().catch(() => {});
       throw tooLarge();
     }
-    text += decoder.decode(value, { stream: true });
+    chunks.push(value);
   }
-  return text + decoder.decode();
+  const out = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
+async function readCapped(res: Response, maxBytes: number): Promise<string> {
+  const bytes = await readCappedBytes(
+    res,
+    maxBytes,
+    () => new Error(`Wiki.js response too large (over ${maxBytes} bytes; see WIKIJS_MAX_RESPONSE_BYTES).`),
+  );
+  return new TextDecoder().decode(bytes);
 }
 
 /** Thrown by download() when the asset's Content-Length exceeds the caller's byte cap. */
@@ -166,6 +184,11 @@ export class Semaphore {
   /** Current in-flight count (for tests/diagnostics). */
   get inFlight(): number {
     return this.active;
+  }
+
+  /** Nothing running and nobody waiting. */
+  get idle(): boolean {
+    return this.active === 0 && this.waiters.length === 0;
   }
 
   async run<T>(fn: () => Promise<T>, acquireTimeoutMs: number): Promise<T> {
@@ -217,8 +240,21 @@ export class Semaphore {
   }
 }
 
-/** Process-wide gate shared by every WikiClient instance. */
-const upstreamGate = new Semaphore(MAX_CONCURRENCY);
+/** One gate per wiki, shared by every WikiClient talking to it; dropped when idle (A-20). */
+const gates = new Map<string, Semaphore>();
+
+async function gated<T>(baseUrl: string, fn: () => Promise<T>, acquireTimeoutMs: number): Promise<T> {
+  let gate = gates.get(baseUrl);
+  if (!gate) {
+    gate = new Semaphore(MAX_CONCURRENCY);
+    gates.set(baseUrl, gate);
+  }
+  try {
+    return await gate.run(fn, acquireTimeoutMs);
+  } finally {
+    if (gate.idle && gates.get(baseUrl) === gate) gates.delete(baseUrl);
+  }
+}
 
 export interface WikiClientOptions {
   /**
@@ -235,15 +271,19 @@ export interface WikiClientOptions {
    * assertPublicTarget); operator-configured targets never pass one.
    */
   assertTarget?: (baseUrl: string) => Promise<void>;
+  /** The MCP request's abort signal: a cancelled call stops talking to Wiki.js (A-15). */
+  signal?: AbortSignal;
 }
 
 export class WikiClient {
   readonly baseUrl: string;
-  private readonly token?: string;
+  /** Replaced by a renewed user JWT, so later requests of the same call use it (A-34). */
+  private token?: string;
   private readonly timeoutMs: number;
   private readonly onNewJwt?: (jwt: string) => void;
   private readonly retries: number;
   private readonly assertTarget?: (baseUrl: string) => Promise<void>;
+  private readonly signal?: AbortSignal;
 
   constructor(baseUrl: string, token?: string, timeoutMs: number = DEFAULT_TIMEOUT_MS, opts: WikiClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
@@ -252,18 +292,51 @@ export class WikiClient {
     this.onNewJwt = opts.onNewJwt;
     this.retries = opts.retries ?? MAX_RETRIES;
     this.assertTarget = opts.assertTarget;
+    this.signal = opts.signal;
   }
 
-  /** Forward a renewed user JWT (if any) to the session layer. Never throws. */
+  /** Use a renewed user JWT from now on and forward it to the session layer. Never throws. */
   private captureRenewedJwt(res: Response): void {
-    if (!this.onNewJwt) return;
     const renewed = res.headers.get('new-jwt');
-    if (renewed) {
-      try {
-        this.onNewJwt(renewed);
-      } catch {
-        /* persisting a renewal must never break the actual request */
-      }
+    if (!renewed) return;
+    this.token = renewed;
+    try {
+      this.onNewJwt?.(renewed);
+    } catch {
+      /* persisting a renewal must never break the actual request */
+    }
+  }
+
+  private authHeader(): Record<string, string> {
+    return this.token ? { authorization: `Bearer ${this.token}` } : {};
+  }
+
+  /** Abort on our timeout or on the client's cancellation, whichever comes first. */
+  private abortSignal(controller: AbortController): AbortSignal {
+    return this.signal ? AbortSignal.any([controller.signal, this.signal]) : controller.signal;
+  }
+
+  private throwIfCancelled(): void {
+    if (this.signal?.aborted) throw new Error(CANCELLED);
+  }
+
+  /**
+   * The BYOK target check (DNS lookup) runs before a concurrency slot is taken and
+   * is bounded by the request timeout, so a hanging resolver blocks nobody (A-46).
+   */
+  private async checkTarget(): Promise<void> {
+    if (!this.assertTarget) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Wiki.js target check timed out after ${this.timeoutMs} ms (${this.baseUrl}).`)),
+        this.timeoutMs,
+      );
+    });
+    try {
+      await Promise.race([this.assertTarget(this.baseUrl), timeout]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -274,19 +347,26 @@ export class WikiClient {
   /**
    * Run a GraphQL request with retry on connection failures. Every attempt takes
    * its own concurrency slot, so a backoff never blocks other callers (R-47).
-   * Reads retry on any connection failure; writes only when nothing was sent (R-32).
-   * Never retried: timeouts, redirects, GraphQL errors, HTTP status.
+   * Reads retry on any connection failure and on a proxy 502/503/504 (A-47); writes
+   * only when nothing was sent (R-32). Retries stop at an overall deadline of one
+   * timeout, so a retry chain cannot outlast the invocation (A-47).
+   * Never retried: timeouts, redirects, GraphQL errors, other HTTP statuses, cancellation.
    */
   async request<T = any>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
     const readOnly = isReadOnlyDocument(query);
+    const startedAt = Date.now();
     for (let attempt = 0; ; attempt++) {
       try {
-        return await upstreamGate.run(() => this.send<T>(query, variables), this.timeoutMs);
+        this.throwIfCancelled();
+        await this.checkTarget();
+        return await gated(this.baseUrl, () => this.send<T>(query, variables), this.timeoutMs);
       } catch (err) {
         const retryable =
           err instanceof WikiConnectionError && !(err instanceof WikiRedirectError) && (readOnly || err.nothingSent);
-        if (attempt < this.retries && retryable) {
-          await sleep(backoffMs(attempt));
+        const backoff = backoffMs(attempt);
+        const withinDeadline = Date.now() - startedAt + backoff < this.timeoutMs;
+        if (attempt < this.retries && retryable && withinDeadline && !this.signal?.aborted) {
+          await sleep(backoff);
           continue;
         }
         throw err;
@@ -295,7 +375,6 @@ export class WikiClient {
   }
 
   private async send<T = any>(query: string, variables: Record<string, unknown>): Promise<T> {
-    await this.assertTarget?.(this.baseUrl);
     // Abort after timeoutMs — covering headers AND body — so a hung Wiki.js never
     // ties up a serverless invocation or a concurrency slot (R-45).
     const controller = new AbortController();
@@ -309,10 +388,10 @@ export class WikiClient {
           headers: {
             'content-type': 'application/json',
             accept: 'application/json',
-            ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
+            ...this.authHeader(),
           },
           body: JSON.stringify({ query, variables }),
-          signal: controller.signal,
+          signal: this.abortSignal(controller),
           // GraphQL is answered directly; a redirect (e.g. to /login) is never legitimate (R-27).
           redirect: 'error',
         });
@@ -324,6 +403,7 @@ export class WikiClient {
       raw = await readCapped(res, MAX_RESPONSE_BYTES);
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
+        this.throwIfCancelled();
         throw new Error(`Wiki.js request timed out after ${this.timeoutMs} ms (${this.endpoint}).`);
       }
       throw err;
@@ -335,10 +415,11 @@ export class WikiClient {
     try {
       body = JSON.parse(raw);
     } catch {
-      throw new Error(
+      const message =
         `Wiki.js returned a non-JSON response (HTTP ${res.status}) from ${this.endpoint}. ` +
-          `First bytes: ${raw.slice(0, 200)}`,
-      );
+        `First bytes: ${raw.slice(0, 200)}`;
+      // A proxy answering for an unavailable Wiki.js: retryable for reads (A-47).
+      throw PROXY_UNAVAILABLE.has(res.status) ? new WikiConnectionError(message) : new Error(message);
     }
 
     if (body.errors && body.errors.length > 0) {
@@ -359,19 +440,19 @@ export class WikiClient {
    *
    * `maxBytes` guards memory: if the response advertises a larger Content-Length
    * the body is NEVER buffered. Wiki.js serves assets with a Content-Length, so
-   * this covers the real case; a response without one still buffers (the caller
-   * applies a post-read cap as a backstop).
+   * this covers the real case; without one the body is read only up to `maxBytes` (A-45).
    */
   async download(path: string, maxBytes = Infinity): Promise<{ data: Uint8Array; mime: string }> {
-    return upstreamGate.run(async () => {
-      await this.assertTarget?.(this.baseUrl);
+    this.throwIfCancelled();
+    await this.checkTarget();
+    return gated(this.baseUrl, async () => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       try {
         const url = `${this.baseUrl}/${path.replace(/^\/+/, '')}`;
         const res = await fetch(url, {
-          headers: { ...(this.token ? { authorization: `Bearer ${this.token}` } : {}) },
-          signal: controller.signal,
+          headers: this.authHeader(),
+          signal: this.abortSignal(controller),
           // Assets are served directly; a redirect (e.g. to /login) leaves the asset space.
           redirect: 'error',
         }).catch((err) => {
@@ -385,12 +466,15 @@ export class WikiClient {
             `Asset ${path} is ${res.headers.get('content-length')} bytes, over the ${maxBytes}-byte limit.`,
           );
         }
-        return {
-          data: new Uint8Array(await res.arrayBuffer()),
-          mime: res.headers.get('content-type') ?? 'application/octet-stream',
-        };
+        const data = await readCappedBytes(
+          res,
+          maxBytes,
+          () => new AssetTooLargeError(`Asset ${path} is over the ${maxBytes}-byte limit.`),
+        );
+        return { data, mime: res.headers.get('content-type') ?? 'application/octet-stream' };
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
+          this.throwIfCancelled();
           throw new Error(`Asset download timed out after ${this.timeoutMs} ms.`);
         }
         throw err;
@@ -407,8 +491,9 @@ export class WikiClient {
     mime?: string;
     folderId?: number;
   }): Promise<{ succeeded: boolean; message?: string }> {
-    return upstreamGate.run(async () => {
-      await this.assertTarget?.(this.baseUrl);
+    this.throwIfCancelled();
+    await this.checkTarget();
+    return gated(this.baseUrl, async () => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       try {
@@ -419,15 +504,23 @@ export class WikiClient {
         // narrow to BlobPart's ArrayBufferView<ArrayBuffer>. Runtime is fine.
         const part = opts.data as unknown as BlobPart;
         form.append('mediaUpload', new Blob([part], { type: opts.mime || 'application/octet-stream' }), opts.filename);
-        const res = await fetch(`${this.baseUrl}/u`, {
+        const url = `${this.baseUrl}/u`;
+        const res = await fetch(url, {
           method: 'POST',
-          headers: { ...(this.token ? { authorization: `Bearer ${this.token}` } : {}) },
+          headers: this.authHeader(),
           body: form,
-          signal: controller.signal,
+          signal: this.abortSignal(controller),
           redirect: 'error',
+        }).catch((err) => {
+          throw err instanceof Error && err.name === 'AbortError' ? err : fetchFailure(err, url);
         });
         this.captureRenewedJwt(res);
-        const text = (await res.text()).trim();
+        const answer = await readCappedBytes(
+          res,
+          MAX_UPLOAD_RESPONSE_BYTES,
+          () => new Error(`Wiki.js upload answer too large (HTTP ${res.status}, over ${MAX_UPLOAD_RESPONSE_BYTES} bytes).`),
+        );
+        const text = new TextDecoder().decode(answer).trim();
         if (res.ok && text === 'ok') return { succeeded: true };
         try {
           const j = JSON.parse(text) as { succeeded?: boolean; message?: string };
@@ -437,9 +530,10 @@ export class WikiClient {
         }
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
+          this.throwIfCancelled();
           throw new Error(`Wiki.js upload timed out after ${this.timeoutMs} ms.`);
         }
-        throw fetchFailure(err, `${this.baseUrl}/u`);
+        throw err;
       } finally {
         clearTimeout(timer);
       }

@@ -265,6 +265,16 @@ async function main(): Promise<void> {
   const { INSTRUCTIONS } = await import('../lib/meta');
   check('R-20: INSTRUCTIONS say wiki content is data, not instructions', /untrusted/i.test(INSTRUCTIONS) && /not (as )?instructions/i.test(INSTRUCTIONS));
 
+  // ---- A-52: audit lines name their targets; blocked reads are logged ----------------
+  const del = await run('wiki_asset_delete', { id: 41 }, {});
+  check('A-52: the audit line names the target id', del.audit.some((a) => a.tool === 'wiki_asset_delete' && JSON.stringify((a as { targets?: unknown }).targets ?? null).includes('41')));
+  const blockedRead = await run('wiki_site_info', {}, { 'x-wikijs-policy': JSON.stringify({ categories: { read: 'block' } }) });
+  check('A-52: a read blocked by policy is audited as "blocked"', blockedRead.audit.some((a) => a.tool === 'wiki_site_info' && a.outcome === 'blocked'));
+  const allowedRead = await run('wiki_site_info', {}, {});
+  check('A-52: allowed reads stay out of the audit log', allowedRead.audit.length === 0);
+  const secretArgs = await run('wiki_user_reset_password', { id: 5, newPassword: 'Never-Logged-123' }, {});
+  check('A-52: targets never carry secret arguments', !JSON.stringify(secretArgs.audit).includes('Never-Logged-123'));
+
   globalThis.fetch = realFetch;
   console.log = realLog;
   if (failed === 0) {

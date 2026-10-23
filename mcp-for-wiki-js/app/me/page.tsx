@@ -224,7 +224,10 @@ export default async function MePage({ searchParams }: { searchParams: Promise<R
                     <tr key={i}>
                       <td style={td}><Time ts={a.ts} /></td>
                       <td style={td}>{a.profile ?? '—'}</td>
-                      <td style={{ ...td, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', fontSize: 13 }}>{a.tool}</td>
+                      <td style={{ ...td, fontFamily: 'ui-monospace, Menlo, Consolas, monospace', fontSize: 13 }}>
+                        {a.tool}
+                        {a.targets ? <div style={{ ...muted, fontSize: 12, margin: 0 }}>{a.targets}</div> : null}
+                      </td>
                       <td style={td}>{a.outcome}</td>
                     </tr>
                   ))}

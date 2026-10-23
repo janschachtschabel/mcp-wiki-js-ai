@@ -86,6 +86,15 @@ async function main(): Promise<void> {
   await g.blockedPageIds(ctxB);
   check('different credential does NOT share the cache', calls === 4);
 
+  // ---- A-35: parallel lookups for one credential share one upstream round ------
+  g.clearBlockedIdCache();
+  calls = 0;
+  await Promise.all([g.blockedPageSets(ctx), g.blockedPageSets(ctx), g.blockedPageIds(ctx)]);
+  check(`A-35: concurrent lookups are coalesced (${calls} upstream queries)`, calls === 2);
+  calls = 0;
+  await Promise.all([g.blockedPageSets(ctx, { fresh: true }), g.blockedPageSets(ctx, { fresh: true })]);
+  check('A-35: fresh lookups (destructive callers) still query upstream themselves', calls === 4);
+
   // ---- guardrail-tag self-protection ---------------------------------------
   const tagCtx = {
     baseUrl: 'https://stub.example',
