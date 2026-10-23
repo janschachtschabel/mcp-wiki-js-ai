@@ -530,6 +530,19 @@ docker run --rm --user 1000:1000 -v <project>_mcp-data:/data -v <project>_mcp-ba
 docker compose start mcp
 ```
 
+**Notes on updating to the state of 2026-10-23** (A1/A2):
+
+- Pull the new image first (`docker compose pull`; in a panel, redeploy with the current image).
+  An older cached `:main` keeps working, only the new `mcp-backup` service will not start.
+- On its first start `init` moves `MCP_SESSION_SECRET` unchanged into the new volume `mcp-secrets` —
+  existing AI connections stay valid. Going back to an older compose file afterwards creates a new
+  secret: the AI apps then have to reconnect.
+- Old `mcp-*.sqlite` copies in the `db-backups` volume are no longer rotated; they can be deleted
+  (`docker compose exec db-backup sh -c 'rm -f /backups/mcp-*.sqlite'`).
+- If a Wiki.js update runs a long database migration, `docker compose up` waits up to about eight
+  minutes for the wiki's healthcheck; if it reports an error after that, the stack still runs —
+  `bootstrap` then starts with the next deploy.
+
 **Move to a new server:** start the stack once without variables, restore the secrets from
 `secrets-<time>.tar.gz` into the volumes `stack-secrets` (`secrets/…`) and `mcp-secrets`
 (`mcp-secrets/…`), restart, then restore the wiki and the MCP database as above. Without the old

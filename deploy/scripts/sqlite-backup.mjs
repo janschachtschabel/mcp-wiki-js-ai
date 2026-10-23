@@ -56,10 +56,21 @@ function backupOnce() {
   return true;
 }
 
+/** One run that never throws: a crash would restart-loop the service (or, as a Helm
+ *  sidecar, mark the MCP pod NotReady). */
+function safeBackup() {
+  try {
+    return backupOnce();
+  } catch (e) {
+    console.error(`backup FAILED (mcp sqlite): ${e instanceof Error ? e.message : String(e)}`);
+    return false;
+  }
+}
+
 if (process.env.BACKUP_ONCE === '1') {
-  process.exit(backupOnce() ? 0 : 1);
+  process.exit(safeBackup() ? 0 : 1);
 }
 for (;;) {
-  backupOnce();
+  safeBackup();
   await new Promise((r) => setTimeout(r, INTERVAL_S * 1000));
 }

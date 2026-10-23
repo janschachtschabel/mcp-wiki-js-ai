@@ -132,7 +132,8 @@ services:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/healthz"]
       interval: 15s
       timeout: 5s
-      retries: 5
+      # Großzügig: ein Update von Wiki.js kann die Datenbank minutenlang migrieren.
+      retries: 20
       start_period: 180s
     labels:
       - "traefik.enable=true"
@@ -177,6 +178,9 @@ services:
     # MCP_SESSION_SECRET und PUBLIC_BASE_URL kommen aus den Dateien von init.
     command:
       - node
+      # Ältere Images legen das Secret noch im gemeinsamen Volume ab: dann gilt diese
+      # Datei; sonst gewinnt die spätere aus mcp-secrets.
+      - --env-file-if-exists=/stack/secrets/session.env
       - --env-file-if-exists=/stack/mcp-secrets/session.env
       - --env-file-if-exists=/stack/secrets/public.env
       - server.js

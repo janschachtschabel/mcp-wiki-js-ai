@@ -114,6 +114,11 @@ async function backupTests(): Promise<void> {
   check('A-16: rotation keeps the newest BACKUP_KEEP copies', files.filter((f) => f.endsWith('.sqlite')).length === 2 && !files.includes('mcp-20200101-000000.sqlite'));
   check('A-16: stale partial files are removed', !files.some((f) => f.endsWith('.part')));
 
+  // Review: an unreadable store is reported, not an uncaught crash (a crash-looping
+  // Helm sidecar would mark the MCP pod NotReady).
+  const broken = await run(BACKUP, { ...env, MCP_DB: tmp() });
+  check('review: an unreadable store is reported as "backup FAILED", not a stack trace', broken.code !== 0 && /backup FAILED/.test(broken.out) && !/\n\s+at /.test(broken.out));
+
   const none = await run(BACKUP, { ...env, MCP_DB: path.join(tmp(), 'missing.sqlite') });
   check('A-50: no store yet → nothing to back up, no error', none.code === 0 && /nothing to back up/i.test(none.out));
 }

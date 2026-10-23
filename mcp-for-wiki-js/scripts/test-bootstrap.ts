@@ -31,12 +31,17 @@ interface WikiState {
   engine: string;
   pages: string[];
   groups: { id: number; name: string }[];
+  /** Permissions of the Team group (groups.single); default: already configured. */
+  groupPerms?: string[];
   users: string[];
   fail?: string;
   calls: string[];
 }
 
 const ok = { succeeded: true, message: '' };
+/** Wiki.js gives a new group these (server/app/data.yml defaultPermissions). */
+const WIKI_DEFAULT_PERMS = ['read:pages', 'read:assets', 'read:comments', 'write:comments'];
+const TEAM_CONFIGURED = ['read:pages', 'write:pages', 'read:assets', 'write:assets', 'read:comments', 'write:comments', 'read:source', 'read:history'];
 const bad = { succeeded: false, message: 'refused by stub' };
 
 /** A tiny Wiki.js: answers the queries bootstrap.mjs sends and records every mutation. */
@@ -68,6 +73,7 @@ function startWiki(state: WikiState): Promise<{ url: string; close: () => void }
           return { search: { searchEngines: ['db', 'postgres', 'elasticsearch'].map((key) => ({ key, isEnabled: key === state.engine })) } };
         }
         if (query.includes('groups { list')) return { groups: { list: state.groups } };
+        if (query.includes('groups { single')) return { groups: { single: { permissions: state.groupPerms ?? TEAM_CONFIGURED } } };
         if (query.includes('users { search')) return { users: { search: state.users.map((email, i) => ({ id: i + 10, email })) } };
         // mutations
         const name = /\{\s*\w+\s*\{\s*(\w+)/.exec(query.replace(/^mutation(\([^)]*\))?/, ''))?.[1] ?? 'unknown';
@@ -170,10 +176,19 @@ async function main(): Promise<void> {
   check(`A-36: no language/search mutation and no re-index on a re-run (${again.calls.join(',') || 'none'})`, !again.calls.some((c) => changing.includes(c)));
 
   // 3. A-36: settings an admin changed later survive the automatic run.
-  const changed = settled({ locale: 'en', engine: 'elasticsearch' });
+  const changed = settled({ locale: 'en', engine: 'elasticsearch', pages: ['home', 'ki-zugang', 'team/notes'] });
   r = await run(changed, ['--if-configured', '--locale=de']);
   check('A-36: an admin-chosen language is kept by the automatic run (no en→de migration)', r.code === 0 && changed.locale === 'en' && !changed.calls.includes('migrateToLocale'));
   check('A-36: an admin-chosen search engine is kept by the automatic run', changed.engine === 'elasticsearch' && !changed.calls.includes('updateSearchEngines'));
+
+  // 3b. Review: a first setup that broke off after /finalize (e.g. no internet for the
+  // language pack) is completed by the restart — the wiki is still untouched.
+  const halfDone = settled({ locale: 'en', engine: 'db', pages: ['home', 'ki-zugang'] });
+  r = await run(halfDone, ['--if-configured', '--locale=de']);
+  check('review: a half-finished first setup is completed by the next automatic run', r.code === 0 && halfDone.locale === 'de' && halfDone.engine === 'postgres');
+  const teamUnset = settled({ groupPerms: WIKI_DEFAULT_PERMS });
+  r = await run(teamUnset, ['--if-configured', '--demo'], { DEMO_PASSWORD: 'Demo-Pass-123' });
+  check('review: a "Team" group still on Wiki.js default rights gets its rights', r.code === 0 && teamUnset.calls.includes('update'));
 
   // 4. A manual run still applies what it is told to.
   const manual = settled({ locale: 'en', engine: 'db' });

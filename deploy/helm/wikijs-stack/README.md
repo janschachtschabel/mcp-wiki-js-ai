@@ -82,6 +82,12 @@ Alle Werte mit Erklärung: [`values.yaml`](values.yaml).
   (ohne das Postgres-Passwort darin passt ein Restore nicht mehr). Secret und Backup-PVCs bleiben bei
   `helm uninstall` stehen.
 - **Restore:** `kubectl -n wiki exec -i wiki-postgres-0 -- pg_restore -U wikijs -d wiki --clean < wiki-<datum>.dump`
+- **Backup-PVC des MCP-Servers:** Sie wird zusammen mit der Daten-PVC an den einen MCP-Pod gebunden. Auf
+  Clustern mit mehreren Zonen eine StorageClass mit `volumeBindingMode: WaitForFirstConsumer` nutzen (bei
+  den meisten Cloud-Anbietern und `local-path` Standard), sonst können beide PVCs in verschiedenen Zonen
+  landen und der Pod startet nicht; alternativ `backup.mcpStore.enabled=false`.
+- **`helm upgrade --reuse-values`** von einer älteren Chart-Version funktioniert; neue Werte gelten dann
+  mit ihren Defaults (MCP-Backup an, NetworkPolicy für Wiki/MCP aus).
 - **NetworkPolicy** wirkt nur mit einem CNI, das sie durchsetzt (z. B. Calico, Cilium, k3s). Postgres ist
   immer abgeschottet; Wiki.js und MCP erst mit `networkPolicy.ingressFrom` — der MCP-Server vertraut dem
   rechten `X-Forwarded-For`-Eintrag seines Proxys, deshalb sollte nur der Ingress-Controller ihn erreichen.

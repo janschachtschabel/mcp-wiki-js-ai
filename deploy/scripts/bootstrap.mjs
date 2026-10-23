@@ -13,10 +13,12 @@
  *                             + Testnutzer anlegen
  *
  * Schritte 3–5 ändern nur, was vom Soll abweicht. Der automatische Lauf bei
- * jedem Deploy (--if-configured) setzt Sprache, Suchmaschine und die Rechte der
- * Gruppe "Team" nur bei der Ersteinrichtung; was Admins später in Wiki.js
- * ändern, bleibt erhalten (Audit A-36). Ein manueller Lauf oder --reapply stellt
- * das Soll her.
+ * jedem Deploy (--if-configured) setzt Sprache und Suchmaschine nur, solange das
+ * Wiki noch unbenutzt ist (nur Startseite und /ki-zugang), und die Rechte der
+ * Gruppe "Team" nur, solange sie noch die Wiki.js-Standardrechte hat; was Admins
+ * später in Wiki.js ändern, bleibt erhalten (Audit A-36). Eine abgebrochene
+ * Ersteinrichtung vollendet der nächste Lauf. Ein manueller Lauf oder --reapply
+ * stellt das Soll her.
  *
  * In docker-compose.yml und deploy/standalone/full läuft es automatisch (Dienst
  * bootstrap, mit --if-configured). Mit docker-compose.build.yml
@@ -71,6 +73,9 @@ const DEMO = {
   name: process.env.DEMO_NAME || 'Test-Zugang',
   password: process.env.DEMO_PASSWORD,
 };
+
+/** What Wiki.js gives a new group (server/app/data.yml) — "Team" not configured yet. */
+const WIKI_DEFAULT_PERMS = ['read:pages', 'read:assets', 'read:comments', 'write:comments'];
 
 const TEAM_PERMS = [
   'read:pages', 'write:pages', 'read:assets', 'write:assets',
@@ -209,6 +214,14 @@ async function ensurePage(jwt, { path, title, description, content }) {
   log(`Seite /${path} angelegt.`);
 }
 
+const START_PAGES = ['home', 'ki-zugang'];
+
+/** No content beyond the start pages: the wiki is still in its first setup. */
+async function onlyStartPages(jwt) {
+  const found = await gql('query{ pages { list { path } } }', {}, jwt);
+  return found.pages.list.every((p) => START_PAGES.includes(p.path));
+}
+
 /** Step 2 — a home page (instead of the setup screen) and the user guide it links to. */
 async function ensureStartPages(jwt) {
   await ensurePage(jwt, {
@@ -330,6 +343,12 @@ async function ensureDemo(jwt) {
   const groups = await gql('{ groups { list { id name } } }', {}, jwt);
   let team = groups.groups.list.find((g) => g.name === 'Team');
   const created = !team;
+  let unconfigured = false;
+  if (!created) {
+    const g = await gql('query($id:Int!){ groups { single(id:$id){ permissions } } }', { id: team.id }, jwt);
+    const perms = g.groups.single?.permissions ?? [];
+    unconfigured = perms.length === WIKI_DEFAULT_PERMS.length && WIKI_DEFAULT_PERMS.every((p) => perms.includes(p));
+  }
   if (created) {
     const c = await gql(
       'mutation($name:String!){ groups { create(name:$name){ responseResult { succeeded message } group { id } } } }',
@@ -339,7 +358,7 @@ async function ensureDemo(jwt) {
     team = c.groups.create.group;
     if (!team?.id) throw new Error('Gruppe "Team" angelegt, aber Wiki.js nennt keine id.');
   }
-  if (created || !KEEP_ADMIN_CHOICES) {
+  if (created || unconfigured || !KEEP_ADMIN_CHOICES) {
     const u = await gql(
       'mutation($id:Int!,$name:String!,$redirectOnLogin:String!,$permissions:[String]!,$pageRules:[PageRuleInput]!){ groups { update(id:$id,name:$name,redirectOnLogin:$redirectOnLogin,permissions:$permissions,pageRules:$pageRules){ responseResult { succeeded message } } } }',
       {
@@ -377,8 +396,12 @@ if (!process.env.WIKI_URL && !process.env.PUBLIC_URL) {
   );
 }
 await waitForWiki();
-const { jwt, fresh } = await ensureFinalized();
+const finalized = await ensureFinalized();
+const jwt = finalized.jwt;
 await ensureStartPages(jwt);
+// First setup = this run finalized the wiki, or it still holds nothing but the start
+// pages — so a setup that broke off after /finalize is completed by the restart.
+const fresh = finalized.fresh || (await onlyStartPages(jwt));
 if (LOCALE) await switchLocale(jwt, fresh);
 await ensureSearchEngine(jwt, fresh);
 if (WITH_DEMO) await ensureDemo(jwt);

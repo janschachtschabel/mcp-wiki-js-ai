@@ -78,7 +78,8 @@ spec:
           - name: backups
             persistentVolumeClaim:
               claimName: {{ $fullname }}-backups
-{{- if .Values.backup.mcpStore.enabled }}
+{{- $mcpStore := .Values.backup.mcpStore | default dict }}
+{{- if dig "enabled" true $mcpStore }}
 ---
 # The MCP store (OAuth sessions, audit log) is copied by a sidecar in the MCP pod:
 # its PVC is ReadWriteOnce, a CronJob on another node could not mount it.
@@ -96,6 +97,6 @@ spec:
   {{- end }}
   resources:
     requests:
-      storage: {{ .Values.backup.mcpStore.size }}
+      storage: {{ dig "size" "1Gi" $mcpStore }}
 {{- end }}
 {{- end }}

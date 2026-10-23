@@ -90,7 +90,9 @@ spec:
         resources: {{ toYaml . | nindent 10 }}
         {{- end }}
         securityContext: {{ toYaml .Values.containerSecurityContext | nindent 10 }}
-      {{- if and .Values.backup.enabled .Values.backup.mcpStore.enabled }}
+      {{- /* dig: `helm upgrade --reuse-values` keeps the old chart's values, which lack mcpStore. */}}
+      {{- $mcpStore := .Values.backup.mcpStore | default dict }}
+      {{- if and .Values.backup.enabled (dig "enabled" true $mcpStore) }}
       # Daily consistent copy of the sqlite store (VACUUM INTO) into its own PVC (A-16).
       - name: mcp-backup
         image: {{ include "stack.mcpImage" . }}
@@ -102,7 +104,7 @@ spec:
         - name: BACKUP_DIR
           value: /backups
         - name: BACKUP_INTERVAL_SECONDS
-          value: {{ .Values.backup.mcpStore.intervalSeconds | quote }}
+          value: {{ dig "intervalSeconds" 86400 $mcpStore | quote }}
         - name: BACKUP_KEEP
           value: {{ .Values.backup.keep | quote }}
         volumeMounts:
