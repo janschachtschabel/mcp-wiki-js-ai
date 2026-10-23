@@ -82,4 +82,19 @@ check('missing role on systemadmin ceiling: defaultRole "safe" -> write confirm'
     'confirm',
   ));
 
+// 9. audit A-11: a role used as PRESET keeps its per-tool rules (roles.json: wiki_graphql block)
+check('A-11: preset "betreuer" keeps wiki_graphql blocked (role tool rule, inherited via extends)', () =>
+  assert.equal(basePolicyFromEnv({ WIKIJS_PERMISSION_PRESET: 'betreuer' }).resolve('wiki_graphql', 'manage_system'), 'block'));
+check('A-11: preset "wiki" keeps wiki_graphql blocked', () =>
+  assert.equal(basePolicyFromEnv({ WIKIJS_PERMISSION_PRESET: 'wiki' }).resolve('wiki_graphql', 'manage_system'), 'block'));
+check('A-11: WIKIJS_POLICY tools still override the preset deliberately', () =>
+  assert.equal(
+    basePolicyFromEnv({ WIKIJS_PERMISSION_PRESET: 'betreuer', WIKIJS_POLICY: JSON.stringify({ tools: { wiki_graphql: 'confirm' } }) }).resolve('wiki_graphql', 'manage_system'),
+    'confirm',
+  ));
+check('A-11: a preset overlay (X-Wikijs-Preset) carries the role tool rules too', () =>
+  assert.equal(basePolicyFromEnv({ WIKIJS_PERMISSION_PRESET: 'full' }).withOverlay({ preset: 'betreuer' }).resolve('wiki_graphql', 'manage_system'), 'block'));
+check('A-11: other manage_system tools keep the preset category mode', () =>
+  assert.equal(basePolicyFromEnv({ WIKIJS_PERMISSION_PRESET: 'betreuer' }).resolve('wiki_site_config', 'manage_system'), 'confirm'));
+
 console.log(`\n${passed} policy assertions passed.`);

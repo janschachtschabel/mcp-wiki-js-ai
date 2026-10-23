@@ -238,7 +238,9 @@ export class Policy {
     let mode: PolicyMode = this.tools[toolName] ?? this.cats[category] ?? this.base[category];
     for (const overlay of this.overlays) {
       const presetMap = overlay.preset ? PRESETS[overlay.preset] : undefined;
-      const ov = overlay.tools?.[toolName] ?? overlay.categories?.[category] ?? presetMap?.[category];
+      // A preset is a whole role: its per-tool rules count too, not just its categories (A-11).
+      const presetTool = overlay.preset ? ROLES[overlay.preset]?.tools?.[toolName] : undefined;
+      const ov = overlay.tools?.[toolName] ?? presetTool ?? overlay.categories?.[category] ?? presetMap?.[category];
       if (ov) mode = strictest(mode, ov);
     }
     return mode;
@@ -251,7 +253,10 @@ export function basePolicyFromEnv(env: Record<string, string | undefined> = proc
   const base = PRESETS[presetName] ?? PRESETS[DEFAULT_PRESET];
   const override = parsePolicyConfig(env.WIKIJS_POLICY);
   const cats = override?.categories ?? {};
-  const tools = override?.tools ?? {};
+  // The preset role's per-tool rules (e.g. wiki_graphql: block) belong to the baseline (A-11);
+  // WIKIJS_POLICY is explicit deployment config and may still change them.
+  const presetTools = (ROLES[presetName] ?? ROLES[DEFAULT_PRESET])?.tools ?? {};
+  const tools = { ...presetTools, ...(override?.tools ?? {}) };
   const showBlocked = /^(1|true|yes|on)$/i.test(env.WIKIJS_SHOW_BLOCKED || '');
   return new Policy(base, cats, tools, showBlocked);
 }
