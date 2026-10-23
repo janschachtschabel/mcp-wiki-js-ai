@@ -173,9 +173,12 @@ services:
         while true; do
           ts=$$(date +%Y%m%d-%H%M%S)
           rm -f /backups/*.part
+          # 0 oder kein Zahlwert hieße "tail -n +1" = alles löschen: dann 7 (wie mcp-backup).
+          keep=$${BACKUP_KEEP:-7}
+          case "$$keep" in ''|*[!0-9]*|0) keep=7 ;; esac
           if pg_dump -h db -U wikijs -d wiki -F c -f "/backups/wiki-$$ts.dump.part" && mv "/backups/wiki-$$ts.dump.part" "/backups/wiki-$$ts.dump"; then
             echo "backup ok: wiki-$$ts.dump"
-            ls -1t /backups/wiki-*.dump 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
+            ls -1t /backups/wiki-*.dump 2>/dev/null | tail -n +$$((keep + 1)) | xargs -r rm --
           else
             rm -f "/backups/wiki-$$ts.dump.part"
             echo "backup FAILED (postgres) at $$ts" >&2

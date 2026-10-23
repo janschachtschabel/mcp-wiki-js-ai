@@ -29,7 +29,8 @@
 #
 # Backups: täglich Postgres + Secrets ins Volume db-backups, die MCP-Datenbank ins
 # Volume mcp-backups. Beide liegen auf DIESEM Server — für den Ausfall des Servers
-# regelmäßig nach außen kopieren (Anleitung: docs/installation-it.md, „Backup“).
+# regelmäßig nach außen kopieren (Anleitung: mcp-for-wiki-js/docs/installation-it.md,
+# „Backup und Wiederherstellung“).
 #
 # Andere Varianten:
 #   ohne Traefik, eigener Caddy auf 80/443:  deploy/standalone/full/docker-compose.yml
@@ -59,6 +60,9 @@ services:
     volumes:
       - stack-secrets:/stack/secrets
       - mcp-secrets:/stack/mcp-secrets
+      # Nur eingebunden, damit Docker das frische Volume dem Nutzer 1000 gibt (wie
+      # /backups im Image) — db-backup läuft dann ohne root.
+      - db-backups:/backups
 
   db:
     image: postgres:15-alpine
@@ -260,10 +264,13 @@ services:
 
   # Tägliches Backup von Postgres und den Secrets ins Volume db-backups. Ohne die
   # Secrets ließen sich die verschlüsselten MCP-Sitzungen aus mcp-backups nicht
-  # wieder nutzen. Die Dateien sind nur für root lesbar (sie enthalten Geheimnisse).
+  # wieder nutzen. Die Dateien sind nur für ihren Besitzer lesbar (Geheimnisse).
   db-backup:
     image: postgres:15-alpine
     restart: unless-stopped
+    # Ohne root (Audit A-50): uid 1000 liest postgres_password (0644) und das
+    # MCP-Secret (0600, gleicher Nutzer) und schreibt in db-backups (siehe init).
+    user: "1000:1000"
     mem_limit: 256m
     pids_limit: 64
     security_opt:
@@ -295,16 +302,19 @@ services:
         while true; do
           ts=$$(date +%Y%m%d-%H%M%S)
           rm -f /backups/*.part
+          # 0 oder kein Zahlwert hieße "tail -n +1" = alles löschen: dann 7 (wie mcp-backup).
+          keep=$${BACKUP_KEEP:-7}
+          case "$$keep" in ''|*[!0-9]*|0) keep=7 ;; esac
           if pg_dump -h wikijs-db -U wikijs -d wiki -F c -f "/backups/wiki-$$ts.dump.part" && mv "/backups/wiki-$$ts.dump.part" "/backups/wiki-$$ts.dump"; then
             echo "backup ok: wiki-$$ts.dump"
-            ls -1t /backups/wiki-*.dump 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
+            ls -1t /backups/wiki-*.dump 2>/dev/null | tail -n +$$((keep + 1)) | xargs -r rm --
           else
             rm -f "/backups/wiki-$$ts.dump.part"
             echo "backup FAILED (postgres) at $$ts" >&2
           fi
           if tar -czf "/backups/secrets-$$ts.tar.gz.part" -C /stack secrets mcp-secrets && mv "/backups/secrets-$$ts.tar.gz.part" "/backups/secrets-$$ts.tar.gz"; then
             echo "backup ok: secrets-$$ts.tar.gz"
-            ls -1t /backups/secrets-*.tar.gz 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
+            ls -1t /backups/secrets-*.tar.gz 2>/dev/null | tail -n +$$((keep + 1)) | xargs -r rm --
           else
             rm -f "/backups/secrets-$$ts.tar.gz.part"
             echo "backup FAILED (secrets) at $$ts" >&2

@@ -29,8 +29,8 @@ die bewusst zurückgestellt wurden.
   möglich ist; mindestens die angemeldete Identität auf der Consent-Seite deutlicher zeigen.
 - [ ] **Backups automatisch nach außen** (A-16): die Stacks sichern täglich, aber nur auf denselben
   Server; eine Off-Host-Kopie (z. B. restic/S3) ist dokumentiert, nicht eingebaut.
-- [ ] **Postgres-Backup und Caddy ohne root** (A-50): braucht eine Umstellung der Volume-Rechte
-  bestehender Installationen.
+- [ ] **Caddy ohne root** (A-50, nur Variante A2): braucht hohe Ports im Container und eigene
+  Rechte für die Volumes `caddy-data`/`caddy-config`.
 - [ ] **Image-Scan in der CI** (A-33, z. B. Trivy) — Compose und Helm werden schon gerendert.
 
 - [ ] **Helm: eigene Dateien einhängen** (`extraVolumes`/`extraVolumeMounts`), z. B. für ein

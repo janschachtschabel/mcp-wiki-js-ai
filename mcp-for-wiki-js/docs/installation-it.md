@@ -485,8 +485,8 @@ Der Stack sichert täglich (`BACKUP_INTERVAL_SECONDS`, `BACKUP_KEEP` Kopien):
 | `<projekt>_db-backups` | `wiki-<zeit>.dump` (Postgres, alle Wiki-Inhalte) und `secrets-<zeit>.tar.gz` (DB-Passwort, `MCP_SESSION_SECRET`) | `db-backup` |
 | `<projekt>_mcp-backups` | `mcp-<zeit>.sqlite` (KI-Verbindungen, Audit-Log) | `mcp-backup` |
 
-Abgebrochene Läufe hinterlassen keine Teil-Dateien. Die Dateien in `db-backups` sind nur für root
-lesbar, denn sie enthalten Geheimnisse.
+Abgebrochene Läufe hinterlassen keine Teil-Dateien. Die Backup-Dienste laufen ohne root (Nutzer 1000);
+die Dateien in `db-backups` sind nur für diesen Nutzer lesbar, denn sie enthalten Geheimnisse.
 
 > **Wichtig:** Beide Volumes liegen auf demselben Server wie das Wiki. Gegen den Ausfall des Servers
 > helfen sie nicht — kopiert sie regelmäßig nach außen (anderer Server, Objektspeicher, Snapshot des
@@ -525,16 +525,29 @@ docker compose start mcp
 - `init` verschiebt `MCP_SESSION_SECRET` beim ersten Start unverändert in das neue Volume
   `mcp-secrets` — bestehende KI-Verbindungen bleiben gültig. Wer danach auf eine ältere Compose-Datei
   zurückgeht, bekommt ein neues Secret: dann müssen sich die KI-Programme neu verbinden.
-- Alte `mcp-*.sqlite`-Kopien im Volume `db-backups` werden nicht mehr rotiert; sie können gelöscht
-  werden (`docker compose exec db-backup sh -c 'rm -f /backups/mcp-*.sqlite'`).
+- Das Postgres-Backup läuft jetzt ohne root. Ein Volume `db-backups` aus einer älteren Installation
+  gehört aber root — einmalig übergeben, sonst meldet `db-backup` „backup FAILED“:
+  `docker run --rm -v <projekt>_db-backups:/b alpine chown -R 1000:1000 /b`. Alte `mcp-*.sqlite`-Kopien
+  darin werden nicht mehr rotiert und können gelöscht werden.
 - Läuft beim Update von Wiki.js eine lange Datenbank-Migration, wartet `docker compose up` bis zu
   etwa acht Minuten auf den Healthcheck des Wikis; meldet es danach einen Fehler, läuft der Stack
   trotzdem — `bootstrap` startet dann beim nächsten Bereitstellen.
 
-**Auf einen neuen Server umziehen:** Stack einmal ohne Variablen starten, dann die Secrets aus
-`secrets-<zeit>.tar.gz` in die Volumes `stack-secrets` (`secrets/…`) und `mcp-secrets` (`mcp-secrets/…`)
-zurückspielen, neu starten und Wiki sowie MCP-Datenbank wie oben wiederherstellen. Ohne das alte
-`MCP_SESSION_SECRET` bleiben die Wiki-Inhalte vollständig; nur die KI-Programme müssen sich neu verbinden.
+**Auf einen neuen Server umziehen** (erprobt):
+
+1. Neuen Stack mit derselben `DOMAIN` bereitstellen, **ohne** `ADMIN_EMAIL`/`ADMIN_PASSWORD`. Er erzeugt
+   eigene Passwörter — die bleiben: Postgres übernimmt sein Passwort nur beim allerersten Start, das alte
+   `postgres_password` aus dem Archiv passt hier nicht mehr.
+2. Den Dump nach `<neu>_db-backups`, die MCP-Kopie nach `<neu>_mcp-backups` und aus dem Archiv nur
+   `mcp-secrets/session.env` nach `<neu>_mcp-secrets` kopieren (damit die KI-Verbindungen gültig bleiben;
+   ohne verbinden sie sich neu). Im Ordner liegen die vom alten Server mitgebrachten Dateien:
+
+   ```bash
+   docker run --rm --user 1000:1000 -v "$PWD":/old:ro -v <neu>_db-backups:/backups -v <neu>_mcp-backups:/mb -v <neu>_mcp-secrets:/m alpine \
+     sh -c 'cp /old/wiki-<zeit>.dump /backups/ && cp /old/mcp-<zeit>.sqlite /mb/ && tar -xzf /old/secrets-<zeit>.tar.gz -C /tmp mcp-secrets/session.env && cp /tmp/mcp-secrets/session.env /m/'
+   ```
+3. Das Wiki wie oben wiederherstellen (`stop wiki mcp` → `pg_restore` → `start wiki mcp`), danach die
+   MCP-Datenbank. Anmelden geht mit den Konten des alten Wikis.
 
 ---
 

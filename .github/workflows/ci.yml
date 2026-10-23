@@ -74,18 +74,23 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Compose-Dateien rendern
+      # Panel-Dateien ohne jede Variable: "Compose from URL" startet sie genau so.
+      - name: Compose-Dateien rendern (ohne Variablen)
+        run: |
+          docker compose -f docker-compose.yml config -q
+          docker compose -f deploy/standalone/full/docker-compose.yml config -q
+          docker compose -f deploy/standalone/mcp-only/docker-compose.yml config -q
+          echo "OK: Panel-Dateien ohne Variablen"
+
+      - name: Compose-Dateien rendern (Selbstbau)
         env:
           DOMAIN: ci.example.org
           POSTGRES_PASSWORD: ci-only
           MCP_SESSION_SECRET: ci-only-secret-0123456789abcdef
         run: |
-          docker compose -f docker-compose.yml config -q
-          docker compose -f deploy/standalone/full/docker-compose.yml config -q
-          docker compose -f deploy/standalone/mcp-only/docker-compose.yml config -q
           docker compose -f docker-compose.build.yml config -q
           docker compose -f docker-compose.build.yml -f docker-compose.local.yml config -q
-          echo "OK: Compose-Dateien"
+          echo "OK: Selbstbau-Dateien"
 
       - name: Helm-Charts prüfen
         run: |
