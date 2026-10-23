@@ -54,7 +54,8 @@ secrets:
   existingSecret: ""
 
 admin:
-  ## @param admin.email E-mail of the first Wiki.js admin. Empty = first-run setup is skipped.
+  ## @param admin.email E-mail of the first Wiki.js admin — REQUIRED while bootstrap.enabled=true (the setup Job then
+  ## creates the account right at install, so the Wiki.js setup wizard is never left open).
   email: ""
   ## @param admin.existingSecret Secret with the key ADMIN_PASSWORD (recommended). Created e.g. with
   ##   kubectl -n wiki create secret generic wiki-admin --from-literal=ADMIN_PASSWORD='…'
@@ -63,7 +64,8 @@ admin:
   password: ""
 
 bootstrap:
-  ## @param bootstrap.enabled Run the first-run setup Job on install/upgrade (idempotent; skips without admin credentials)
+  ## @param bootstrap.enabled Run the first-run setup Job on install/upgrade (idempotent). Requires admin.email and
+  ## admin.existingSecret. After setup set it to false — then the admin Secret can be deleted.
   enabled: true
   ## @param bootstrap.args Arguments of deploy/scripts/bootstrap.mjs (--locale=de, --locale=en, --demo …)
   args: "--locale=de"
@@ -77,7 +79,8 @@ bootstrap:
 ingress:
   ## @param ingress.enabled Create the Ingress (wiki on "/", MCP paths to the MCP server, /finalize blocked)
   enabled: true
-  ## @param ingress.className IngressClass (nginx, traefik …)
+  ## @param ingress.className IngressClass (nginx, traefik …). With "traefik" a Middleware also blocks every spelling of
+  ## /finalize (/FINALIZE …); nginx only blocks the exact path — see the chart README.
   className: nginx
   ## @param ingress.annotations Annotations on both Ingress objects. The nginx defaults keep streaming responses
   ## unbuffered and allow 8 MB bodies (ignored by other controllers).

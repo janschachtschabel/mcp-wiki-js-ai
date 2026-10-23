@@ -156,14 +156,18 @@ export async function assertTagIdNotBlocked(ctx: WikiContext, id: number, action
   }
 }
 
-/** For tools that only have a page id: fetch the tags, then assert. */
+/**
+ * For tools that only have a page id. Checks the blocked id set (pages.list, read:pages)
+ * instead of the page's own tags via pages.single, which Wiki.js only answers with
+ * manage:pages (audit A-01). Always fresh: the callers act on the page right away (R-27).
+ * Limitation: pages.list only shows pages the caller may READ, so a page-rule set that
+ * grants e.g. delete:pages or read:history while denying read:pages on the same path
+ * lets that page pass this check — Wiki.js page rules remain the hard boundary.
+ */
 export async function assertPageIdNotBlocked(ctx: WikiContext, id: number, what: string): Promise<void> {
   if (blockedTags().size === 0) return;
-  const data = await ctx.client.request<{ pages: { single: { tags: { tag: string }[] } | null } }>(
-    `query($id:Int!){ pages { single(id:$id){ tags { tag } } } }`,
-    { id },
-  );
-  assertTagsNotBlocked(data.pages.single?.tags, what || `Page ${id}`);
+  const sets = await blockedPageSets(ctx, { fresh: true });
+  if (sets.ids.has(id)) throw blockedPageError(what || `Page ${id}`);
 }
 
 /**

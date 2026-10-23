@@ -2,7 +2,7 @@ import { resolveIssuer } from '../../../lib/oauth/metadata';
 import { oauthEnabled } from '../../../lib/oauth/store';
 import { oauthDisabledResponse } from '../../../lib/oauth/http';
 import type { LoginErrorCode } from '../../../lib/oauth/messages';
-import { loginAttempt, recordLogin } from '../../../lib/oauth/rate-limit';
+import { MAX_USERNAME_LENGTH, loginAttempt, recordLogin } from '../../../lib/oauth/rate-limit';
 import { loginWithCredentials } from '../../../lib/oauth/wiki-login';
 import {
   consentNonceValid,
@@ -32,6 +32,7 @@ export async function POST(req: Request): Promise<Response> {
     return new Response('Diese Seite ist abgelaufen — bitte /me neu laden und erneut absenden.', { status: 403 });
   }
   const username = form.get('username') ?? '';
+  if (username.length > MAX_USERNAME_LENGTH) return backToMe(issuer, 'invalid_credentials');
   if (loginAttempt(req.headers, username)) return backToMe(issuer, 'rate_limited');
   const outcome = await loginWithCredentials(wikiBaseUrl(), username, form.get('password') ?? '');
   recordLogin(req.headers, username, outcome);

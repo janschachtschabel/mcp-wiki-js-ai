@@ -53,3 +53,4 @@ die bewusst zurückgestellt wurden.
 - `engines.node` bleibt `>=20`: stdio und Legacy laufen ab Node 20; OAuth prüft Node ≥ 22.5 zur Laufzeit.
 - Eine Replika (`replicaCount ≤ 1`), solange Punkt „Mehrere Replikas“ offen ist.
 - Ein generiertes Passwort bei `wiki_user_reset_password` wird einmal angezeigt (sonst wäre das Konto ausgesperrt).
+- Default-Image `:main` (Audit A-17, Nutzerentscheidung 2026-10-23): gewollt — jeder Push auf main soll beim nächsten Neustart produktiv werden; kein Release-Tag/Digest als Default.

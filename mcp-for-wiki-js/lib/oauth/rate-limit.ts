@@ -13,6 +13,7 @@
  * count, no background timer.
  */
 
+import { createHash } from 'node:crypto';
 import type { LoginOutcome } from './wiki-login';
 
 export class RateLimiter {
@@ -99,7 +100,17 @@ export function clientIp(headers: Headers): string {
   return hops[hops.length - 1] ?? 'unknown';
 }
 
-const userKey = (username: string) => username.trim().toLowerCase();
+/**
+ * Longest username we pass on to Wiki.js (audit A-04). The routes refuse longer ones
+ * before loginAttempt(), so an anonymous form post cannot park 64 KB keys here.
+ */
+export const MAX_USERNAME_LENGTH = 256;
+
+/** Case-insensitive, fixed-size limiter key: memory per tracked account stays constant. */
+export function limiterUserKey(username: string): string {
+  return createHash('sha256').update(username.trim().toLowerCase()).digest('hex');
+}
+const userKey = limiterUserKey;
 
 /**
  * Call BEFORE Wiki.js; 0 = go ahead, else seconds to wait. Username is

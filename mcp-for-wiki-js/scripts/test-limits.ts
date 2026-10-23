@@ -86,6 +86,16 @@ async function main(): Promise<void> {
     post('/mcp?token=handle', streamed(MCP_BODY_LIMIT + 1, 256 * KB), { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }),
   );
   check('/mcp?token=…: oversized body → 413 (before routing/auth)', mcpRes.status === 413);
+  // A-05/A-29: the plain header path (no query params) is capped as well — mcp-handler
+  // would otherwise buffer the whole body via req.clone().json().
+  const headerRes = await mcpPost(
+    post('/mcp', streamed(MCP_BODY_LIMIT + 1, 256 * KB), {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      'x-wikijs-token': 'handle',
+    }),
+  );
+  check('/mcp (credentials in headers): oversized body → 413', headerRes.status === 413);
 
   // 4. DCR (R-10): redirect URIs are length-capped.
   const long = 'https://client.example/cb?x=' + 'a'.repeat(2100);

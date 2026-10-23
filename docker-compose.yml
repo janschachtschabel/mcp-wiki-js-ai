@@ -111,13 +111,20 @@ services:
       - "traefik.http.routers.wikijs-wiki.priority=1"
       - "traefik.http.routers.wikijs-wiki.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
       - "traefik.http.routers.wikijs-wiki.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
-      - "traefik.http.routers.wikijs-wiki.middlewares=wikijs-wiki-headers"
+      - "traefik.http.routers.wikijs-wiki.middlewares=wikijs-setup-block,wikijs-wiki-headers"
       - "traefik.http.routers.wikijs-wiki.service=wikijs-wiki"
       - "traefik.http.services.wikijs-wiki.loadbalancer.server.port=3000"
       - "traefik.http.middlewares.wikijs-wiki-headers.headers.stsSeconds=31536000"
       - "traefik.http.middlewares.wikijs-wiki-headers.headers.contentTypeNosniff=true"
       - "traefik.http.middlewares.wikijs-wiki-headers.headers.customFrameOptionsValue=SAMEORIGIN"
       - "traefik.http.middlewares.wikijs-wiki-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+      # Setup-Assistent (/finalize legt das erste Admin-Konto an) in JEDER Schreibweise
+      # sperren — Wiki.js (Express) vergleicht ohne Groß-/Kleinschreibung (Audit A-02).
+      # Auf dem Wiki-Router selbst, damit die Sperre nicht davon abhängt, dass Traefik
+      # den MCP-Container schon als gesund routet (während dessen Start fiele /finalize
+      # sonst an Wiki.js). Wiki.js antwortet auf den umgeschriebenen Pfad mit 404.
+      - "traefik.http.middlewares.wikijs-setup-block.replacepathregex.regex=(?i)^/finalize(/.*)?$$"
+      - "traefik.http.middlewares.wikijs-setup-block.replacepathregex.replacement=/finalize-blocked"
 
   mcp:
     image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
@@ -172,6 +179,7 @@ services:
       - "traefik.http.routers.wikijs-setup.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
       - "traefik.http.routers.wikijs-setup.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
       - "traefik.http.routers.wikijs-setup.service=wikijs-mcp"
+      # Alle anderen Schreibweisen fängt die Middleware wikijs-setup-block am Wiki-Router.
       - "traefik.http.services.wikijs-mcp.loadbalancer.server.port=3000"
       - "traefik.http.middlewares.wikijs-mcp-headers.headers.stsSeconds=31536000"
 

@@ -156,7 +156,7 @@ build and push (tags):
         --set config.wikijs.url=http://wiki:3000
     # Muster-Chart für den Komplett-Stack: nur prüfen, nicht paketieren.
     - helm lint deploy/helm/wikijs-stack
-        --set domain=wiki.example.org
+        --set domain=wiki.example.org --set admin.email=admin@example.org --set admin.existingSecret=wiki-admin
     - helm package deploy/helm/wikijs-mcp
         --version "$CHART_VERSION"
         --app-version "$APP_VERSION"

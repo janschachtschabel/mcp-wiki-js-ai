@@ -92,18 +92,26 @@ async function handler(req: Request): Promise<Response> {
   if (url.pathname !== '/mcp') return new Response('Not Found', { status: 404 });
   const params = url.searchParams;
 
+  const injectHeaders = [...QUERY_TO_HEADER].some(([aliases]) => aliases.some((a) => params.has(a)));
   let request = req;
-  if ([...QUERY_TO_HEADER].some(([aliases]) => aliases.some((a) => params.has(a)))) {
+  // Every POST body is read capped here and the request rebuilt: mcp-handler itself
+  // buffers it unbounded (req.clone().json()) and hands the SDK a parsed body, so the
+  // SDK's own limit never applies (audit A-05). Also runs before any auth (R-09).
+  if (injectHeaders || req.method === 'POST') {
     const headers = new Headers(req.headers);
-    for (const [aliases, header, guards] of QUERY_TO_HEADER) {
-      const value = aliases.map((a) => params.get(a)).find((v) => v);
-      if (value && !guards.some((g) => headers.has(g))) headers.set(header, value);
+    if (injectHeaders) {
+      for (const [aliases, header, guards] of QUERY_TO_HEADER) {
+        const value = aliases.map((a) => params.get(a)).find((v) => v);
+        if (value && !guards.some((g) => headers.has(g))) headers.set(header, value);
+      }
     }
-    // Rebuild the request with injected headers (Headers are immutable on the original).
-    // Capped like the SDK's own reader — this read happens before any auth (R-09).
     const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : await readBody(req, MCP_BODY_LIMIT);
     if (body instanceof Response) return body;
-    request = new Request(req.url, { method: req.method, headers, body });
+    // The body is now a decoded string: the original framing headers no longer describe it.
+    headers.delete('content-length');
+    headers.delete('transfer-encoding');
+    // Keep the client's abort signal — the SDK tears the transport down on disconnect.
+    request = new Request(req.url, { method: req.method, headers, body, signal: req.signal });
   }
 
   // OAuth vs legacy transport decision (see lib/oauth/routing.ts). With OAuth

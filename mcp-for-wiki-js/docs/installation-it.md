@@ -153,8 +153,11 @@ Domain auf den Ingress und ein TLS-Zertifikat (vorhandenes Secret oder cert-mana
    curl https://wiki.example.org/api/health
    ```
    Der Job endet mit „Fertig“; `/api/health` liefert `{"ok":true,"store":"ok"}`.
-5. **Aufräumen:** Das Secret `wiki-admin` kann danach gelöscht und `admin.*` geleert werden; jede
-   weitere Revision prüft die Einrichtung nur noch (idempotent).
+5. **Aufräumen:** `helm upgrade … --set bootstrap.enabled=false` (bzw. in der Werte-Datei), danach kann das
+   Secret `wiki-admin` gelöscht werden. Solange `bootstrap.enabled=true` ist, verlangt das Chart
+   `admin.email` und `admin.existingSecret` — so legt der Job das Admin-Konto direkt bei der Installation an und
+   der Setup-Assistent von Wiki.js bleibt nicht offen (bei nginx-Ingress lässt sich `/finalize` nicht in jeder
+   Schreibweise sperren).
 
 **Geheimnisse:** Datenbank-Passwort und `MCP_SESSION_SECRET` erzeugt das Chart einmalig im Secret
 `<release>-secrets` und behält sie bei Upgrades und bei `helm uninstall`. Bei GitOps-Werkzeugen
@@ -170,8 +173,8 @@ kubectl -n wiki create secret generic wiki-secrets --from-literal=POSTGRES_PASSW
 
 ### Nach der Einrichtung
 
-1. Bei A1/A2 `ADMIN_PASSWORD` leeren und neu bereitstellen (das Konto bleibt); bei A4 das Secret
-   `wiki-admin` löschen und `admin.*` leeren.
+1. Bei A1/A2 `ADMIN_PASSWORD` leeren und neu bereitstellen (das Konto bleibt); bei A4
+   `bootstrap.enabled=false` setzen und das Secret `wiki-admin` löschen.
 2. Im Wiki unter Administration → Gruppen eine Gruppe „Team“ anlegen: Seiten, Dateien und Kommentare
    lesen/schreiben, dazu `read:source` und `read:history` — **ohne** `manage:system`.
 3. Nutzer anlegen (Administration → Benutzer) und der Gruppe zuordnen. Ohne eingerichteten Mailserver
@@ -413,7 +416,8 @@ Werte für `helm install … -f <datei>` bzw. `--set`. Vollständig kommentiert 
 | Wert | Chart | Bedeutung | Default |
 |---|---|---|---|
 | `domain` | wikijs-stack | Hostname von Wiki und MCP, ohne `https://` (Pflicht) | – |
-| `admin.email`, `admin.existingSecret` | wikijs-stack | erstes Admin-Konto; Secret mit Schlüssel `ADMIN_PASSWORD`. Ohne beides keine Ersteinrichtung | – |
+| `admin.email`, `admin.existingSecret` | wikijs-stack | erstes Admin-Konto; Secret mit Schlüssel `ADMIN_PASSWORD`. Pflicht, solange `bootstrap.enabled=true` | – |
+| `bootstrap.enabled` | wikijs-stack | Ersteinrichtungs-Job; nach der Einrichtung `false` | `true` |
 | `bootstrap.args`, `bootstrap.demoPasswordSecret`, `bootstrap.demoEmail` | wikijs-stack | Parameter der Ersteinrichtung (`--locale=en`, `--demo`) | `--locale=de` |
 | `secrets.existingSecret` | wikijs-stack | eigenes Secret mit `POSTGRES_PASSWORD` und `MCP_SESSION_SECRET` — Pflicht bei GitOps/`helm template` | leer = Chart erzeugt sie |
 | `images.mcp.tag` / `image.tag` | stack / mcp | Tag des MCP-Images; für Produktion ein Release-Tag | `main` |
@@ -490,7 +494,7 @@ steht bei Fall A bereits im Wiki unter `/ki-zugang`.
 | Sessions nach Neustart weg | `/data` bzw. `stack-secrets` sind keine dauerhaften Volumes |
 | Kubernetes: Wiki-Seiten wie `/meeting` landen beim MCP, oder `/me` beim Wiki | ältere Chart-Fassung mit `Prefix`-Pfaden ohne Traefik-Priorität — Chart aktualisieren (`Exact`-Pfade + `traefik.ingress.kubernetes.io/router.priority`) |
 | Kubernetes: Pods `wiki` starten neu, Log „password authentication failed“ | Datenbank mit anderem Passwort angelegt als im Secret — Secret `<release>-secrets` nicht löschen/neu erzeugen; bei GitOps `secrets.existingSecret` nutzen |
-| Kubernetes: Ersteinrichtung fehlt | `admin.email` oder `admin.existingSecret` nicht gesetzt — setzen und `helm upgrade` (der Job läuft pro Revision) |
+| Kubernetes: `helm install` bricht mit „admin.email is required …“ ab | Ersteinrichtung ist aktiv (`bootstrap.enabled=true`), aber Admin-Daten fehlen — setzen, oder nach erfolgter Einrichtung `bootstrap.enabled=false` |
 | `413 Payload Too Large` | Anfrage über 4 MB (z. B. große Datei per KI) — Datei direkt im Wiki hochladen |
 
 Vertiefung: [Konzept & Rechtemodell](./konzept-ki-zugang.md) · [OAuth](./oauth.md) ·

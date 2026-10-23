@@ -1,6 +1,7 @@
 // Live end-to-end test of the wikijs-mcp appliance. Exercises the REAL system
 // against a running stack: Wiki.js login → OAuth code → tokens → MCP tool calls
-// → guardrails → /me (incl. the admin-vs-non-admin rendering gate).
+// → guardrails → page tools as a non-admin team user → /me (incl. the
+// admin-vs-non-admin rendering gate).
 //
 // Prerequisites (like scripts/test-local-live.ts, this needs a live wiki):
 //   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d   (repo root)
@@ -86,6 +87,107 @@ async function call(tool, args, token) {
     text: result?.content?.map((c) => c.text).join('\n') ?? JSON.stringify(r.body),
     structured: result?.structuredContent?.data,
   };
+}
+
+/** Full OAuth flow (authorize form → decision → token) for one wiki user; returns the access token. */
+async function oauthToken(clientId, user) {
+  const verifier = randomBytes(48).toString('base64url');
+  const challenge = createHash('sha256').update(verifier, 'ascii').digest('base64url');
+  const redirect = 'http://localhost:44444/cb';
+  const q = { client_id: clientId, redirect_uri: redirect, response_type: 'code', code_challenge: challenge, code_challenge_method: 'S256', state: 's' };
+  const { nonceCookie, csrf } = await formPage(`${BASE}/oauth/authorize?${new URLSearchParams(q)}`);
+  const decision = await fetch(`${BASE}/oauth/authorize/decision`, {
+    method: 'POST', redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin: BASE, cookie: nonceCookie },
+    body: new URLSearchParams({ ...q, mode: 'credentials', action: 'allow', username: user.user, password: user.pass, csrf }),
+  });
+  const code = new URL(decision.headers.get('location') ?? 'http://x/').searchParams.get('code') ?? '';
+  const tokens = await (await fetch(`${BASE}/oauth/token`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'authorization_code', code, client_id: clientId, redirect_uri: redirect, code_verifier: verifier }),
+  })).json();
+  return tokens.access_token;
+}
+
+/** Direct Wiki.js GraphQL as admin — test fixture setup/cleanup only, never via the MCP. */
+async function wikiAdmin() {
+  const post = async (query, variables, jwt) => (await fetch(`${BASE}/graphql`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(jwt ? { authorization: `Bearer ${jwt}` } : {}) },
+    body: JSON.stringify({ query, variables }),
+  })).json();
+  const login = await post(
+    'mutation($u:String!,$p:String!){ authentication { login(username:$u,password:$p,strategy:"local"){ jwt } } }',
+    { u: ADMIN.user, p: ADMIN.pass },
+  );
+  const jwt = login.data?.authentication?.login?.jwt;
+  const idOf = async (path) => {
+    const r = await post('{ pages { list(locale:"en") { id path } } }', {}, jwt).catch(() => ({}));
+    return r.data?.pages?.list?.find((p) => p.path === path)?.id;
+  };
+  const remove = async (path) => {
+    const id = await idOf(path);
+    if (id) await post('mutation($id:Int!){ pages { delete(id:$id){ responseResult { succeeded } } } }', { id }, jwt);
+  };
+  return { ok: typeof jwt === 'string', idOf, remove };
+}
+
+/**
+ * A-01/A-28: the page tools must work with plain read/write rights (Team group from
+ * bootstrap --demo, no manage:pages) — pages.single/singleByPath are admin-only in Wiki.js.
+ */
+async function teamUserPageTools(clientId) {
+  const admin = await wikiAdmin();
+  check('team: fixture admin login (direct GraphQL)', admin.ok);
+  const TEAM_PATH = 'team/a01-test';
+  const MOVED_PATH = 'team/a01-moved';
+  await admin.remove(TEAM_PATH);
+  await admin.remove(MOVED_PATH);
+  const blockedId = await admin.idOf('geheim/ki-sperre-test');
+
+  const token = await oauthToken(clientId, DEMO);
+  check('team: OAuth login as the demo team user', typeof token === 'string' && token.startsWith('mcp_at_'));
+  const me = await call('wiki_user_profile', {}, token);
+  check('team: tool call runs as the team user', !me.isError && me.text.includes(DEMO.user), me.text.slice(0, 200));
+
+  const created = await call('wiki_page_create', { path: TEAM_PATH, title: 'Team A-01', content: 'Team-Start.', locale: 'en' }, token);
+  const pageId = created.structured?.id;
+  check('team: wiki_page_create', !created.isError && Number.isInteger(pageId), created.text.slice(0, 200));
+
+  const byPath = await call('wiki_page_get', { path: TEAM_PATH, locale: 'en' }, token);
+  check('team: wiki_page_get by path returns the content', !byPath.isError && byPath.text.includes('Team-Start.'), byPath.text.slice(0, 200));
+
+  const upd = await call('wiki_page_update', { id: pageId, edits: [{ find: 'Team-Start.', replace: 'Team-Edit.' }] }, token);
+  check('team: wiki_page_update by id (edits)', !upd.isError, upd.text.slice(0, 200));
+  const byId = await call('wiki_page_get', { id: pageId }, token);
+  check('team: wiki_page_get by id shows the edit', !byId.isError && byId.text.includes('Team-Edit.'), byId.text.slice(0, 200));
+
+  const hist = await call('wiki_page_history', { id: pageId }, token);
+  check('team: wiki_page_history', !hist.isError && Number(hist.structured?.total) >= 1, hist.text.slice(0, 200));
+
+  // Wiki.js itself requires manage:pages to move a page (@auth on the move mutation, and
+  // movePage checks the source path) — the team user is refused by Wiki.js ("Forbidden"),
+  // no longer by the MCP's own pages.single lookup ("not authorized to view this page").
+  const mv = await call('wiki_page_move', { id: pageId, destinationPath: MOVED_PATH }, token);
+  check(
+    'team: wiki_page_move reaches Wiki.js (refused only by its manage:pages move rule)',
+    !/view this page/.test(mv.text) && (!mv.isError || /Forbidden|not authorized to move this page/.test(mv.text)),
+    mv.text.slice(0, 200),
+  );
+
+  if (Number.isInteger(blockedId)) {
+    const bh = await call('wiki_page_history', { id: blockedId }, token);
+    check('team: guardrail refuses history of the blocked page', bh.isError && bh.text.includes('blocked tag'), bh.text.slice(0, 200));
+    const bu = await call('wiki_page_update', { id: blockedId, content: 'x' }, token);
+    check('team: guardrail refuses updating the blocked page', bu.isError && bu.text.includes('blocked tag'), bu.text.slice(0, 200));
+  } else {
+    check('team: blocked fixture page exists', false, 'geheim/ki-sperre-test not found');
+  }
+  const bg = await call('wiki_page_get', { path: 'geheim/ki-sperre-test', locale: 'en' }, token);
+  check('team: guardrail refuses reading the blocked page by path', bg.isError && bg.text.includes('blocked tag'), bg.text.slice(0, 200));
+
+  await admin.remove(TEAM_PATH);
+  await admin.remove(MOVED_PATH);
 }
 
 async function main() {
@@ -221,6 +323,9 @@ async function main() {
   check('delete without confirm returns dry-run preview', !del.isError && del.text.includes('DRY RUN'), del.text.slice(0, 200));
   const del2 = await call('wiki_page_delete', { path: 'public/offen', locale: 'en', confirm: true }, tokens.access_token);
   check('delete with confirm executes', !del2.isError && del2.text.includes('deleted'), del2.text.slice(0, 200));
+
+  // ---- 5b. page tools as a NON-admin team user (audit A-01/A-28) -----------
+  await teamUserPageTools(reg.client_id);
 
   // ---- 6. refresh rotation against the live server -------------------------
   const ref = await (await fetch(`${BASE}/oauth/token`, {

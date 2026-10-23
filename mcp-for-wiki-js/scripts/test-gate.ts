@@ -43,9 +43,9 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     upstreamCalls++;
     const body = typeof init?.body === 'string' ? init.body : '';
     upstreamBodies.push(body);
-    // Guardrail pre-fetch: page 7 carries the blocked tag.
-    const data = body.includes('single(id:$id){ tags')
-      ? { pages: { single: { tags: [{ tag: 'kein-ki' }] } } }
+    // Guardrail pre-fetch (blocked id set): page 7 carries the blocked tag.
+    const data = body.includes('list(tags:$tags)')
+      ? { pages: { list: [{ id: 7, path: 'intern/geheim' }] } }
       : body.includes('pages { tags { id tag } }')
         ? { pages: { tags: [{ id: 3, tag: 'kein-ki' }] } } // tag id 3 is the guardrail tag
         : body.includes('list(locale:$locale)')

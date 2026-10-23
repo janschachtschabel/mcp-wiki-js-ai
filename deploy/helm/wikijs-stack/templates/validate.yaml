@@ -1,0 +1,15 @@
+{{- /*
+Audit A-02 (nginx): until the first-run setup has created the admin account, Wiki.js
+accepts its setup wizard (/finalize) in any spelling, and ingress-nginx can only block
+the exact one. Requiring the admin credentials makes the setup Job run right at install,
+which closes that window within seconds. After setup set bootstrap.enabled=false; then
+the credentials (and the Secret) are no longer needed.
+*/}}
+{{- if .Values.bootstrap.enabled }}
+{{- if not .Values.admin.email }}
+{{- fail "admin.email is required while bootstrap.enabled=true — the setup Job must create the first admin account right at install (after setup: --set bootstrap.enabled=false)" }}
+{{- end }}
+{{- if not (or .Values.admin.existingSecret .Values.admin.password) }}
+{{- fail "admin.existingSecret (Secret with key ADMIN_PASSWORD) is required while bootstrap.enabled=true (after setup: --set bootstrap.enabled=false)" }}
+{{- end }}
+{{- end }}

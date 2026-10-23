@@ -8,7 +8,7 @@ import {
   blockedPathKey,
   filterBlockedPages,
 } from '../../guardrails';
-import { DEFAULT_MAX_CONTENT, singleSelection } from './shared';
+import { DEFAULT_MAX_CONTENT, fetchLatestPage, findListedPage, isViewForbidden, singleSelection } from './shared';
 
 /** Upper bounds for caller-chosen page sizes (audit R-46). */
 const MAX_LIST_LIMIT = 1000;
@@ -60,27 +60,36 @@ export const pageReadTools: ToolDef[] = [
         .describe(`Truncate content above this many chars (default ${DEFAULT_MAX_CONTENT}; 0 = unlimited).`),
     },
     handler: async (a, ctx) => {
+      if (a.id == null && !a.path) throw new Error('Provide either "id" or "path".');
       const selection = singleSelection(!a.metadataOnly, !!a.includeRender);
       const limit = a.maxContentChars ?? DEFAULT_MAX_CONTENT;
-      if (a.id != null) {
-        const data = await ctx.client.request(
-          `query($id:Int!){ pages { single(id:$id){ ${selection} } } }`,
-          { id: a.id },
-        );
-        if (!data.pages.single) return fail(`No page with id ${a.id}`);
-        assertTagsNotBlocked(data.pages.single.tags, `Page ${a.id}`);
-        return ok(truncateContent(data.pages.single, limit));
+      const locale = a.locale ?? 'en';
+      const what = a.id != null ? `Page ${a.id}` : `Page ${a.path}`;
+      const notFound = a.id != null ? `No page with id ${a.id}` : `No page at ${a.path} (${locale})`;
+      let page: { tags?: unknown; content?: string } | null;
+      try {
+        if (a.id != null) {
+          const data = await ctx.client.request(`query($id:Int!){ pages { single(id:$id){ ${selection} } } }`, { id: a.id });
+          page = data.pages.single;
+        } else {
+          const data = await ctx.client.request(
+            `query($path:String!,$locale:String!){ pages { singleByPath(path:$path,locale:$locale){ ${selection} } } }`,
+            { path: a.path, locale },
+          );
+          page = data.pages.singleByPath;
+        }
+      } catch (err) {
+        // A-01: without manage:pages Wiki.js refuses single/singleByPath; users with
+        // write:pages can still read the current version via conflictLatest.
+        if (!isViewForbidden(err)) throw err;
+        const id = a.id ?? (await findListedPage(ctx, { path: a.path!, locale }))?.id;
+        if (id == null) return fail(notFound);
+        const latest = await fetchLatestPage(ctx, id);
+        page = a.metadataOnly ? { ...latest, content: undefined } : latest;
       }
-      if (a.path) {
-        const data = await ctx.client.request(
-          `query($path:String!,$locale:String!){ pages { singleByPath(path:$path,locale:$locale){ ${selection} } } }`,
-          { path: a.path, locale: a.locale ?? 'en' },
-        );
-        if (!data.pages.singleByPath) return fail(`No page at ${a.path} (${a.locale ?? 'en'})`);
-        assertTagsNotBlocked(data.pages.singleByPath.tags, `Page ${a.path}`);
-        return ok(truncateContent(data.pages.singleByPath, limit));
-      }
-      throw new Error('Provide either "id" or "path".');
+      if (!page) return fail(notFound);
+      assertTagsNotBlocked(page.tags, what);
+      return ok(truncateContent(page, limit));
     },
   },
   {

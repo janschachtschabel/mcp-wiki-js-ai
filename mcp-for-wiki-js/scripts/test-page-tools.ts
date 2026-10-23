@@ -130,8 +130,12 @@ interface FakePage {
   render?: string;
 }
 
-/** A tiny in-memory Wiki.js answering the queries the page tools send. */
-function fakeWiki(pages: FakePage[], extra?: Responder) {
+/**
+ * A tiny in-memory Wiki.js answering the queries the page tools send.
+ * `forbidSingle` mimics a user without manage:pages (A-01): pages.single and
+ * pages.singleByPath are refused, conflictLatest (write:pages) still answers.
+ */
+function fakeWiki(pages: FakePage[], extra?: Responder, opts: { forbidSingle?: boolean } = {}) {
   const deleted: number[] = [];
   const mutations: Array<{ q: string; v: Record<string, unknown> }> = [];
   const queries: string[] = [];
@@ -158,6 +162,14 @@ function fakeWiki(pages: FakePage[], extra?: Responder) {
       if (q.includes('delete(id:$id)')) deleted.push(v.id as number);
       const field = /pages \{ (\w+)\(/.exec(q)?.[1] ?? 'unknown';
       return { pages: { [field]: { responseResult: { succeeded: true }, page: { id: v.id } } } };
+    }
+    if (opts.forbidSingle && /\bsingle(ByPath)?\(/.test(q)) {
+      throw new Error('You are not authorized to view this page.');
+    }
+    if (q.includes('conflictLatest(')) {
+      const p = pages.find((pg) => pg.id === v.id);
+      if (!p) throw new Error('This page does not exist.');
+      return { pages: { conflictLatest: { ...p, content: p.content ?? '', description: '', isPublished: true, tags: p.tags ?? [] } } };
     }
     if (q.includes('singleByPath')) {
       const p = pages.find((pg) => pg.path === v.path && pg.locale === v.locale);
@@ -400,6 +412,8 @@ async function reauditPageTests(): Promise<void> {
   const histSchema = z.object(tool('wiki_page_history').inputSchema);
   check('R-46: history offsetSize has a maximum', !histSchema.safeParse({ id: 1, offsetSize: 1_000_000 }).success && histSchema.safeParse({ id: 1, offsetSize: 50 }).success);
 
+  await a01TeamUserTests(tool);
+
   const upload = tool('wiki_asset_upload');
   const uploads: number[] = [];
   const upCtx = {
@@ -420,6 +434,100 @@ async function reauditPageTests(): Promise<void> {
   check('R-46: invalid base64 is refused before uploading', r.isError && uploads.length === 0);
   r = await outcome(upload, { filename: 'a.bin', contentBase64: 'aGVsbG8=', folderId: 0 }, upCtx);
   check('R-46: valid base64 still uploads', !r.isError && uploads[0] === 5);
+}
+
+// ---------------------------------------------------------------------------
+// Audit 2026-10-23: A-01 (tools without manage:pages), A-07 (edits result bound)
+// ---------------------------------------------------------------------------
+
+async function a01TeamUserTests(tool: (name: string) => ToolDef): Promise<void> {
+  const { MCP_BODY_LIMIT } = await import('../lib/body-limit');
+  const team = (): FakePage[] => [
+    { id: 1, path: 'team/a', locale: 'de', title: 'A', content: 'Hallo Welt', tags: ['docs'] },
+    { id: 5, path: 'intern/geheim', locale: 'en', title: 'Geheim', content: 'x', tags: ['kein-ki'] },
+  ];
+  const teamWiki = (extra?: Responder) => fakeWiki(team(), extra, { forbidSingle: true });
+  const sentSingle = (wk: ReturnType<typeof fakeWiki>) => wk.queries.some((q) => /\bsingle(ByPath)?\(/.test(q));
+  const mutation = (wk: ReturnType<typeof fakeWiki>, field: string) => wk.mutations.find((m) => m.q.includes(`${field}(`));
+
+  let w = teamWiki();
+  let r = await outcome(tool('wiki_page_update'), { id: 1, edits: [{ find: 'Welt', replace: 'Team' }] }, stubCtx(w.respond, 'a01u'));
+  const upd = mutation(w, 'update')?.v;
+  check('A-01: update without manage:pages succeeds', !r.isError && upd?.content === 'Hallo Team');
+  check(
+    'A-01: update keeps path/locale/title/tags from conflictLatest',
+    upd?.path === 'team/a' && upd?.locale === 'de' && upd?.title === 'A' && JSON.stringify(upd?.tags) === '["docs"]',
+  );
+  check('A-01: update without readable scripts leaves them to Wiki.js (not sent)', upd?.scriptCss == null && upd?.scriptJs == null);
+
+  w = teamWiki();
+  r = await outcome(tool('wiki_page_update'), { id: 5, content: 'neu' }, stubCtx(w.respond, 'a01ub'));
+  check('A-01: update of a blocked page is still refused', r.isError && /blocked tag/.test(r.text) && !mutation(w, 'update'));
+
+  w = teamWiki();
+  r = await outcome(tool('wiki_page_get'), { id: 1 }, stubCtx(w.respond, 'a01g1'));
+  check('A-01: page_get by id without manage:pages returns the content', !r.isError && r.text.includes('Hallo Welt'));
+  w = teamWiki();
+  r = await outcome(tool('wiki_page_get'), { path: 'team/a', locale: 'de' }, stubCtx(w.respond, 'a01g2'));
+  check('A-01: page_get by path without manage:pages returns the content', !r.isError && r.text.includes('Hallo Welt'));
+  w = teamWiki();
+  r = await outcome(tool('wiki_page_get'), { path: 'intern/geheim', locale: 'en' }, stubCtx(w.respond, 'a01g3'));
+  check('A-01: page_get of a blocked page by path is refused', r.isError && /blocked tag/.test(r.text));
+  w = teamWiki();
+  r = await outcome(tool('wiki_page_get'), { path: 'fehlt', locale: 'de' }, stubCtx(w.respond, 'a01g4'));
+  check('A-01: page_get of an unknown path is an error', r.isError);
+
+  const history = (q: string) => (q.includes('history(id') ? { pages: { history: { trail: [], total: 1 } } } : undefined);
+  w = teamWiki(history);
+  r = await outcome(tool('wiki_page_history'), { id: 1 }, stubCtx(w.respond, 'a01h1'));
+  check('A-01: history without manage:pages succeeds, no pages.single', !r.isError && !sentSingle(w));
+  w = teamWiki(history);
+  r = await outcome(tool('wiki_page_history'), { id: 5 }, stubCtx(w.respond, 'a01h2'));
+  check('A-01: history of a blocked page is refused', r.isError && /blocked tag/.test(r.text));
+
+  w = teamWiki();
+  r = await outcome(tool('wiki_page_move'), { id: 1, destinationPath: 'team/b' }, stubCtx(w.respond, 'a01m1'));
+  check('A-01: move by id keeps the page locale without pages.single', !r.isError && mutation(w, 'move')?.v.destinationLocale === 'de' && !sentSingle(w));
+  w = teamWiki();
+  r = await outcome(tool('wiki_page_move'), { path: 'team/a', locale: 'de', destinationPath: 'team/b' }, stubCtx(w.respond, 'a01m2'));
+  check(
+    'A-01: move by path falls back to the page list when singleByPath is refused',
+    !r.isError && mutation(w, 'move')?.v.id === 1 && w.queries.some((q) => q.includes('list(locale:$locale)')),
+  );
+
+  for (const [name, args] of [
+    ['wiki_page_render', { id: 5 }],
+    ['wiki_page_convert', { id: 5, editor: 'html' }],
+    ['wiki_page_restore', { pageId: 5, versionId: 1 }],
+    ['wiki_page_version', { pageId: 5, versionId: 1 }],
+    ['wiki_page_move', { id: 5, destinationPath: 'x' }],
+  ] as const) {
+    w = teamWiki();
+    r = await outcome(tool(name), { ...args }, stubCtx(w.respond, `a01-${name}`));
+    check(`A-01: ${name} of a blocked page is refused without pages.single`, r.isError && /blocked tag/.test(r.text) && !sentSingle(w) && w.mutations.length === 0);
+  }
+
+  // Only Wiki.js' "not authorized to view" triggers the fallback — other errors surface.
+  w = fakeWiki(team(), (q) => {
+    if (/\bsingle\(/.test(q)) throw new Error('Wiki.js request timed out after 30000 ms.');
+    return undefined;
+  });
+  r = await outcome(tool('wiki_page_update'), { id: 1, content: 'neu' }, stubCtx(w.respond, 'a01e'));
+  check('A-01: other errors of pages.single are not masked by the fallback', r.isError && /timed out/.test(r.text) && !w.queries.some((q) => q.includes('conflictLatest(')));
+
+  // Users who CAN use singleByPath (manage:pages) still resolve paths through it, not the list.
+  w = fakeWiki(team());
+  r = await outcome(tool('wiki_page_move'), { path: 'team/a', locale: 'de', destinationPath: 'team/b' }, stubCtx(w.respond, 'a01p'));
+  check('A-01: path lookup with manage:pages uses singleByPath, no full page list', !r.isError && mutation(w, 'move')?.v.id === 1 && !w.queries.some((q) => q.includes('list(locale:$locale)')));
+
+  // ---- A-07: the edits result is bounded before it is built --------------------
+  const big = 'y'.repeat(1024 * 1024);
+  w = fakeWiki([{ id: 1, path: 'docs/a', locale: 'en', content: 'x'.repeat(8) }]);
+  r = await outcome(tool('wiki_page_update'), { id: 1, edits: [{ find: 'x', replace: big }] }, stubCtx(w.respond, 'a07a'));
+  check('A-07: edits growing the page past the limit are refused', r.isError && /limit/i.test(r.text) && w.mutations.length === 0);
+  w = fakeWiki([{ id: 1, path: 'docs/a', locale: 'en', content: 'x' }]);
+  r = await outcome(tool('wiki_page_update'), { id: 1, edits: [{ find: 'x', replace: 'z'.repeat(MCP_BODY_LIMIT) }] }, stubCtx(w.respond, 'a07b'));
+  check('A-07: an edit result exactly at the limit is allowed', !r.isError && w.mutations.length === 1);
 }
 
 main().catch((e) => {

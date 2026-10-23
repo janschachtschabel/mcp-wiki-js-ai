@@ -6,7 +6,8 @@
 #   kubectl -n wiki create secret generic wiki-admin --from-literal=ADMIN_PASSWORD='<sicheres-passwort>'
 #   helm install wiki ./deploy/helm/wikijs-stack -n wiki -f values-wiki.yaml
 # Nach der Einrichtung (Log: kubectl -n wiki logs job/wiki-bootstrap-1) kann das
-# Secret wiki-admin gelöscht und admin.* geleert werden.
+# Secret wiki-admin gelöscht und bootstrap.enabled=false gesetzt werden (solange die Ersteinrichtung
+# aktiv ist, verlangt das Chart admin.email und admin.existingSecret).
 
 # Öffentlicher Hostname von Wiki UND MCP (ohne https://). DNS zeigt auf den Ingress-Controller.
 domain: <wiki.example.org>

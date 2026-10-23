@@ -42,7 +42,8 @@ Danach: `https://<domain>/api/health` → `{"ok":true,"store":"ok"}`; im Wiki ei
 | Wert | Bedeutung | Default |
 |---|---|---|
 | `domain` | Hostname von Wiki und MCP — **ohne** `https://` (Pflicht) | – |
-| `admin.email`, `admin.existingSecret` | erstes Admin-Konto; Secret mit Schlüssel `ADMIN_PASSWORD`. Ohne beides wird die Ersteinrichtung übersprungen | – |
+| `admin.email`, `admin.existingSecret` | erstes Admin-Konto; Secret mit Schlüssel `ADMIN_PASSWORD`. **Pflicht**, solange `bootstrap.enabled=true` — ohne beides bricht `helm install` ab | – |
+| `bootstrap.enabled` | Ersteinrichtungs-Job; nach der Einrichtung `false` setzen, dann kann das Admin-Secret gelöscht werden | `true` |
 | `bootstrap.args` | `--locale=de` / `--locale=en`, `--demo` (Testgruppe + Testnutzer; braucht `bootstrap.demoPasswordSecret`) | `--locale=de` |
 | `secrets.existingSecret` | eigenes Secret mit `POSTGRES_PASSWORD` und `MCP_SESSION_SECRET` — **Pflicht bei GitOps** (Argo CD, Flux, `helm template`), weil dort die Helm-Funktion `lookup` nichts findet und die Werte bei jedem Rendern neu gewürfelt würden | leer = Chart erzeugt sie |
 | `images.mcp.tag` | Tag des MCP-Images; für Produktion ein Release-Tag | `main` |
@@ -63,6 +64,15 @@ Alle Werte mit Erklärung: [`values.yaml`](values.yaml).
   und sortieren Routen nach Regellänge. Deshalb nutzt das Chart `Exact` für `/mcp`, `/me` usw., `Prefix`
   nur mit abschließendem `/`, und gibt dem MCP-Ingress `traefik.ingress.kubernetes.io/router.priority: "100"`.
   So landen Wiki-Seiten wie `/meeting` beim Wiki und nicht beim MCP.
+- **`/finalize`-Sperre (Setup-Assistent):** Wiki.js nimmt den Pfad in jeder Schreibweise an (`/FINALIZE`),
+  Ingress-Pfade unterscheiden Groß-/Kleinschreibung. Mit `ingress.className: traefik` legt das Chart deshalb
+  zusätzlich eine Traefik-Middleware an (`<release>-setup-block`, braucht die Traefik-CRDs wie in k3s), die
+  jede Schreibweise vor Wiki.js umschreibt. **Mit nginx sperrt das Chart nur die exakte Schreibweise:**
+  ingress-nginx kennt keinen Regex für einzelne Pfade (`use-regex` macht *alle* Pfade des Hosts zu
+  Präfix-Regexen, dann finge `/me` auch `/meeting`). Deshalb verlangt das Chart `admin.email` und
+  `admin.existingSecret`, solange `bootstrap.enabled=true` ist: Der Einrichtungs-Job legt das Admin-Konto
+  direkt bei der Installation an, danach gibt es den Setup-Assistenten nicht mehr. Das Fenster ist damit auf
+  die Startzeit von Wiki.js begrenzt; wer auch das ausschließen will, macht die Domain erst danach öffentlich.
 - **Eine Replik** je Dienst: Sessions liegen in einer SQLite-Datei, Wiki.js 2 hält Prozesszustand.
 - **Backup:** Die Dumps liegen in der PVC `<release>-backups` — regelmäßig aus dem Cluster kopieren.
   Mitsichern: das Secret `<release>-secrets` (ohne das Postgres-Passwort darin passt ein Restore nicht

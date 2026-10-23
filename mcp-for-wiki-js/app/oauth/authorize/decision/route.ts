@@ -9,7 +9,7 @@ import {
 import { oauthEnabled } from '../../../../lib/oauth/store';
 import { oauthDisabledResponse } from '../../../../lib/oauth/http';
 import { authorizeErrorText, type LoginErrorCode } from '../../../../lib/oauth/messages';
-import { loginAttempt, recordLogin } from '../../../../lib/oauth/rate-limit';
+import { MAX_USERNAME_LENGTH, loginAttempt, recordLogin } from '../../../../lib/oauth/rate-limit';
 import { fetchIdentity, loginTfa, loginWithCredentials, type LoginOutcome } from '../../../../lib/oauth/wiki-login';
 import {
   clearTfaCookieHeader,
@@ -84,6 +84,7 @@ export async function POST(req: Request): Promise<Response> {
 
     if (mode === 'credentials') {
       const username = form.get('username') ?? '';
+      if (username.length > MAX_USERNAME_LENGTH) return backToAuthorize(issuer, p, 'invalid_credentials');
       if (loginAttempt(req.headers, username)) return backToAuthorize(issuer, p, 'rate_limited');
       const outcome = await loginWithCredentials(wikiBaseUrl(), username, form.get('password') ?? '');
       recordLogin(req.headers, username, outcome);

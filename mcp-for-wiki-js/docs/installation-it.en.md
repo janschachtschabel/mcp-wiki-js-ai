@@ -152,8 +152,10 @@ to the ingress and a TLS certificate (existing Secret or cert-manager).
    curl https://wiki.example.org/api/health
    ```
    The job ends with "Fertig"; `/api/health` returns `{"ok":true,"store":"ok"}`.
-5. **Clean up:** the `wiki-admin` Secret can be deleted and `admin.*` cleared afterwards; later revisions
-   only re-check the setup (idempotent).
+5. **Clean up:** `helm upgrade … --set bootstrap.enabled=false` (or in the values file), then the
+   `wiki-admin` Secret can be deleted. While `bootstrap.enabled=true`, the chart requires `admin.email` and
+   `admin.existingSecret` — the Job then creates the admin account right at install and the Wiki.js setup
+   wizard is never left open (with an nginx ingress `/finalize` cannot be blocked in every spelling).
 
 **Secrets:** the chart generates the database password and `MCP_SESSION_SECRET` once in the Secret
 `<release>-secrets` and keeps them across upgrades and `helm uninstall`. This does not work with GitOps
@@ -169,8 +171,8 @@ kubectl -n wiki create secret generic wiki-secrets --from-literal=POSTGRES_PASSW
 
 ### After setup
 
-1. For A1/A2 clear `ADMIN_PASSWORD` and redeploy (the account stays); for A4 delete the `wiki-admin`
-   Secret and clear `admin.*`.
+1. For A1/A2 clear `ADMIN_PASSWORD` and redeploy (the account stays); for A4 set
+   `bootstrap.enabled=false` and delete the `wiki-admin` Secret.
 2. In the wiki under Administration → Groups create a "Team" group: read/write pages, assets and
    comments, plus `read:source` and `read:history` — **without** `manage:system`.
 3. Create users (Administration → Users) and add them to the group. Without a configured mail server
@@ -428,7 +430,8 @@ Values for `helm install … -f <file>` or `--set`. Fully commented in the chart
 | Value | Chart | Meaning | Default |
 |---|---|---|---|
 | `domain` | wikijs-stack | hostname of wiki and MCP, without `https://` (required) | – |
-| `admin.email`, `admin.existingSecret` | wikijs-stack | first admin account; Secret with key `ADMIN_PASSWORD`. Without both no first-run setup | – |
+| `admin.email`, `admin.existingSecret` | wikijs-stack | first admin account; Secret with key `ADMIN_PASSWORD`. Required while `bootstrap.enabled=true` | – |
+| `bootstrap.enabled` | wikijs-stack | first-run setup Job; set to `false` after setup | `true` |
 | `bootstrap.args`, `bootstrap.demoPasswordSecret`, `bootstrap.demoEmail` | wikijs-stack | first-run setup flags (`--locale=en`, `--demo`) | `--locale=de` |
 | `secrets.existingSecret` | wikijs-stack | own Secret with `POSTGRES_PASSWORD` and `MCP_SESSION_SECRET` — required with GitOps/`helm template` | empty = generated |
 | `images.mcp.tag` / `image.tag` | stack / mcp | MCP image tag; use a release tag in production | `main` |
@@ -504,7 +507,7 @@ at `/ki-zugang`.
 | Sessions gone after a restart | `/data` or `stack-secrets` are not persistent volumes |
 | Kubernetes: wiki pages like `/meeting` end up at the MCP, or `/me` at the wiki | older chart version with `Prefix` paths and no Traefik priority — update the chart (`Exact` paths + `traefik.ingress.kubernetes.io/router.priority`) |
 | Kubernetes: `wiki` pods restart, log "password authentication failed" | database created with a different password than the Secret holds — do not delete/regenerate `<release>-secrets`; use `secrets.existingSecret` with GitOps |
-| Kubernetes: first-run setup missing | `admin.email` or `admin.existingSecret` not set — set them and `helm upgrade` (the Job runs per revision) |
+| Kubernetes: `helm install` fails with "admin.email is required …" | first-run setup is active (`bootstrap.enabled=true`) but admin credentials are missing — set them, or after setup `bootstrap.enabled=false` |
 | `413 Payload Too Large` | request over 4 MB (e.g. a large file via the AI) — upload the file directly in the wiki |
 
 More: [concept & permission model](./concept-ai-access.en.md) · [OAuth (German)](./oauth.md) ·

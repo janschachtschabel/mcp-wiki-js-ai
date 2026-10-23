@@ -5,7 +5,8 @@ import { ok, assertOk, assertNotTruncated } from '../../wikijs/format';
 import { DEFAULT_RESPONSE, type ToolDef } from '../types';
 import { parameterGate } from '../gate';
 import { assertPageIdNotBlocked, assertTagIdNotBlocked, assertTagsNotBlocked } from '../../guardrails';
-import { requirePageId } from './shared';
+import { MCP_BODY_LIMIT } from '../../body-limit';
+import { fetchLatestPage, findListedPage, isViewForbidden, requirePageId } from './shared';
 
 /**
  * Page JS/CSS runs for every visitor of the page (stored XSS in the wiki origin),
@@ -22,6 +23,27 @@ function scriptGate(a: { scriptJs?: string; scriptCss?: string; confirm?: unknow
     confirm: a.confirm,
     dryRun: { scriptJs: a.scriptJs, scriptCss: a.scriptCss },
   });
+}
+
+/**
+ * Upper bound for a page built from edits (audit A-07): one short "find" with a long
+ * "replace" would otherwise multiply into a string far beyond any request size.
+ * Same bound a caller could send as "content" directly.
+ */
+const MAX_EDITED_CONTENT = MCP_BODY_LIMIT;
+
+/** Apply find/replace edits, refusing a missing "find" and a result over the bound — before building it. */
+function applyEdits(body: string, edits: { find: string; replace: string }[]): string {
+  for (const e of edits) {
+    const parts = body.split(e.find);
+    if (parts.length === 1) throw new Error(`edit failed: text not found: ${JSON.stringify(e.find)}`);
+    const length = body.length + (parts.length - 1) * (e.replace.length - e.find.length);
+    if (length > MAX_EDITED_CONTENT) {
+      throw new Error(`edit refused: the result would be ${length} characters (limit ${MAX_EDITED_CONTENT}).`);
+    }
+    body = parts.join(e.replace);
+  }
+  return body;
 }
 
 const scriptField = (what: string) =>
@@ -106,32 +128,36 @@ export const pageWriteTools: ToolDef[] = [
         locale: string;
         title: string;
         description: string;
-        editor: string;
+        editor?: string;
         isPublished: boolean;
-        isPrivate: boolean;
+        isPrivate?: boolean;
         content: string;
-        tags: { tag: string }[];
-        scriptCss: string | null;
-        scriptJs: string | null;
+        tags: Array<string | { tag: string }>; // single: objects, conflictLatest: strings
+        scriptCss?: string | null;
+        scriptJs?: string | null;
       };
-      const cur = await ctx.client.request<{ pages: { single: Cur | null } }>(
-        `query($id:Int!){ pages { single(id:$id){ path locale title description editor isPublished isPrivate content tags { tag } scriptCss scriptJs } } }`,
-        { id: a.id },
-      );
-      const p = cur.pages.single;
-      if (!p) throw new Error(`No page with id ${a.id}`);
+      let p: Cur;
+      let scriptsKnown = true;
+      try {
+        const cur = await ctx.client.request<{ pages: { single: Cur | null } }>(
+          `query($id:Int!){ pages { single(id:$id){ path locale title description editor isPublished isPrivate content tags { tag } scriptCss scriptJs } } }`,
+          { id: a.id },
+        );
+        if (!cur.pages.single) throw new Error(`No page with id ${a.id}`);
+        p = cur.pages.single;
+      } catch (err) {
+        // A-01: without manage:pages, read the page via conflictLatest (write:pages).
+        // It has no scripts; Wiki.js keeps them unless the user holds write:scripts/
+        // write:styles, where an omitted value clears them — rare without manage:pages.
+        if (!isViewForbidden(err)) throw err;
+        p = await fetchLatestPage(ctx, a.id);
+        scriptsKnown = false;
+      }
       assertTagsNotBlocked(p.tags, `Page ${a.id}`);
 
       let content = a.content ?? p.content ?? '';
-      if (a.edits && a.edits.length > 0) {
-        let body = p.content ?? '';
-        for (const e of a.edits) {
-          if (!body.includes(e.find)) throw new Error(`edit failed: text not found: ${JSON.stringify(e.find)}`);
-          body = body.split(e.find).join(e.replace);
-        }
-        content = body;
-      }
-      const tags = a.tags ?? (p.tags ?? []).map((t) => t.tag);
+      if (a.edits && a.edits.length > 0) content = applyEdits(p.content ?? '', a.edits);
+      const tags = a.tags ?? (p.tags ?? []).map((t) => (typeof t === 'string' ? t : t.tag));
 
       const data = await ctx.client.request(
         `mutation($id:Int!,$content:String,$description:String,$editor:String,$isPrivate:Boolean,$isPublished:Boolean,$locale:String,$path:String,$tags:[String],$title:String,$scriptCss:String,$scriptJs:String){ pages { update(id:$id,content:$content,description:$description,editor:$editor,isPrivate:$isPrivate,isPublished:$isPublished,locale:$locale,path:$path,tags:$tags,title:$title,scriptCss:$scriptCss,scriptJs:$scriptJs){ ${DEFAULT_RESPONSE} page { id path title updatedAt } } } }`,
@@ -147,8 +173,8 @@ export const pageWriteTools: ToolDef[] = [
           tags,
           title: a.title ?? p.title,
           // Wiki.js resets omitted scripts to '' for users with write:styles/scripts.
-          scriptCss: a.scriptCss ?? p.scriptCss ?? '',
-          scriptJs: a.scriptJs ?? p.scriptJs ?? '',
+          scriptCss: a.scriptCss ?? (scriptsKnown ? (p.scriptCss ?? '') : undefined),
+          scriptJs: a.scriptJs ?? (scriptsKnown ? (p.scriptJs ?? '') : undefined),
         },
       );
       assertOk(data.pages.update.responseResult, 'Update page');
@@ -173,12 +199,9 @@ export const pageWriteTools: ToolDef[] = [
       let destinationLocale: string | undefined = a.destinationLocale;
       if (!destinationLocale && a.id == null) destinationLocale = a.locale ?? 'en';
       if (!destinationLocale) {
-        const cur = await ctx.client.request<{ pages: { single: { locale: string } | null } }>(
-          `query($id:Int!){ pages { single(id:$id){ locale } } }`,
-          { id },
-        );
-        if (!cur.pages.single) throw new Error(`No page with id ${id}`);
-        destinationLocale = cur.pages.single.locale;
+        const cur = await findListedPage(ctx, { id });
+        if (!cur) throw new Error(`No page with id ${id}`);
+        destinationLocale = cur.locale;
       }
       const data = await ctx.client.request(
         `mutation($id:Int!,$destinationPath:String!,$destinationLocale:String!){ pages { move(id:$id,destinationPath:$destinationPath,destinationLocale:$destinationLocale){ ${DEFAULT_RESPONSE} } } }`,

@@ -413,7 +413,7 @@ scripts/           gen-profile.mjs (Handle-Generator) · show-roles.ts · smoke*
 
 ```bash
 npm run typecheck                  # TypeScript ohne Build
-npm test                           # Offline-Suite: 19 Suiten (policy/config/nav/semaphore/context/oauth/store/oauth-routes/oauth-browser/guardrails/routing/format/pages/route/limits/escalation/gate/client/stdio), 775 Assertions
+npm test                           # Offline-Suite: 19 Suiten (policy/config/nav/semaphore/context/oauth/store/oauth-routes/oauth-browser/guardrails/routing/format/pages/route/limits/escalation/gate/client/stdio), 801 Assertions
 npm run build                      # Production-Build (Next-standalone)
 
 # Live-Integrationstest: ALLE Tool-Handler gegen ein WEGWERF-/leeres Wiki.js
@@ -430,7 +430,7 @@ node scripts/smoke-urlauth.mjs  <url>   # URL-Parameter-Auth (?url=&token=&prese
 node scripts/probe-deploy.mjs   <url>   # Deploy ohne Creds prüfen (Env-Status)
 ```
 
-Vollständiges Per-Tool-Live-Ergebnis (alle 70 Tools): **[docs/TESTPROTOKOLL.md](./docs/TESTPROTOKOLL.md)**. Wegwerf-Wiki dafür: `docker compose -f docker-compose.test.yml up -d` (Setup-Automatisierung siehe Protokoll). In der CI (`.github/workflows/ci.yml`) laufen Typecheck, Offline-Suite (775 Assertions) und Build. OAuth-E2E (38) und Live-Tool-Suite (79 Tool-Aufrufe) brauchen einen laufenden Stack und laufen lokal (`docker-compose.yml` + `docker-compose.local.yml`, siehe Skriptköpfe).
+Vollständiges Per-Tool-Live-Ergebnis (alle 70 Tools): **[docs/TESTPROTOKOLL.md](./docs/TESTPROTOKOLL.md)**. Wegwerf-Wiki dafür: `docker compose -f docker-compose.test.yml up -d` (Setup-Automatisierung siehe Protokoll). In der CI (`.github/workflows/ci.yml`) laufen Typecheck, Offline-Suite (801 Assertions) und Build. OAuth-E2E (50, davon 12 Seiten-Tool-Aufrufe als Team-Nutzer ohne Admin-Rechte) und Live-Tool-Suite (79 Tool-Aufrufe) brauchen einen laufenden Stack und laufen lokal (`docker-compose.yml` + `docker-compose.local.yml`, siehe Skriptköpfe).
 
 ---
 
@@ -438,6 +438,7 @@ Vollständiges Per-Tool-Live-Ergebnis (alle 70 Tools): **[docs/TESTPROTOKOLL.md]
 
 - **Datei-Upload** läuft in Wiki.js über einen Multipart-REST-Endpoint (`/u`, nicht GraphQL) — abgedeckt durch `wiki_asset_upload` (Base64-Eingabe, streng geprüft; höchstens 4 MB Base64 = Body-Limit von `/mcp`, also rund 3 MB Datei); ebenso Ordner anlegen, Umbenennen und Löschen.
 - Manche Operationen verlangen in Wiki.js erhöhte Scopes (`manage:system`, `write:pages`, …). Fehlt dem Key die Berechtigung, kommt ein Wiki.js-Autorisierungsfehler — unabhängig von der hiesigen Policy.
+- **Seiten ohne `manage:pages`:** Wiki.js liefert `pages.single`/`singleByPath` nur mit `manage:pages` oder `delete:pages`. Für alle anderen liest der MCP die Seite über `pages.list` (Rechte `read:pages`) und `pages.conflictLatest` (Rechte `write:pages`). Folgen: `wiki_page_get` braucht für den Inhalt Schreibrecht und liefert dann weniger Felder (ohne `editor`, `render`, Ersteller); reine Leser bekommen den Wiki.js-Fehler. `wiki_page_update` kennt die Seiten-Skripte dann nicht — Wiki.js behält sie, außer der Nutzer hat `write:scripts`/`write:styles`. Verschieben (`wiki_page_move`, `path` in `wiki_page_update`) verlangt in Wiki.js selbst `manage:pages`.
 - `wiki_page_convert` md→html wird von Wiki.js abgelehnt (Server-Limit, nicht alle Editor-Kombinationen sind konvertierbar); das Tool meldet die Server-Antwort korrekt.
 
 ---

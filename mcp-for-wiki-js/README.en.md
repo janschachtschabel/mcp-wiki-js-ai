@@ -45,7 +45,7 @@ Full write-up: [docs/concept-ai-access.en.md](docs/concept-ai-access.en.md)
 npm install
 npm run dev        # HTTP dev server on :3030
 npm run stdio      # stdio transport (WIKIJS_URL/WIKIJS_TOKEN from env)
-npm test           # 775 offline assertions across 19 suites
+npm test           # 801 offline assertions across 19 suites
 npm run typecheck && npm run build
 ```
 

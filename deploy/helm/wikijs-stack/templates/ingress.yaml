@@ -2,6 +2,30 @@
 {{- $fullname := include "stack.fullname" . }}
 {{- $domain := include "stack.domain" . }}
 {{- /*
+Audit A-02: Wiki.js (Express) matches /finalize case-insensitively, Ingress paths are
+case-sensitive — /FINALIZE would slip past the Exact/Prefix block below. With Traefik a
+Middleware on the wiki router rewrites every spelling to a harmless path. ingress-nginx
+has no per-path regex (use-regex turns EVERY path of the host into a case-insensitive
+prefix regex, so Exact /me would also catch /meeting); see the chart README.
+*/}}
+{{- $traefik := eq (toString .Values.ingress.className) "traefik" }}
+{{- $wikiAnnotations := merge (deepCopy .Values.ingress.wikiAnnotations) .Values.ingress.annotations }}
+{{- if $traefik }}
+{{- $block := printf "%s-%s-setup-block@kubernetescrd" .Release.Namespace $fullname }}
+{{- $existing := get $wikiAnnotations "traefik.ingress.kubernetes.io/router.middlewares" }}
+{{- $_ := set $wikiAnnotations "traefik.ingress.kubernetes.io/router.middlewares" (ternary $block (printf "%s,%s" $block $existing) (empty $existing)) }}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ $fullname }}-setup-block
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "wiki") | nindent 4 }}
+spec:
+  replacePathRegex:
+    regex: "(?i)^/finalize(/.*)?$"
+    replacement: /finalize-blocked
+---
+{{- end }}
+{{- /*
 Two Ingress objects on the same host: one for the MCP paths (+ the blocked setup
 wizard), one for Wiki.js on "/". Separate objects let the MCP one carry its own
 annotations — Traefik ranks routers by rule length, so without an explicit priority
@@ -58,7 +82,7 @@ kind: Ingress
 metadata:
   name: {{ $fullname }}-wiki
   labels: {{ include "stack.labels" (dict "ctx" $ "component" "wiki") | nindent 4 }}
-  {{- with merge (deepCopy .Values.ingress.wikiAnnotations) .Values.ingress.annotations }}
+  {{- with $wikiAnnotations }}
   annotations: {{ toYaml . | nindent 4 }}
   {{- end }}
 spec:

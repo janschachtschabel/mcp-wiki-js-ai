@@ -6,8 +6,8 @@
 > 2026-06-17, damals 69 Tools; inzwischen 70 mit `wiki_asset_download`). Die
 > Handler wurden seither im Zuge der Audit-Umsetzung geändert (u. a.
 > Massenlöschen, Tag-Sperre, Upload-Prüfung); dieses Protokoll ist ein
-> historischer Lauf. Die **aktuellen** Testzahlen: **775 Offline-Assertions**
-> (19 Suiten) + **38 OAuth-E2E** + **79 Live-Tool-Aufrufe**
+> historischer Lauf. Die **aktuellen** Testzahlen: **801 Offline-Assertions**
+> (19 Suiten) + **50 OAuth-E2E** + **79 Live-Tool-Aufrufe**
 > (`npm test` + `npm run test:e2e` + `npm run test:live`) — siehe [README › Tests](../README.md#tests).
 
 ## 1. Verdikt

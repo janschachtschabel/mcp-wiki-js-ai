@@ -420,6 +420,18 @@ async function main(): Promise<void> {
   await Promise.all(Array.from({ length: 12 }, (_, i) => decision.POST(post('/oauth/authorize/decision', creds(`burst${i}`), { ip: burstIp }))));
   check('R-11: 12 parallel failures from one IP — at most 10 reach Wiki.js (attempts are reserved before the call)', wikiCalls.length - burstBefore <= 10);
 
+  // ---- A-04: oversized usernames never reach Wiki.js or the limiter ---------------
+  const longName = 'x'.repeat(257);
+  const before = wikiCalls.length;
+  const longDecision = await decision.POST(post('/oauth/authorize/decision', creds(longName), { ip: freshIp() }));
+  check('A-04: decision with a 257-char username → invalid_credentials, no Wiki.js call', query(longDecision).get('login_error') === 'invalid_credentials' && wikiCalls.length === before);
+  const longMe = await meLogin.POST(post('/me/login', { username: longName, password: 'x' }, { ip: freshIp() }));
+  check('A-04: /me/login with a 257-char username → invalid_credentials, no Wiki.js call', query(longMe).get('login_error') === 'invalid_credentials' && wikiCalls.length === before);
+  await decision.POST(post('/oauth/authorize/decision', creds('y'.repeat(256)), { ip: freshIp() }));
+  check('A-04: a 256-char username is still tried', wikiCalls.length === before + 1);
+  const { limiterUserKey, MAX_USERNAME_LENGTH } = await import('../lib/oauth/rate-limit');
+  check('A-04: limiter keys are fixed-size hashes', limiterUserKey('z'.repeat(MAX_USERNAME_LENGTH)).length === 64 && limiterUserKey(' Ab ') === limiterUserKey('ab'));
+
   const { RateLimiter } = await import('../lib/oauth/rate-limit');
   const rl = new RateLimiter(1, 60_000, 2);
   rl.hit('victim', 0);
