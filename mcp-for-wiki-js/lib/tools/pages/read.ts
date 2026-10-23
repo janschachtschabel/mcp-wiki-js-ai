@@ -8,7 +8,7 @@ import {
   blockedPathKey,
   filterBlockedPages,
 } from '../../guardrails';
-import { DEFAULT_MAX_CONTENT, fetchLatestPage, findListedPage, isViewForbidden, singleSelection } from './shared';
+import { DEFAULT_MAX_CONTENT, fetchLatestPage, findListedPage, isViewForbidden, rethrowMissingPage, singleSelection } from './shared';
 
 /** Upper bounds for caller-chosen page sizes (audit R-46). */
 const MAX_LIST_LIMIT = 1000;
@@ -170,10 +170,12 @@ export const pageReadTools: ToolDef[] = [
     },
     handler: async (a, ctx) => {
       await assertPageIdNotBlocked(ctx, a.id, `Page ${a.id}`);
-      const data = await ctx.client.request(
-        `query($id:Int!,$offsetPage:Int,$offsetSize:Int){ pages { history(id:$id,offsetPage:$offsetPage,offsetSize:$offsetSize){ trail { versionId versionDate authorId authorName actionType valueBefore valueAfter } total } } }`,
-        { id: a.id, offsetPage: a.offsetPage ?? 0, offsetSize: a.offsetSize ?? 100 },
-      );
+      const data = await ctx.client
+        .request(
+          `query($id:Int!,$offsetPage:Int,$offsetSize:Int){ pages { history(id:$id,offsetPage:$offsetPage,offsetSize:$offsetSize){ trail { versionId versionDate authorId authorName actionType valueBefore valueAfter } total } } }`,
+          { id: a.id, offsetPage: a.offsetPage ?? 0, offsetSize: a.offsetSize ?? 100 },
+        )
+        .catch((err: unknown) => rethrowMissingPage(err, a.id));
       return ok(data.pages.history);
     },
   },
@@ -194,10 +196,12 @@ export const pageReadTools: ToolDef[] = [
     handler: async (a, ctx) => {
       // Guard against BOTH the current tags and the historical version's tags.
       await assertPageIdNotBlocked(ctx, a.pageId, `Page ${a.pageId}`);
-      const data = await ctx.client.request(
-        `query($pageId:Int!,$versionId:Int!){ pages { version(pageId:$pageId,versionId:$versionId){ versionId pageId path title description content contentType editor locale isPrivate isPublished tags action authorName versionDate createdAt } } }`,
-        { pageId: a.pageId, versionId: a.versionId },
-      );
+      const data = await ctx.client
+        .request(
+          `query($pageId:Int!,$versionId:Int!){ pages { version(pageId:$pageId,versionId:$versionId){ versionId pageId path title description content contentType editor locale isPrivate isPublished tags action authorName versionDate createdAt } } }`,
+          { pageId: a.pageId, versionId: a.versionId },
+        )
+        .catch((err: unknown) => rethrowMissingPage(err, a.pageId));
       if (data.pages.version) assertTagsNotBlocked(data.pages.version.tags, `Page ${a.pageId}`);
       return ok(truncateContent(data.pages.version, a.maxContentChars ?? DEFAULT_MAX_CONTENT));
     },

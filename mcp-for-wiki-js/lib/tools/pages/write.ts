@@ -49,6 +49,13 @@ function applyEdits(body: string, edits: { find: string; replace: string }[]): s
 const scriptField = (what: string) =>
   z.string().optional().describe(`Page ${what}. Setting it needs the manage_system policy mode (it runs for every visitor).`);
 
+const publishDateField = (edge: 'start' | 'end') =>
+  z
+    .string()
+    .refine((v) => v === '' || !Number.isNaN(Date.parse(v)), 'Expected an ISO 8601 date-time or "" (clear).')
+    .optional()
+    .describe(`Scheduled publish ${edge} (ISO 8601, e.g. 2030-01-01T00:00:00Z); "" clears it. Omitted = keep the current value where it can be read.`);
+
 export const pageWriteTools: ToolDef[] = [
   {
     name: 'wiki_page_create',
@@ -111,6 +118,8 @@ export const pageWriteTools: ToolDef[] = [
       path: z.string().optional().describe('New path (renames the page).'),
       isPublished: z.boolean().optional(),
       isPrivate: z.boolean().optional(),
+      publishStartDate: publishDateField('start'),
+      publishEndDate: publishDateField('end'),
       scriptCss: scriptField('CSS'),
       scriptJs: scriptField('JavaScript'),
     },
@@ -135,12 +144,14 @@ export const pageWriteTools: ToolDef[] = [
         tags: Array<string | { tag: string }>; // single: objects, conflictLatest: strings
         scriptCss?: string | null;
         scriptJs?: string | null;
+        publishStartDate?: string;
+        publishEndDate?: string;
       };
       let p: Cur;
       let scriptsKnown = true;
       try {
         const cur = await ctx.client.request<{ pages: { single: Cur | null } }>(
-          `query($id:Int!){ pages { single(id:$id){ path locale title description editor isPublished isPrivate content tags { tag } scriptCss scriptJs } } }`,
+          `query($id:Int!){ pages { single(id:$id){ path locale title description editor isPublished isPrivate publishStartDate publishEndDate content tags { tag } scriptCss scriptJs } } }`,
           { id: a.id },
         );
         if (!cur.pages.single) throw new Error(`No page with id ${a.id}`);
@@ -158,9 +169,14 @@ export const pageWriteTools: ToolDef[] = [
       let content = a.content ?? p.content ?? '';
       if (a.edits && a.edits.length > 0) content = applyEdits(p.content ?? '', a.edits);
       const tags = a.tags ?? (p.tags ?? []).map((t) => (typeof t === 'string' ? t : t.tag));
+      // Wiki.js resets an omitted publish window to '' (live-verified), and only
+      // pages.single (manage:pages) can read it. '' is sent as "omitted": new Date('')
+      // would be stored as an invalid date.
+      const publishWindow = (given: string | undefined, current: string | undefined) => (given !== undefined ? given : current) || undefined;
+      const windowUnknown = !scriptsKnown && a.publishStartDate === undefined && a.publishEndDate === undefined;
 
       const data = await ctx.client.request(
-        `mutation($id:Int!,$content:String,$description:String,$editor:String,$isPrivate:Boolean,$isPublished:Boolean,$locale:String,$path:String,$tags:[String],$title:String,$scriptCss:String,$scriptJs:String){ pages { update(id:$id,content:$content,description:$description,editor:$editor,isPrivate:$isPrivate,isPublished:$isPublished,locale:$locale,path:$path,tags:$tags,title:$title,scriptCss:$scriptCss,scriptJs:$scriptJs){ ${DEFAULT_RESPONSE} page { id path title updatedAt } } } }`,
+        `mutation($id:Int!,$content:String,$description:String,$editor:String,$isPrivate:Boolean,$isPublished:Boolean,$locale:String,$path:String,$publishStartDate:Date,$publishEndDate:Date,$tags:[String],$title:String,$scriptCss:String,$scriptJs:String){ pages { update(id:$id,content:$content,description:$description,editor:$editor,isPrivate:$isPrivate,isPublished:$isPublished,locale:$locale,path:$path,publishStartDate:$publishStartDate,publishEndDate:$publishEndDate,tags:$tags,title:$title,scriptCss:$scriptCss,scriptJs:$scriptJs){ ${DEFAULT_RESPONSE} page { id path title updatedAt } } } }`,
         {
           id: a.id,
           content,
@@ -170,6 +186,8 @@ export const pageWriteTools: ToolDef[] = [
           isPublished: a.isPublished ?? p.isPublished,
           locale: a.locale ?? p.locale,
           path: a.path ?? p.path,
+          publishStartDate: publishWindow(a.publishStartDate, p.publishStartDate),
+          publishEndDate: publishWindow(a.publishEndDate, p.publishEndDate),
           tags,
           title: a.title ?? p.title,
           // Wiki.js resets omitted scripts to '' for users with write:styles/scripts.
@@ -178,7 +196,12 @@ export const pageWriteTools: ToolDef[] = [
         },
       );
       assertOk(data.pages.update.responseResult, 'Update page');
-      return ok(data.pages.update.page, '✅ Page updated.');
+      return ok(
+        data.pages.update.page,
+        windowUnknown
+          ? '✅ Page updated. Note: without manage:pages the scheduled publish window cannot be read, so Wiki.js cleared it if one was set — pass publishStartDate/publishEndDate to keep it.'
+          : '✅ Page updated.',
+      );
     },
   },
   {

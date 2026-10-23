@@ -23,6 +23,18 @@ export function isViewForbidden(err: unknown): boolean {
   return err instanceof Error && /not authorized to view this page/i.test(err.message);
 }
 
+/**
+ * Wiki.js' history/version resolvers dereference the page before checking that it
+ * exists, so an unknown page id surfaces as this TypeError (verified against 2.5).
+ * Rethrow it as the not-found error every other page tool gives.
+ */
+export function rethrowMissingPage(err: unknown, id: number): never {
+  if (err instanceof Error && /cannot read properties of undefined \(reading 'path'\)/i.test(err.message)) {
+    throw new Error(`No page with id ${id}`);
+  }
+  throw err;
+}
+
 export interface ListedPage {
   id: number;
   path: string;

@@ -128,6 +128,8 @@ interface FakePage {
   tags?: string[];
   content?: string;
   render?: string;
+  publishStartDate?: string;
+  publishEndDate?: string;
 }
 
 /**
@@ -413,6 +415,7 @@ async function reauditPageTests(): Promise<void> {
   check('R-46: history offsetSize has a maximum', !histSchema.safeParse({ id: 1, offsetSize: 1_000_000 }).success && histSchema.safeParse({ id: 1, offsetSize: 50 }).success);
 
   await a01TeamUserTests(tool);
+  await phase1FollowUpTests(tool);
 
   const upload = tool('wiki_asset_upload');
   const uploads: number[] = [];
@@ -528,6 +531,41 @@ async function a01TeamUserTests(tool: (name: string) => ToolDef): Promise<void> 
   w = fakeWiki([{ id: 1, path: 'docs/a', locale: 'en', content: 'x' }]);
   r = await outcome(tool('wiki_page_update'), { id: 1, edits: [{ find: 'x', replace: 'z'.repeat(MCP_BODY_LIMIT) }] }, stubCtx(w.respond, 'a07b'));
   check('A-07: an edit result exactly at the limit is allowed', !r.isError && w.mutations.length === 1);
+}
+
+// ---------------------------------------------------------------------------
+// Follow-ups found while fixing audit 2026-10-23 phase 1
+async function phase1FollowUpTests(tool: (name: string) => ToolDef): Promise<void> {
+  // Wiki.js crashes on history/version of an unknown page id with a TypeError
+  // ("Cannot read properties of undefined (reading 'path')") — reproduced live.
+  const crash = (q: string) =>
+    /\bhistory\(|\bversion\(/.test(q) ?(() => { throw new Error("Cannot read properties of undefined (reading 'path')"); })() : undefined;
+  let w = fakeWiki([], crash);
+  let r = await outcome(tool('wiki_page_history'), { id: 999 }, stubCtx(w.respond, 'f1h'));
+  check('history of an unknown id → clear "no page" error', r.isError && /no page with id 999/i.test(r.text));
+  r = await outcome(tool('wiki_page_version'), { pageId: 999, versionId: 1 }, stubCtx(w.respond, 'f1v'));
+  check('version of an unknown page id → clear "no page" error', r.isError && /no page with id 999/i.test(r.text));
+
+  // Wiki.js clears publishStartDate/EndDate on every update that omits them (live-verified).
+  const scheduled = { id: 1, path: 'docs/a', locale: 'en', content: 'x', publishStartDate: '2030-01-01T00:00:00.000Z', publishEndDate: '2031-01-01T00:00:00.000Z' };
+  w = fakeWiki([scheduled]);
+  r = await outcome(tool('wiki_page_update'), { id: 1, content: 'y' }, stubCtx(w.respond, 'f1p1'));
+  const sent = w.mutations[0]?.v ?? {};
+  check('update keeps the scheduled publish window', !r.isError && sent.publishStartDate === scheduled.publishStartDate && sent.publishEndDate === scheduled.publishEndDate);
+  w = fakeWiki([scheduled]);
+  await outcome(tool('wiki_page_update'), { id: 1, publishStartDate: '', publishEndDate: '' }, stubCtx(w.respond, 'f1p2'));
+  const cleared = w.mutations[0]?.v ?? {};
+  check('an explicit "" clears the publish window (no invalid date sent)', cleared.publishStartDate === undefined && cleared.publishEndDate === undefined);
+  w = fakeWiki([{ id: 1, path: 'docs/a', locale: 'en', content: 'x' }]);
+  await outcome(tool('wiki_page_update'), { id: 1, content: 'y' }, stubCtx(w.respond, 'f1p3'));
+  const none = w.mutations[0]?.v ?? {};
+  check('a page without publish window sends no dates', none.publishStartDate === undefined && none.publishEndDate === undefined);
+  w = fakeWiki([scheduled], undefined, { forbidSingle: true });
+  r = await outcome(tool('wiki_page_update'), { id: 1, content: 'y' }, stubCtx(w.respond, 'f1p4'));
+  check('team user (no manage:pages): update works and warns that the publish window could not be read', !r.isError && /publish/i.test(r.text));
+  w = fakeWiki([scheduled], undefined, { forbidSingle: true });
+  await outcome(tool('wiki_page_update'), { id: 1, content: 'y', publishStartDate: '2030-01-01T00:00:00.000Z' }, stubCtx(w.respond, 'f1p5'));
+  check('team user can set the publish window explicitly', w.mutations[0]?.v.publishStartDate === '2030-01-01T00:00:00.000Z');
 }
 
 main().catch((e) => {
