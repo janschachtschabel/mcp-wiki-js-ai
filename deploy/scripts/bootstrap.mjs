@@ -7,10 +7,16 @@
  *
  *   1. Wiki.js finalisieren (Admin-Konto anlegen), falls noch im Setup-Modus
  *   2. Startseite + Anwender-Anleitung /ki-zugang anlegen, falls nicht vorhanden
- *   3. PostgreSQL-Suchmaschine aktivieren (bessere Agenten-Suche) + Index-Rebuild
- *   4. optional --locale=de   Standardsprache umstellen + Seiten migrieren
+ *   3. optional --locale=de   Standardsprache umstellen + Seiten migrieren
+ *   4. PostgreSQL-Suchmaschine aktivieren (bessere Agenten-Suche) + Index-Rebuild
  *   5. optional --demo        Gruppe "Team" (lesen/schreiben, kein Löschen)
  *                             + Testnutzer anlegen
+ *
+ * Schritte 3–5 ändern nur, was vom Soll abweicht. Der automatische Lauf bei
+ * jedem Deploy (--if-configured) setzt Sprache, Suchmaschine und die Rechte der
+ * Gruppe "Team" nur bei der Ersteinrichtung; was Admins später in Wiki.js
+ * ändern, bleibt erhalten (Audit A-36). Ein manueller Lauf oder --reapply stellt
+ * das Soll her.
  *
  * In docker-compose.yml und deploy/standalone/full läuft es automatisch (Dienst
  * bootstrap, mit --if-configured). Mit docker-compose.build.yml
@@ -37,6 +43,8 @@
  *                 Compose-Dateien ohne Shell, z. B. "--locale=en --demo");
  *                 sie stehen hinter den Kommandozeilen-Parametern und gewinnen.
  *
+ * --reapply       mit --if-configured: Sprache, Suchmaschine und Gruppe "Team" wie
+ *                  bei einem manuellen Lauf wieder auf das Soll setzen.
  * --if-configured  ohne ADMIN_EMAIL/ADMIN_PASSWORD oder ohne PUBLIC_URL still
  *                  beenden (Exit 0) statt mit Fehler bzw. statt WIKI_URL als
  *                  öffentliche Adresse zu nehmen — für den automatischen Start in
@@ -50,6 +58,9 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const ARGS = [...process.argv.slice(2), ...(process.env.BOOTSTRAP_ARGS ?? '').split(/\s+/).filter(Boolean)];
 const WITH_DEMO = ARGS.includes('--demo');
 const IF_CONFIGURED = ARGS.includes('--if-configured');
+// The automatic run touches language, search engine and the Team group only at first
+// setup; --reapply (e.g. BOOTSTRAP_ARGS in a panel without a shell) sets them again.
+const KEEP_ADMIN_CHOICES = IF_CONFIGURED && !ARGS.includes('--reapply');
 // Last one wins, so BOOTSTRAP_ARGS can override a --locale default from the command line.
 const LOCALE = (ARGS.findLast((a) => a.startsWith('--locale=')) ?? '').split('=')[1];
 
@@ -94,6 +105,11 @@ if (WITH_DEMO && !DEMO.password) {
 const log = (msg) => console.log('•', msg);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Wiki.js reports refusals in responseResult, not as GraphQL errors: check every one. */
+function assertSucceeded(rr, what) {
+  if (!rr?.succeeded) throw new Error(`${what} fehlgeschlagen: ${rr?.message || 'keine Antwort von Wiki.js'}`);
+}
+
 async function gql(query, variables = {}, jwt) {
   const res = await fetch(`${WIKI_URL}/graphql`, {
     method: 'POST',
@@ -137,14 +153,17 @@ async function isSetupMode() {
   return r.status === 200 && (r.headers.get('content-type') ?? '').includes('text/html');
 }
 
-/** Step 1 — finalize the first-run setup, or log in to an already set-up wiki. */
+/**
+ * Step 1 — finalize the first-run setup, or log in to an already set-up wiki.
+ * `fresh` = this run set the wiki up; the automatic run configures only then.
+ */
 async function ensureFinalized() {
   let jwt;
   if (!(await isSetupMode())) {
     jwt = await adminLogin();
     if (!jwt) throw new Error('Wiki.js ist bereits eingerichtet, aber der Admin-Login schlägt fehl — ADMIN_EMAIL/ADMIN_PASSWORD prüfen.');
     log('Wiki.js ist bereits eingerichtet (Admin-Login funktioniert).');
-    return jwt;
+    return { jwt, fresh: false };
   }
   log('Setup-Modus erkannt — lege das Admin-Konto an …');
   const res = await fetch(`${WIKI_URL}/finalize`, {
@@ -163,7 +182,7 @@ async function ensureFinalized() {
     await sleep(3000);
     if (await isSetupMode().catch(() => true)) continue; // still restarting
     jwt = await adminLogin().catch(() => null);
-    if (jwt) return jwt;
+    if (jwt) return { jwt, fresh: true };
   }
   throw new Error('Wiki.js kam nach dem Setup nicht zurück.');
 }
@@ -236,12 +255,22 @@ async function ensureStartPages(jwt) {
 
 const DICT_BY_LOCALE = { de: 'german', en: 'english', fr: 'french', es: 'spanish', it: 'italian', nl: 'dutch', pt: 'portuguese', ru: 'russian' };
 
-/** Step 3 — the PostgreSQL search engine beats the default DB search by far.
- *  The dictionary follows the wiki's ACTUAL locale, so re-runs never downgrade it. */
-async function ensureSearchEngine(jwt) {
+/** Step 4 — the PostgreSQL search engine beats the default DB search by far.
+ *  The dictionary follows the wiki's ACTUAL locale. */
+async function ensureSearchEngine(jwt, fresh) {
+  const s = await gql('query{ search { searchEngines { key isEnabled } } }', {}, jwt);
+  const active = s.search.searchEngines.find((e) => e.isEnabled)?.key ?? 'keine';
+  if (active === 'postgres') {
+    log('PostgreSQL-Suche ist aktiv.');
+    return;
+  }
+  if (KEEP_ADMIN_CHOICES && !fresh) {
+    log(`Suchmaschine bleibt "${active}" (in Wiki.js gewählt). PostgreSQL-Suche bei Bedarf: einmal mit BOOTSTRAP_ARGS=--reapply bereitstellen.`);
+    return;
+  }
   const loc = await gql('query{ localization { config { locale } } }', {}, jwt);
   const dict = DICT_BY_LOCALE[loc.localization.config.locale] ?? 'simple';
-  await gql(
+  const u = await gql(
     'mutation($engines:[SearchEngineInput]){ search { updateSearchEngines(engines:$engines){ responseResult { succeeded message } } } }',
     {
       engines: [
@@ -251,54 +280,88 @@ async function ensureSearchEngine(jwt) {
     },
     jwt,
   );
-  await gql('mutation{ search { rebuildIndex { responseResult { succeeded } } } }', {}, jwt);
+  assertSucceeded(u.search.updateSearchEngines.responseResult, 'Suchmaschine umstellen');
+  const r = await gql('mutation{ search { rebuildIndex { responseResult { succeeded message } } } }', {}, jwt);
+  assertSucceeded(r.search.rebuildIndex.responseResult, 'Suchindex aufbauen');
   log(`PostgreSQL-Suche aktiv (Wörterbuch: ${dict}), Index neu aufgebaut.`);
 }
 
-/** Step 4 (optional) — switch the site to German and migrate existing pages. */
-async function switchLocale(jwt) {
+/**
+ * Step 3 (optional) — switch the site language and move the pages of the old
+ * default language along. Never on a wiki that already has the language, and on
+ * the automatic run only at first setup — otherwise every deploy would move pages
+ * an editor deliberately created in another language (A-36).
+ */
+async function switchLocale(jwt, fresh) {
+  const loc = await gql('query{ localization { config { locale } } }', {}, jwt);
+  const current = loc.localization.config.locale;
+  if (current === LOCALE) {
+    log(`Standardsprache ist ${LOCALE}.`);
+    return;
+  }
+  if (KEEP_ADMIN_CHOICES && !fresh) {
+    log(`Standardsprache bleibt ${current} (in Wiki.js gewählt). Umstellen: einmal mit BOOTSTRAP_ARGS=--reapply bereitstellen.`);
+    return;
+  }
   const vars = { locale: LOCALE };
-  await gql('mutation($locale:String!){ localization { downloadLocale(locale:$locale){ responseResult { succeeded } } } }', vars, jwt);
-  await gql(
-    'mutation($locale:String!){ localization { updateLocale(locale:$locale,autoUpdate:true,namespacing:false,namespaces:[]){ responseResult { succeeded } } } }',
+  const dl = await gql('mutation($locale:String!){ localization { downloadLocale(locale:$locale){ responseResult { succeeded message } } } }', vars, jwt);
+  assertSucceeded(dl.localization.downloadLocale.responseResult, `Sprachpaket ${LOCALE} laden`);
+  const up = await gql(
+    'mutation($locale:String!){ localization { updateLocale(locale:$locale,autoUpdate:true,namespacing:false,namespaces:[]){ responseResult { succeeded message } } } }',
     vars, jwt,
   );
+  assertSucceeded(up.localization.updateLocale.responseResult, `Standardsprache ${LOCALE} setzen`);
   const mig = await gql(
-    'mutation($locale:String!){ pages { migrateToLocale(sourceLocale:"en",targetLocale:$locale){ responseResult { succeeded } count } } }',
-    vars, jwt,
+    'mutation($source:String!,$locale:String!){ pages { migrateToLocale(sourceLocale:$source,targetLocale:$locale){ responseResult { succeeded message } count } } }',
+    { source: current, locale: LOCALE }, jwt,
   );
-  await gql('mutation{ search { rebuildIndex { responseResult { succeeded } } } }', {}, jwt);
-  log(`Standardsprache ${LOCALE}, ${mig.pages.migrateToLocale.count ?? 0} Seiten migriert, Suchindex erneuert.`);
+  assertSucceeded(mig.pages.migrateToLocale.responseResult, `Seiten von ${current} nach ${LOCALE} verschieben`);
+  const r = await gql('mutation{ search { rebuildIndex { responseResult { succeeded message } } } }', {}, jwt);
+  assertSucceeded(r.search.rebuildIndex.responseResult, 'Suchindex aufbauen');
+  log(`Standardsprache ${LOCALE}, ${mig.pages.migrateToLocale.count ?? 0} Seiten aus ${current} verschoben, Suchindex erneuert.`);
 }
 
-/** Step 5 (optional) — a "Team" group (read/write, no delete/admin) + demo user. */
+/**
+ * Step 5 (optional) — a "Team" group (read/write, no delete/admin) + demo user.
+ * The automatic run sets the group's rights only when it creates the group, so
+ * rights an admin adjusted later survive every deploy (A-36).
+ */
 async function ensureDemo(jwt) {
   const groups = await gql('{ groups { list { id name } } }', {}, jwt);
   let team = groups.groups.list.find((g) => g.name === 'Team');
-  if (!team) {
+  const created = !team;
+  if (created) {
     const c = await gql(
-      'mutation($name:String!){ groups { create(name:$name){ responseResult { succeeded } group { id } } } }',
+      'mutation($name:String!){ groups { create(name:$name){ responseResult { succeeded message } group { id } } } }',
       { name: 'Team' }, jwt,
     );
+    assertSucceeded(c.groups.create.responseResult, 'Gruppe "Team" anlegen');
     team = c.groups.create.group;
+    if (!team?.id) throw new Error('Gruppe "Team" angelegt, aber Wiki.js nennt keine id.');
   }
-  await gql(
-    'mutation($id:Int!,$name:String!,$redirectOnLogin:String!,$permissions:[String]!,$pageRules:[PageRuleInput]!){ groups { update(id:$id,name:$name,redirectOnLogin:$redirectOnLogin,permissions:$permissions,pageRules:$pageRules){ responseResult { succeeded } } } }',
-    {
-      id: team.id, name: 'Team', redirectOnLogin: '/',
-      permissions: TEAM_PERMS,
-      pageRules: [{ id: 'team-all', deny: false, match: 'START', roles: TEAM_PERMS, path: '', locales: [] }],
-    }, jwt,
-  );
-  log(`Gruppe "Team" (id ${team.id}): lesen/schreiben, kein Löschen, kein Admin.`);
+  if (created || !KEEP_ADMIN_CHOICES) {
+    const u = await gql(
+      'mutation($id:Int!,$name:String!,$redirectOnLogin:String!,$permissions:[String]!,$pageRules:[PageRuleInput]!){ groups { update(id:$id,name:$name,redirectOnLogin:$redirectOnLogin,permissions:$permissions,pageRules:$pageRules){ responseResult { succeeded message } } } }',
+      {
+        id: team.id, name: 'Team', redirectOnLogin: '/',
+        permissions: TEAM_PERMS,
+        pageRules: [{ id: 'team-all', deny: false, match: 'START', roles: TEAM_PERMS, path: '', locales: [] }],
+      }, jwt,
+    );
+    assertSucceeded(u.groups.update.responseResult, 'Rechte der Gruppe "Team" setzen');
+    log(`Gruppe "Team" (id ${team.id}): lesen/schreiben, kein Löschen, kein Admin.`);
+  } else {
+    log(`Gruppe "Team" (id ${team.id}) existiert — Rechte bleiben, wie sie in Wiki.js eingestellt sind.`);
+  }
 
   const found = await gql('query($q:String!){ users { search(query:$q) { id email } } }', { q: DEMO.email }, jwt);
   if (!found.users.search.some((u) => u.email === DEMO.email)) {
-    await gql(
+    const c = await gql(
       'mutation($email:String!,$name:String!,$passwordRaw:String,$providerKey:String!,$groups:[Int]!,$mustChangePassword:Boolean,$sendWelcomeEmail:Boolean){ users { create(email:$email,name:$name,passwordRaw:$passwordRaw,providerKey:$providerKey,groups:$groups,mustChangePassword:$mustChangePassword,sendWelcomeEmail:$sendWelcomeEmail){ responseResult { succeeded message } } } }',
       { email: DEMO.email, name: DEMO.name, passwordRaw: DEMO.password, providerKey: 'local', groups: [team.id], mustChangePassword: false, sendWelcomeEmail: false },
       jwt,
     );
+    assertSucceeded(c.users.create.responseResult, `Testnutzer ${DEMO.email} anlegen`);
     log(`Testnutzer ${DEMO.email} angelegt (Gruppe "Team").`);
   } else {
     log(`Testnutzer ${DEMO.email} existiert.`);
@@ -314,9 +377,9 @@ if (!process.env.WIKI_URL && !process.env.PUBLIC_URL) {
   );
 }
 await waitForWiki();
-const jwt = await ensureFinalized();
+const { jwt, fresh } = await ensureFinalized();
 await ensureStartPages(jwt);
-if (LOCALE) await switchLocale(jwt);
-await ensureSearchEngine(jwt);
+if (LOCALE) await switchLocale(jwt, fresh);
+await ensureSearchEngine(jwt, fresh);
 if (WITH_DEMO) await ensureDemo(jwt);
 log('Fertig. Anmelden: ' + PUBLIC_URL + '  ·  KI-Verbindungen: ' + PUBLIC_URL + '/me');
