@@ -51,7 +51,10 @@ spec:
             - |
               set -e
               ts=$(date +%Y%m%d-%H%M%S)
-              pg_dump -h "$PGHOST" -U wikijs -d wiki -F c -f "/backups/wiki-$ts.dump"
+              rm -f /backups/*.part
+              # Written as .part first: an interrupted run never counts as a backup (A-16).
+              pg_dump -h "$PGHOST" -U wikijs -d wiki -F c -f "/backups/wiki-$ts.dump.part"
+              mv "/backups/wiki-$ts.dump.part" "/backups/wiki-$ts.dump"
               echo "backup ok: wiki-$ts.dump"
               ls -1t /backups/wiki-*.dump | tail -n +$((KEEP + 1)) | xargs -r rm --
             env:
@@ -75,4 +78,24 @@ spec:
           - name: backups
             persistentVolumeClaim:
               claimName: {{ $fullname }}-backups
+{{- if .Values.backup.mcpStore.enabled }}
+---
+# The MCP store (OAuth sessions, audit log) is copied by a sidecar in the MCP pod:
+# its PVC is ReadWriteOnce, a CronJob on another node could not mount it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-mcp-backups
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "mcp") | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.backup.persistence.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.backup.mcpStore.size }}
+{{- end }}
 {{- end }}

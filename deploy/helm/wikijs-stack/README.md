@@ -14,7 +14,8 @@ gibt es das schlankere Chart [`wikijs-mcp`](../wikijs-mcp/README.md) (Fall B3).
 | Ingress | zwei Objekte auf **einer** Domain: MCP-Pfade → MCP, `/finalize` gesperrt, alles andere → Wiki.js |
 | Geheimnisse | Secret mit `POSTGRES_PASSWORD` und `MCP_SESSION_SECRET` — einmalig erzeugt, bei Upgrades und Deinstallation behalten |
 | Ersteinrichtung | Job pro Helm-Revision: Admin-Konto, Startseite, `/ki-zugang`, PostgreSQL-Suche, Sprache (idempotent) |
-| Backup | CronJob: täglicher `pg_dump` in eine eigene PVC |
+| Backup | CronJob: täglicher `pg_dump` in eine eigene PVC; Sidecar im MCP-Pod sichert die MCP-Datenbank in eine zweite PVC |
+| NetworkPolicy (optional) | `networkPolicy.ingressFrom`: Wiki.js und MCP nur vom Ingress-Controller erreichbar |
 
 ## Installation
 
@@ -54,6 +55,8 @@ Danach: `https://<domain>/api/health` → `{"ok":true,"store":"ok"}`; im Wiki ei
 | `mcp.config.*` | `blockedTags`, `oauthRole`, `allowedRedirectHosts`, `maxConcurrency`, `timezone`, `extraEnv` | siehe `values.yaml` |
 | `postgres.persistence.size`, `mcp.persistence.size`, `backup.persistence.size` | Speichergrößen | `5Gi` / `1Gi` / `5Gi` |
 | `backup.schedule` / `backup.keep` | Zeitplan und Anzahl der Dumps | `30 2 * * *` / `7` |
+| `backup.mcpStore.enabled` / `.intervalSeconds` / `.size` | Sidecar-Backup der MCP-Datenbank nach PVC `<release>-mcp-backups` | `true` / `86400` / `1Gi` |
+| `networkPolicy.ingressFrom` | wer Wiki.js und den MCP-Server erreichen darf, z. B. der Namespace des Ingress-Controllers (leer = clusterweit) | `[]` |
 | `publicBaseUrl` | nur für Tests ohne TLS oder mit anderem Port | `https://<domain>` |
 
 Alle Werte mit Erklärung: [`values.yaml`](values.yaml).
@@ -74,13 +77,22 @@ Alle Werte mit Erklärung: [`values.yaml`](values.yaml).
   direkt bei der Installation an, danach gibt es den Setup-Assistenten nicht mehr. Das Fenster ist damit auf
   die Startzeit von Wiki.js begrenzt; wer auch das ausschließen will, macht die Domain erst danach öffentlich.
 - **Eine Replik** je Dienst: Sessions liegen in einer SQLite-Datei, Wiki.js 2 hält Prozesszustand.
-- **Backup:** Die Dumps liegen in der PVC `<release>-backups` — regelmäßig aus dem Cluster kopieren.
-  Mitsichern: das Secret `<release>-secrets` (ohne das Postgres-Passwort darin passt ein Restore nicht
-  mehr) und die MCP-PVC (Sessions, Audit-Log). Secret und Backup-PVC bleiben bei `helm uninstall` stehen.
+- **Backup:** Die Dumps liegen in der PVC `<release>-backups`, die Kopien der MCP-Datenbank in
+  `<release>-mcp-backups` — regelmäßig aus dem Cluster kopieren. Mitsichern: das Secret `<release>-secrets`
+  (ohne das Postgres-Passwort darin passt ein Restore nicht mehr). Secret und Backup-PVCs bleiben bei
+  `helm uninstall` stehen.
 - **Restore:** `kubectl -n wiki exec -i wiki-postgres-0 -- pg_restore -U wikijs -d wiki --clean < wiki-<datum>.dump`
-- **NetworkPolicy** wirkt nur mit einem CNI, das sie durchsetzt (z. B. Calico, Cilium, k3s).
+- **NetworkPolicy** wirkt nur mit einem CNI, das sie durchsetzt (z. B. Calico, Cilium, k3s). Postgres ist
+  immer abgeschottet; Wiki.js und MCP erst mit `networkPolicy.ingressFrom` — der MCP-Server vertraut dem
+  rechten `X-Forwarded-For`-Eintrag seines Proxys, deshalb sollte nur der Ingress-Controller ihn erreichen.
+  ingress-nginx: `[{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } } }]`,
+  Traefik in k3s: `kube-system`.
+- **Security-Header:** Mit Traefik setzt das Chart HSTS, `nosniff`, `X-Frame-Options` und `Referrer-Policy`
+  per Middleware (wie die Compose-Varianten). ingress-nginx sendet HSTS bei TLS selbst; die übrigen Header in
+  der ConfigMap des Controllers setzen (`add-headers`).
 - Getestet mit k3s 1.31 (Traefik-Ingress): Installation, Ersteinrichtung, Routing inkl. `/finalize`-Sperre,
-  OAuth-Login-Test (38/38), Upgrade mit unveränderten Geheimnissen, NetworkPolicy, Backup.
+  OAuth-Login-Test (38/38), Upgrade mit unveränderten Geheimnissen, NetworkPolicy, Backup; Upgrade auf
+  Backup-Sidecar, NetworkPolicy für Wiki/MCP und Header-Middleware.
 
 ## English summary
 

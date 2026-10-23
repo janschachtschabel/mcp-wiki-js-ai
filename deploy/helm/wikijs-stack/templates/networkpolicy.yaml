@@ -19,3 +19,43 @@ spec:
     - port: 5432
       protocol: TCP
 {{- end }}
+{{- with .Values.networkPolicy.ingressFrom }}
+---
+# Wiki.js: only the ingress controller, the MCP server and the bootstrap Job (A-32).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "stack.fullname" $ }}-wiki
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "wiki") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{ include "stack.selectorLabels" (dict "ctx" $ "component" "wiki") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    {{- toYaml . | nindent 4 }}
+    - podSelector:
+        matchLabels: {{ include "stack.selectorLabels" (dict "ctx" $ "component" "mcp") | nindent 10 }}
+    - podSelector:
+        matchLabels: {{ include "stack.selectorLabels" (dict "ctx" $ "component" "bootstrap") | nindent 10 }}
+    ports:
+    - port: 3000
+      protocol: TCP
+---
+# MCP server: only the ingress controller — it trusts X-Forwarded-For from its proxy (A-32).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "stack.fullname" $ }}-mcp
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "mcp") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{ include "stack.selectorLabels" (dict "ctx" $ "component" "mcp") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    {{- toYaml . | nindent 4 }}
+    ports:
+    - port: 3000
+      protocol: TCP
+{{- end }}

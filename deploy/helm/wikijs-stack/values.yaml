@@ -165,6 +165,14 @@ postgres:
   ## @param postgres.networkPolicy Only Wiki.js and the backup job may reach PostgreSQL (needs a CNI that enforces NetworkPolicies)
   networkPolicy: true
 
+networkPolicy:
+  ## @param networkPolicy.ingressFrom Who may reach Wiki.js and the MCP server, as NetworkPolicy peers — usually the
+  ## namespace of the ingress controller. Empty = no policy (reachable cluster-wide). The MCP server trusts the
+  ## right-most X-Forwarded-For hop, so only the controller should reach it. Examples:
+  ##   ingress-nginx:  [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } } }]
+  ##   Traefik on k3s: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } } }]
+  ingressFrom: []
+
 backup:
   ## @param backup.enabled Daily pg_dump of the wiki database into its own PVC
   enabled: true
@@ -177,6 +185,13 @@ backup:
     size: 5Gi
     ## @param backup.persistence.storageClassName StorageClass (empty = cluster default)
     storageClassName: ""
+  mcpStore:
+    ## @param backup.mcpStore.enabled Sidecar in the MCP pod copying the sqlite store (sessions, audit log) into its own PVC
+    enabled: true
+    ## @param backup.mcpStore.intervalSeconds Pause between copies
+    intervalSeconds: 86400
+    ## @param backup.mcpStore.size PVC for the copies
+    size: 1Gi
 
 ## @param podSecurityContext Pod security context for MCP and Wiki.js (both run as uid 1000)
 podSecurityContext:

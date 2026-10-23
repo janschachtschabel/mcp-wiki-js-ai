@@ -10,10 +10,15 @@ prefix regex, so Exact /me would also catch /meeting); see the chart README.
 */}}
 {{- $traefik := eq (toString .Values.ingress.className) "traefik" }}
 {{- $wikiAnnotations := merge (deepCopy .Values.ingress.wikiAnnotations) .Values.ingress.annotations }}
+{{- $mcpAnnotations := merge (deepCopy .Values.ingress.mcpAnnotations) .Values.ingress.annotations }}
 {{- if $traefik }}
 {{- $block := printf "%s-%s-setup-block@kubernetescrd" .Release.Namespace $fullname }}
-{{- $existing := get $wikiAnnotations "traefik.ingress.kubernetes.io/router.middlewares" }}
-{{- $_ := set $wikiAnnotations "traefik.ingress.kubernetes.io/router.middlewares" (ternary $block (printf "%s,%s" $block $existing) (empty $existing)) }}
+{{- $headers := printf "%s-%s-headers@kubernetescrd" .Release.Namespace $fullname }}
+{{- $key := "traefik.ingress.kubernetes.io/router.middlewares" }}
+{{- $existing := get $wikiAnnotations $key }}
+{{- $_ := set $wikiAnnotations $key (ternary (printf "%s,%s" $block $headers) (printf "%s,%s,%s" $block $headers $existing) (empty $existing)) }}
+{{- $existingMcp := get $mcpAnnotations $key }}
+{{- $_ := set $mcpAnnotations $key (ternary $headers (printf "%s,%s" $headers $existingMcp) (empty $existingMcp)) }}
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
@@ -23,6 +28,22 @@ spec:
   replacePathRegex:
     regex: "(?i)^/finalize(/.*)?$"
     replacement: /finalize-blocked
+---
+# Same security headers as the Compose variants (A-49). ingress-nginx: set them in the
+# controller ConfigMap (HSTS is on there by default with TLS) — see the chart README.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ $fullname }}-headers
+  labels: {{ include "stack.labels" (dict "ctx" $ "component" "wiki") | nindent 4 }}
+spec:
+  headers:
+    {{- if .Values.ingress.tls.enabled }}
+    stsSeconds: 31536000
+    {{- end }}
+    contentTypeNosniff: true
+    customFrameOptionsValue: SAMEORIGIN
+    referrerPolicy: strict-origin-when-cross-origin
 ---
 {{- end }}
 {{- /*
@@ -37,7 +58,7 @@ kind: Ingress
 metadata:
   name: {{ $fullname }}-mcp
   labels: {{ include "stack.labels" (dict "ctx" $ "component" "mcp") | nindent 4 }}
-  {{- with merge (deepCopy .Values.ingress.mcpAnnotations) .Values.ingress.annotations }}
+  {{- with $mcpAnnotations }}
   annotations: {{ toYaml . | nindent 4 }}
   {{- end }}
 spec:
