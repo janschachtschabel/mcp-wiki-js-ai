@@ -16,7 +16,7 @@ frühere Vercel/Handle-Betrieb funktioniert weiter, ist aber eingefroren
 | [OAuth-Technik](./oauth.md) | Aktivierung, Flow (Code+PKCE, DCR), Session-Store, Guardrails, Grenzen |
 | [**Installation – Anleitung für die IT**](./installation-it.md) (🇬🇧 [EN](./installation-it.en.md)) | Alle Einsatzfälle: (A) Wiki + MCP komplett — Docker-Panel mit Traefik, eigener Server, selbst bauen; (B) MCP zu bestehendem Wiki unter gleicher Adresse — Traefik, nginx/Caddy/Apache, Kubernetes; (C) nur MCP. Mit allen Umgebungsvariablen und Fehlerbehebung |
 | [Root-README](../../README.md) (🇬🇧 [EN](../../README.en.md)) | Deployment (Compose/Helm), Ersteinrichtung (Bootstrap), Client verbinden |
-| [Audit 2026-10-21](./audits/2026-10-21-audit.md) · [Re-Audit](./audits/2026-10-21-reaudit.md) | Sicherheits- und Code-Audits mit Befunden, Umsetzungsstand und Roadmap |
+| [Audit 2026-10-23](./audits/2026-10-23-audit.md) · [Audit 2026-10-21](./audits/2026-10-21-audit.md) · [Re-Audit](./audits/2026-10-21-reaudit.md) | Sicherheits- und Code-Audits mit Befunden, Umsetzungsstand und Roadmap |
 | [**Architektur-Grafik**](./architektur.png) · [interaktiv](./architektur.html) | Gesamtbild: Clients → Reverse-Proxy → MCP-Server (OAuth, Policy-Gate, Tools) → Wiki.js → PostgreSQL, mit Netz- und Container-Grenzen |
 | [**Nächste Ausbaustufe**](./naechste-ausbaustufe.md) | Offene Umbauten (Tests/CI, React 19, Store/Audit) und bekannte Grenzen als TODO-Liste |
 
