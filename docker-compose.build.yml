@@ -23,9 +23,9 @@
 #
 # Update:   docker compose pull && docker compose build --pull mcp && docker compose up -d
 # Logs:     docker compose logs -f
-# Backup:   der db-backup-Service sichert automatisch BEIDES ins db-backups-Volume:
-#           Postgres (Wiki-Inhalte) via pg_dump UND die MCP-sqlite (Audit-Log +
-#           Sessions) via `sqlite3 .backup`. Volume off-host replizieren.
+# Backup:   db-backup sichert Postgres (Wiki-Inhalte) ins Volume db-backups,
+#           mcp-backup die MCP-SQLite (Audit-Log + Sessions) ins Volume mcp-backups.
+#           Beide Volumes und die .env regelmäßig nach außen kopieren.
 # Reset:    docker compose down -v   # ACHTUNG: löscht ALLE Daten
 #
 # Base-Images bewusst per Tag (postgres:15-alpine, requarks/wiki:2, caddy:2-alpine)
@@ -94,6 +94,13 @@ services:
     # Kein Port nach außen — Zugriff ausschließlich über caddy.
     # default: für caddy/mcp/bootstrap und ausgehend (Sprachpakete); db: Postgres.
     networks: [default, db]
+    # /healthz antwortet auch im Setup-Modus; der erste Start migriert die Datenbank.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
 
   mcp:
     <<: *hardening
@@ -129,20 +136,23 @@ services:
     depends_on:
       - wiki
 
-  # Periodisches Backup mit Retention — deckt BEIDE Datenquellen ab:
-  #   Postgres (Wiki-Inhalte) via pg_dump, und die MCP-sqlite (Audit-Log +
-  #   Sessions) via `sqlite3 .backup` (konsistenter Hot-Backup, kein naives cp).
+  # Periodisches Backup mit Retention ins Volume db-backups (Postgres via pg_dump)
+  # und mcp-backups (MCP-SQLite: Audit-Log + Sessions). Die Secrets stehen in der
+  # .env — sie gehört mitgesichert. Beide Volumes liegen auf DIESEM Server:
+  # regelmäßig nach außen kopieren.
   # Restore Wiki (über diesen Dienst: nur er mountet db-backups, PGPASSWORD ist gesetzt):
-  #   docker compose stop wiki
-  #   docker compose exec db-backup pg_restore -h db -U wikijs -d wiki --clean /backups/<datei>.dump
-  #   docker compose start wiki
-  # Restore MCP-Store: mcp stoppen, mcp-<ts>.sqlite als /data/mcp.sqlite einspielen, mcp starten.
+  #   docker compose stop wiki mcp
+  #   docker compose exec db-backup pg_restore -h db -U wikijs -d wiki --clean --if-exists /backups/<datei>.dump
+  #   docker compose start wiki mcp
+  # Restore MCP-Store: mcp stoppen, mcp-<ts>.sqlite aus mcp-backups als /data/mcp.sqlite
+  # einspielen (mcp.sqlite-wal/-shm vorher löschen), mcp starten.
   db-backup:
     <<: *hardening
     image: postgres:15-alpine
     restart: unless-stopped
     mem_limit: 256m
     cpus: 0.5
+    pids_limit: 64
     depends_on:
       db:
         condition: service_healthy
@@ -152,37 +162,50 @@ services:
       BACKUP_KEEP: ${BACKUP_KEEP:-7}
     volumes:
       - db-backups:/backups
-      # MCP-Store read-write mitmounten: der sqlite-Online-Backup nimmt einen
-      # WAL-Read-Lock (braucht Schreibzugriff aufs -shm), läuft aber gefahrlos
-      # parallel zum MCP-Writer.
-      - mcp-data:/mcp-data
-    # db: für pg_dump; default: ausgehend für `apk add sqlite` beim Start.
-    networks: [default, db]
-    # `apk add` bei jedem (seltenen) Containerstart statt eigenem Image: spart
-    # Build und Registry. Fehlt das Netz, laufen die Postgres-Backups weiter,
-    # nur der sqlite-Teil meldet dann FAILED.
+    networks: [db]
     entrypoint: ["/bin/sh", "-c"]
+    # Erst als .part schreiben, dann umbenennen: ein abgebrochener Lauf zählt nie
+    # als Backup und verdrängt keine gute Kopie aus der Rotation.
     command:
       - |
-        apk add --no-cache sqlite >/dev/null 2>&1 || true
+        umask 077
         while true; do
           ts=$$(date +%Y%m%d-%H%M%S)
-          if pg_dump -h db -U wikijs -d wiki -F c -f "/backups/wiki-$$ts.dump"; then
+          rm -f /backups/*.part
+          if pg_dump -h db -U wikijs -d wiki -F c -f "/backups/wiki-$$ts.dump.part" && mv "/backups/wiki-$$ts.dump.part" "/backups/wiki-$$ts.dump"; then
             echo "backup ok: wiki-$$ts.dump"
             ls -1t /backups/wiki-*.dump 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
           else
+            rm -f "/backups/wiki-$$ts.dump.part"
             echo "backup FAILED (postgres) at $$ts" >&2
-          fi
-          if [ -f /mcp-data/mcp.sqlite ]; then
-            if sqlite3 /mcp-data/mcp.sqlite ".backup '/backups/mcp-$$ts.sqlite'"; then
-              echo "backup ok: mcp-$$ts.sqlite"
-              ls -1t /backups/mcp-*.sqlite 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
-            else
-              echo "backup FAILED (mcp sqlite) at $$ts" >&2
-            fi
           fi
           sleep "$$BACKUP_INTERVAL_SECONDS"
         done
+
+  # Backup der MCP-SQLite aus dem MCP-Image: ohne Netz, als unprivilegierter
+  # Nutzer, nichts wird nachinstalliert (consistent copy via VACUUM INTO).
+  mcp-backup:
+    <<: *hardening
+    image: ${MCP_IMAGE:-wikijs-mcp:local}
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+    network_mode: none
+    depends_on:
+      - mcp
+    command: ["node", "/app/sqlite-backup.mjs"]
+    environment:
+      MCP_DB: /data/mcp.sqlite
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+    volumes:
+      - mcp-data:/data
+      - mcp-backups:/backups
+    # Der Healthcheck des Images prüft den MCP-Server, der hier nicht läuft.
+    healthcheck:
+      disable: true
 
   caddy:
     <<: *hardening
@@ -238,5 +261,6 @@ volumes:
   db-data:
   db-backups:
   mcp-data:
+  mcp-backups:
   caddy-data:
   caddy-config:

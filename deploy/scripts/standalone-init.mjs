@@ -15,6 +15,11 @@
  * Env: DOMAIN       Hostname (wiki.example.org) oder Adresse für reines HTTP
  *                   (:80, z. B. hinter einem weiteren Proxy oder zum Testen).
  *      STACK_DIR    Basis der Volumes (Default /stack).
+ *      MCP_SECRETS_DIR  eigenes Volume nur für init und MCP-Server: dorthin kommt
+ *                   MCP_SESSION_SECRET, damit Wiki.js (gleiche uid) es nicht lesen
+ *                   kann (Audit A-14). Ohne die Variable bleibt es wie in älteren
+ *                   Compose-Dateien im gemeinsamen Volume.
+ *      INIT_ROUTER  "traefik" in docker-compose.yml: DOMAIN ohne Port (A-43).
  *      CADDY_TEMPLATE  Vorlage (Default /app/Caddyfile = deploy/caddy/Caddyfile).
  */
 import { randomBytes } from 'node:crypto';
@@ -23,6 +28,8 @@ import path from 'node:path';
 
 const STACK_DIR = process.env.STACK_DIR || '/stack';
 const SECRETS = path.join(STACK_DIR, 'secrets');
+const MCP_SECRETS = process.env.MCP_SECRETS_DIR;
+const TRAEFIK = process.env.INIT_ROUTER === 'traefik';
 const CADDY_DIR = path.join(STACK_DIR, 'caddy');
 const TEMPLATE = process.env.CADDY_TEMPLATE || '/app/Caddyfile';
 const PLACEHOLDER = '{$DOMAIN:localhost}';
@@ -59,6 +66,15 @@ function parseDomain(raw) {
     );
     process.exit(1);
   }
+  // Traefik matches Host(`…`) against the bare host name and serves 80/443 itself:
+  // with a port in DOMAIN the site would get no route and no certificate.
+  if (TRAEFIK && value.includes(':')) {
+    console.error(
+      `DOMAIN="${raw}" enthält einen Port. Hinter Traefik nur den Hostnamen eintragen (Traefik bedient 80/443)` +
+        (value.startsWith(':') ? ', z. B. DOMAIN=wiki.example.org.' : ` — also DOMAIN=${value.split(':')[0]}.`),
+    );
+    process.exit(1);
+  }
   return value;
 }
 
@@ -69,7 +85,18 @@ fs.mkdirSync(CADDY_DIR, { recursive: true });
 if (ensureSecret(path.join(SECRETS, 'postgres_password'), randomBytes(24).toString('base64url'), 0o644)) {
   log('Postgres-Passwort erzeugt.');
 }
-if (ensureSecret(path.join(SECRETS, 'session.env'), `MCP_SESSION_SECRET=${randomBytes(32).toString('base64url')}\n`, 0o600)) {
+// The session secret goes to the MCP-only volume when there is one (A-14). An
+// existing secret is moved there unchanged, so OAuth sessions stay valid.
+const sessionDir = MCP_SECRETS || SECRETS;
+fs.mkdirSync(sessionDir, { recursive: true });
+const sessionFile = path.join(sessionDir, 'session.env');
+const sharedSession = path.join(SECRETS, 'session.env');
+if (MCP_SECRETS && fs.existsSync(sharedSession)) {
+  if (!fs.existsSync(sessionFile)) writeAtomic(sessionFile, fs.readFileSync(sharedSession, 'utf8'), 0o600);
+  fs.rmSync(sharedSession);
+  log('MCP_SESSION_SECRET aus dem gemeinsamen Volume in das MCP-Volume verschoben.');
+}
+if (ensureSecret(sessionFile, `MCP_SESSION_SECRET=${randomBytes(32).toString('base64url')}\n`, 0o600)) {
   log('MCP_SESSION_SECRET erzeugt.');
 }
 

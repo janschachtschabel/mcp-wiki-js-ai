@@ -6,8 +6,11 @@
 # mit nichts als dieser Datei. Nichts wird gebaut, keine Repo-Datei eingebunden.
 #
 # Startet OHNE Variablen: Postgres-Passwort und MCP_SESSION_SECRET erzeugt der
-# Dienst init beim ersten Start selbst (Volume stack-secrets). Solange DOMAIN
-# fehlt, zeigt die Seite einen Hinweis „noch nicht eingerichtet“.
+# Dienst init beim ersten Start selbst (Volumes stack-secrets und mcp-secrets).
+# Solange DOMAIN fehlt, zeigt die Seite einen Hinweis „noch nicht eingerichtet“.
+#
+# Backups: täglich Postgres + Secrets ins Volume db-backups, die MCP-Datenbank ins
+# Volume mcp-backups — beide auf DIESEM Server; regelmäßig nach außen kopieren.
 #
 # Danach setzen (Panel: Projekt bearbeiten → Umgebungsvariablen; sonst .env):
 #   DOMAIN          nur der Hostname, z. B. wiki.example.org
@@ -35,8 +38,11 @@ services:
     command: ["node", "/app/standalone-init.mjs"]
     environment:
       DOMAIN: ${DOMAIN:-}
+      # MCP_SESSION_SECRET in ein eigenes Volume, das Wiki.js nicht einbindet.
+      MCP_SECRETS_DIR: /stack/mcp-secrets
     volumes:
       - stack-secrets:/stack/secrets
+      - mcp-secrets:/stack/mcp-secrets
       - stack-caddy:/stack/caddy
 
   db:
@@ -72,6 +78,7 @@ services:
     image: requarks/wiki:2
     restart: unless-stopped
     mem_limit: 1g
+    pids_limit: 256
     security_opt:
       - no-new-privileges:true
     logging:
@@ -91,16 +98,26 @@ services:
       DB_USER: wikijs
       DB_PASS_FILE: /stack/secrets/postgres_password
       DB_NAME: wiki
+    # Nur das Volume mit DB-Passwort und öffentlicher Adresse — das MCP-Secret
+    # liegt in mcp-secrets und ist für Wiki.js nicht erreichbar.
     volumes:
       - stack-secrets:/stack/secrets:ro
     networks:
       - default
       - db
+    # /healthz antwortet auch im Setup-Modus; der erste Start migriert die Datenbank.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
 
   mcp:
     image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
     restart: unless-stopped
     mem_limit: 512m
+    pids_limit: 256
     security_opt:
       - no-new-privileges:true
     logging:
@@ -117,7 +134,7 @@ services:
     # MCP_SESSION_SECRET und PUBLIC_BASE_URL kommen aus den Dateien von init.
     command:
       - node
-      - --env-file-if-exists=/stack/secrets/session.env
+      - --env-file-if-exists=/stack/mcp-secrets/session.env
       - --env-file-if-exists=/stack/secrets/public.env
       - server.js
     environment:
@@ -133,21 +150,23 @@ services:
     volumes:
       - mcp-data:/data
       - stack-secrets:/stack/secrets:ro
+      - mcp-secrets:/stack/mcp-secrets:ro
 
-  # Ersteinrichtung bei jedem Start, idempotent (erledigte Schritte werden
-  # übersprungen). Wartet still, bis DOMAIN, ADMIN_EMAIL und ADMIN_PASSWORD
-  # gesetzt sind. Läuft im internen Netz, denn /finalize ist über Caddy
-  # gesperrt. Ergebnis: Log des Containers bootstrap.
+  # Ersteinrichtung bei jedem Start, idempotent: erledigte Schritte werden
+  # übersprungen, und Sprache, Suchmaschine und Gruppenrechte setzt der Dienst nur
+  # bei der Ersteinrichtung — Änderungen in Wiki.js bleiben erhalten. Wartet still,
+  # bis DOMAIN, ADMIN_EMAIL und ADMIN_PASSWORD gesetzt sind. Läuft im internen
+  # Netz, denn /finalize ist über Caddy gesperrt. Ergebnis: Log des Containers bootstrap.
   bootstrap:
     image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
-    restart: "no"
+    restart: on-failure:3
     security_opt:
       - no-new-privileges:true
     depends_on:
       init:
         condition: service_completed_successfully
       wiki:
-        condition: service_started
+        condition: service_healthy
     command:
       - node
       - --env-file-if-exists=/stack/secrets/public.env
@@ -165,11 +184,15 @@ services:
     volumes:
       - stack-secrets:/stack/secrets:ro
 
-  # Tägliches Backup von Postgres und MCP-SQLite ins Volume db-backups.
+  # Tägliches Backup von Postgres und den Secrets ins Volume db-backups. Ohne die
+  # Secrets ließen sich die verschlüsselten MCP-Sitzungen aus mcp-backups nicht
+  # wieder nutzen. Die Dateien sind nur für root lesbar (sie enthalten Geheimnisse).
+  # Beide Backup-Volumes liegen auf DIESEM Server: regelmäßig nach außen kopieren.
   db-backup:
     image: postgres:15-alpine
     restart: unless-stopped
     mem_limit: 256m
+    pids_limit: 64
     security_opt:
       - no-new-privileges:true
     logging:
@@ -185,34 +208,64 @@ services:
       BACKUP_KEEP: ${BACKUP_KEEP:-7}
     volumes:
       - db-backups:/backups
-      - mcp-data:/mcp-data
       - stack-secrets:/stack/secrets:ro
+      - mcp-secrets:/stack/mcp-secrets:ro
     networks:
-      - default
       - db
     entrypoint: ["/bin/sh", "-c"]
+    # Erst als .part schreiben, dann umbenennen: ein abgebrochener Lauf zählt nie
+    # als Backup und verdrängt keine gute Kopie aus der Rotation.
     command:
       - |
+        umask 077
         export PGPASSWORD="$$(cat /stack/secrets/postgres_password)"
-        apk add --no-cache sqlite >/dev/null 2>&1 || true
         while true; do
           ts=$$(date +%Y%m%d-%H%M%S)
-          if pg_dump -h db -U wikijs -d wiki -F c -f "/backups/wiki-$$ts.dump"; then
+          rm -f /backups/*.part
+          if pg_dump -h db -U wikijs -d wiki -F c -f "/backups/wiki-$$ts.dump.part" && mv "/backups/wiki-$$ts.dump.part" "/backups/wiki-$$ts.dump"; then
             echo "backup ok: wiki-$$ts.dump"
             ls -1t /backups/wiki-*.dump 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
           else
+            rm -f "/backups/wiki-$$ts.dump.part"
             echo "backup FAILED (postgres) at $$ts" >&2
           fi
-          if [ -f /mcp-data/mcp.sqlite ]; then
-            if sqlite3 /mcp-data/mcp.sqlite ".backup '/backups/mcp-$$ts.sqlite'"; then
-              echo "backup ok: mcp-$$ts.sqlite"
-              ls -1t /backups/mcp-*.sqlite 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
-            else
-              echo "backup FAILED (mcp sqlite) at $$ts" >&2
-            fi
+          if tar -czf "/backups/secrets-$$ts.tar.gz.part" -C /stack secrets mcp-secrets && mv "/backups/secrets-$$ts.tar.gz.part" "/backups/secrets-$$ts.tar.gz"; then
+            echo "backup ok: secrets-$$ts.tar.gz"
+            ls -1t /backups/secrets-*.tar.gz 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
+          else
+            rm -f "/backups/secrets-$$ts.tar.gz.part"
+            echo "backup FAILED (secrets) at $$ts" >&2
           fi
           sleep "$$BACKUP_INTERVAL_SECONDS"
         done
+
+  # Tägliches Backup der MCP-Datenbank (Sitzungen, Audit-Log) ins Volume
+  # mcp-backups — ohne Netz, als unprivilegierter Nutzer, nichts wird nachinstalliert.
+  mcp-backup:
+    image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
+    restart: unless-stopped
+    mem_limit: 128m
+    pids_limit: 64
+    network_mode: none
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    command: ["node", "/app/sqlite-backup.mjs"]
+    environment:
+      MCP_DB: /data/mcp.sqlite
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+    volumes:
+      - mcp-data:/data
+      - mcp-backups:/backups
+    # Der Healthcheck des Images prüft den MCP-Server, der hier nicht läuft.
+    healthcheck:
+      disable: true
 
   # Routing wie deploy/caddy/Caddyfile (init schreibt es mit eingesetzter DOMAIN).
   caddy:
@@ -249,9 +302,11 @@ networks:
 
 volumes:
   stack-secrets:
+  mcp-secrets:
   stack-caddy:
   db-data:
   db-backups:
   mcp-data:
+  mcp-backups:
   caddy-data:
   caddy-config:

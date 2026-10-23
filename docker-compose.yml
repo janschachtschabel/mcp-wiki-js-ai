@@ -9,7 +9,8 @@
 #
 # Ablauf im Panel:
 #   1. Bereitstellen, ohne Variablen. Postgres-Passwort und MCP_SESSION_SECRET
-#      erzeugt der Dienst init beim ersten Start selbst (Volume stack-secrets).
+#      erzeugt der Dienst init beim ersten Start selbst (Volumes stack-secrets
+#      und mcp-secrets).
 #   2. Projekt bearbeiten, in der .env setzen und neu bereitstellen:
 #        DOMAIN          nur der Hostname, z. B. wiki.example.org (DNS → Server)
 #        ADMIN_EMAIL     erstes Admin-Konto, wird dann automatisch angelegt
@@ -21,8 +22,14 @@
 #   TRAEFIK_NETWORK=wikijs-web — nur ändern, wenn Traefik in einem eigenen
 #   Docker-Netz läuft (dann dessen Namen, z. B. traefik-proxy); im Host-Modus
 #   erreicht Traefik das Netz des Stacks direkt.
+#   INSTANCE=wikijs — Präfix der Traefik-Router; für eine ZWEITE Installation auf
+#   demselben Server (z. B. Staging) einen anderen Namen setzen.
 # Traefik routet die MCP-Pfade an den MCP-Server, alles andere an Wiki.js, und
 # sperrt den Setup-Endpunkt /finalize (Ersteinrichtung nur über bootstrap).
+#
+# Backups: täglich Postgres + Secrets ins Volume db-backups, die MCP-Datenbank ins
+# Volume mcp-backups. Beide liegen auf DIESEM Server — für den Ausfall des Servers
+# regelmäßig nach außen kopieren (Anleitung: docs/installation-it.md, „Backup“).
 #
 # Andere Varianten:
 #   ohne Traefik, eigener Caddy auf 80/443:  deploy/standalone/full/docker-compose.yml
@@ -30,7 +37,7 @@
 #   Image selbst bauen (Repo-Checkout):      docker-compose.build.yml
 #
 # Bewusst schlicht für Web-Editoren: keine Pflicht-Variablen, keine Tabs, keine
-# YAML-Anker; Logik (Init, Ersteinrichtung) liegt im MCP-Image.
+# YAML-Anker; Logik (Init, Ersteinrichtung, Backup) liegt im MCP-Image.
 # Routing hier und in deploy/caddy/Caddyfile gemeinsam ändern.
 
 services:
@@ -39,13 +46,19 @@ services:
   init:
     image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
     restart: "no"
+    network_mode: none
     security_opt:
       - no-new-privileges:true
     command: ["node", "/app/standalone-init.mjs"]
     environment:
       DOMAIN: ${DOMAIN:-}
+      # Hinter Traefik: DOMAIN ohne Port.
+      INIT_ROUTER: traefik
+      # MCP_SESSION_SECRET in ein eigenes Volume, das Wiki.js nicht einbindet.
+      MCP_SECRETS_DIR: /stack/mcp-secrets
     volumes:
       - stack-secrets:/stack/secrets
+      - mcp-secrets:/stack/mcp-secrets
 
   db:
     image: postgres:15-alpine
@@ -69,7 +82,11 @@ services:
       - db-data:/var/lib/postgresql/data
       - stack-secrets:/stack/secrets:ro
     networks:
-      - db
+      db:
+        # Eindeutiger Name im Stack: "db" könnte auch ein Dienst einer anderen
+        # App im gemeinsamen Traefik-Netz heißen.
+        aliases:
+          - wikijs-db
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U wikijs -d wiki"]
       interval: 10s
@@ -80,6 +97,7 @@ services:
     image: requarks/wiki:2
     restart: unless-stopped
     mem_limit: 1g
+    pids_limit: 256
     security_opt:
       - no-new-privileges:true
     logging:
@@ -94,42 +112,55 @@ services:
     # WIKIJS_MAX_CONCURRENCY beim MCP ist deshalb niedriger gesetzt.
     environment:
       DB_TYPE: postgres
-      DB_HOST: db
+      DB_HOST: wikijs-db
       DB_PORT: 5432
       DB_USER: wikijs
       DB_PASS_FILE: /stack/secrets/postgres_password
       DB_NAME: wiki
+    # Nur das Volume mit DB-Passwort und öffentlicher Adresse — das MCP-Secret
+    # liegt in mcp-secrets und ist für Wiki.js nicht erreichbar.
     volumes:
       - stack-secrets:/stack/secrets:ro
     networks:
-      - default
-      - db
+      default:
+      backend:
+        aliases:
+          - wikijs-upstream
+      db:
+    # /healthz antwortet auch im Setup-Modus; der erste Start migriert die Datenbank.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=${TRAEFIK_NETWORK:-wikijs-web}"
-      - "traefik.http.routers.wikijs-wiki.rule=Host(`${DOMAIN:-}`)"
-      - "traefik.http.routers.wikijs-wiki.priority=1"
-      - "traefik.http.routers.wikijs-wiki.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
-      - "traefik.http.routers.wikijs-wiki.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
-      - "traefik.http.routers.wikijs-wiki.middlewares=wikijs-setup-block,wikijs-wiki-headers"
-      - "traefik.http.routers.wikijs-wiki.service=wikijs-wiki"
-      - "traefik.http.services.wikijs-wiki.loadbalancer.server.port=3000"
-      - "traefik.http.middlewares.wikijs-wiki-headers.headers.stsSeconds=31536000"
-      - "traefik.http.middlewares.wikijs-wiki-headers.headers.contentTypeNosniff=true"
-      - "traefik.http.middlewares.wikijs-wiki-headers.headers.customFrameOptionsValue=SAMEORIGIN"
-      - "traefik.http.middlewares.wikijs-wiki-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-wiki.rule=Host(`${DOMAIN:-}`)"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-wiki.priority=1"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-wiki.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-wiki.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-wiki.middlewares=${INSTANCE:-wikijs}-setup-block,${INSTANCE:-wikijs}-wiki-headers"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-wiki.service=${INSTANCE:-wikijs}-wiki"
+      - "traefik.http.services.${INSTANCE:-wikijs}-wiki.loadbalancer.server.port=3000"
+      - "traefik.http.middlewares.${INSTANCE:-wikijs}-wiki-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.${INSTANCE:-wikijs}-wiki-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.${INSTANCE:-wikijs}-wiki-headers.headers.customFrameOptionsValue=SAMEORIGIN"
+      - "traefik.http.middlewares.${INSTANCE:-wikijs}-wiki-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
       # Setup-Assistent (/finalize legt das erste Admin-Konto an) in JEDER Schreibweise
       # sperren — Wiki.js (Express) vergleicht ohne Groß-/Kleinschreibung (Audit A-02).
       # Auf dem Wiki-Router selbst, damit die Sperre nicht davon abhängt, dass Traefik
       # den MCP-Container schon als gesund routet (während dessen Start fiele /finalize
       # sonst an Wiki.js). Wiki.js antwortet auf den umgeschriebenen Pfad mit 404.
-      - "traefik.http.middlewares.wikijs-setup-block.replacepathregex.regex=(?i)^/finalize(/.*)?$$"
-      - "traefik.http.middlewares.wikijs-setup-block.replacepathregex.replacement=/finalize-blocked"
+      - "traefik.http.middlewares.${INSTANCE:-wikijs}-setup-block.replacepathregex.regex=(?i)^/finalize(/.*)?$$"
+      - "traefik.http.middlewares.${INSTANCE:-wikijs}-setup-block.replacepathregex.replacement=/finalize-blocked"
 
   mcp:
     image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
     restart: unless-stopped
     mem_limit: 512m
+    pids_limit: 256
     security_opt:
       - no-new-privileges:true
     logging:
@@ -146,11 +177,11 @@ services:
     # MCP_SESSION_SECRET und PUBLIC_BASE_URL kommen aus den Dateien von init.
     command:
       - node
-      - --env-file-if-exists=/stack/secrets/session.env
+      - --env-file-if-exists=/stack/mcp-secrets/session.env
       - --env-file-if-exists=/stack/secrets/public.env
       - server.js
     environment:
-      WIKIJS_URL: http://wiki:3000
+      WIKIJS_URL: http://wikijs-upstream:3000
       MCP_DATA_DIR: /data
       WIKIJS_PERMISSION_PRESET: ${WIKIJS_PERMISSION_PRESET:-full}
       WIKIJS_OAUTH_ROLE: ${WIKIJS_OAUTH_ROLE:-wiki}
@@ -162,40 +193,48 @@ services:
     volumes:
       - mcp-data:/data
       - stack-secrets:/stack/secrets:ro
+      - mcp-secrets:/stack/mcp-secrets:ro
+    networks:
+      - default
+      - backend
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=${TRAEFIK_NETWORK:-wikijs-web}"
       # MCP-Pfade (wie @mcp in deploy/caddy/Caddyfile) gehen an den MCP-Server.
-      - "traefik.http.routers.wikijs-mcp.rule=Host(`${DOMAIN:-}`) && (Path(`/mcp`) || PathPrefix(`/mcp/`) || PathPrefix(`/oauth/`) || Path(`/me`) || PathPrefix(`/me/`) || Path(`/api/health`) || PathPrefix(`/_next/`) || PathPrefix(`/.well-known/oauth-authorization-server`) || PathPrefix(`/.well-known/oauth-protected-resource`) || Path(`/.well-known/mcp.json`))"
-      - "traefik.http.routers.wikijs-mcp.priority=100"
-      - "traefik.http.routers.wikijs-mcp.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
-      - "traefik.http.routers.wikijs-mcp.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
-      - "traefik.http.routers.wikijs-mcp.middlewares=wikijs-mcp-headers"
-      - "traefik.http.routers.wikijs-mcp.service=wikijs-mcp"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-mcp.rule=Host(`${DOMAIN:-}`) && (Path(`/mcp`) || PathPrefix(`/mcp/`) || PathPrefix(`/oauth/`) || Path(`/me`) || PathPrefix(`/me/`) || Path(`/api/health`) || PathPrefix(`/_next/`) || PathPrefix(`/.well-known/oauth-authorization-server`) || PathPrefix(`/.well-known/oauth-protected-resource`) || Path(`/.well-known/mcp.json`))"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-mcp.priority=100"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-mcp.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-mcp.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-mcp.middlewares=${INSTANCE:-wikijs}-mcp-headers"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-mcp.service=${INSTANCE:-wikijs}-mcp"
       # Setup-Endpunkt von Wiki.js nie von außen: geht an den MCP-Server, der
       # jeden Pfad außer /mcp mit 404 beantwortet.
-      - "traefik.http.routers.wikijs-setup.rule=Host(`${DOMAIN:-}`) && (Path(`/finalize`) || PathPrefix(`/finalize/`))"
-      - "traefik.http.routers.wikijs-setup.priority=100"
-      - "traefik.http.routers.wikijs-setup.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
-      - "traefik.http.routers.wikijs-setup.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
-      - "traefik.http.routers.wikijs-setup.service=wikijs-mcp"
-      # Alle anderen Schreibweisen fängt die Middleware wikijs-setup-block am Wiki-Router.
-      - "traefik.http.services.wikijs-mcp.loadbalancer.server.port=3000"
-      - "traefik.http.middlewares.wikijs-mcp-headers.headers.stsSeconds=31536000"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-setup.rule=Host(`${DOMAIN:-}`) && (Path(`/finalize`) || PathPrefix(`/finalize/`))"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-setup.priority=100"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-setup.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-setup.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.${INSTANCE:-wikijs}-setup.service=${INSTANCE:-wikijs}-mcp"
+      # Alle anderen Schreibweisen fängt die Middleware setup-block am Wiki-Router.
+      - "traefik.http.services.${INSTANCE:-wikijs}-mcp.loadbalancer.server.port=3000"
+      - "traefik.http.middlewares.${INSTANCE:-wikijs}-mcp-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.${INSTANCE:-wikijs}-mcp-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.${INSTANCE:-wikijs}-mcp-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
 
-  # Ersteinrichtung bei jedem Start, idempotent (erledigte Schritte werden
-  # übersprungen). Wartet still, bis DOMAIN, ADMIN_EMAIL und ADMIN_PASSWORD
-  # gesetzt sind. Läuft im internen Netz. Ergebnis: Log des Containers bootstrap.
+  # Ersteinrichtung bei jedem Start, idempotent: erledigte Schritte werden
+  # übersprungen, und Sprache, Suchmaschine und Gruppenrechte setzt der Dienst nur
+  # bei der Ersteinrichtung — Änderungen in Wiki.js bleiben erhalten. Wartet still,
+  # bis DOMAIN, ADMIN_EMAIL und ADMIN_PASSWORD gesetzt sind. Läuft im internen
+  # Netz. Ergebnis: Log des Containers bootstrap.
   bootstrap:
     image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
-    restart: "no"
+    restart: on-failure:3
     security_opt:
       - no-new-privileges:true
     depends_on:
       init:
         condition: service_completed_successfully
       wiki:
-        condition: service_started
+        condition: service_healthy
     command:
       - node
       - --env-file-if-exists=/stack/secrets/public.env
@@ -203,7 +242,7 @@ services:
       - --if-configured
       - --locale=de
     environment:
-      WIKI_URL: http://wiki:3000
+      WIKI_URL: http://wikijs-upstream:3000
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       DEMO_EMAIL: ${DEMO_EMAIL:-}
@@ -212,12 +251,17 @@ services:
       BOOTSTRAP_ARGS: ${BOOTSTRAP_ARGS:-}
     volumes:
       - stack-secrets:/stack/secrets:ro
+    networks:
+      - backend
 
-  # Tägliches Backup von Postgres und MCP-SQLite ins Volume db-backups.
+  # Tägliches Backup von Postgres und den Secrets ins Volume db-backups. Ohne die
+  # Secrets ließen sich die verschlüsselten MCP-Sitzungen aus mcp-backups nicht
+  # wieder nutzen. Die Dateien sind nur für root lesbar (sie enthalten Geheimnisse).
   db-backup:
     image: postgres:15-alpine
     restart: unless-stopped
     mem_limit: 256m
+    pids_limit: 64
     security_opt:
       - no-new-privileges:true
     logging:
@@ -233,46 +277,83 @@ services:
       BACKUP_KEEP: ${BACKUP_KEEP:-7}
     volumes:
       - db-backups:/backups
-      - mcp-data:/mcp-data
       - stack-secrets:/stack/secrets:ro
+      - mcp-secrets:/stack/mcp-secrets:ro
     networks:
-      - default
       - db
     entrypoint: ["/bin/sh", "-c"]
+    # Erst als .part schreiben, dann umbenennen: ein abgebrochener Lauf zählt nie
+    # als Backup und verdrängt keine gute Kopie aus der Rotation.
     command:
       - |
+        umask 077
         export PGPASSWORD="$$(cat /stack/secrets/postgres_password)"
-        apk add --no-cache sqlite >/dev/null 2>&1 || true
         while true; do
           ts=$$(date +%Y%m%d-%H%M%S)
-          if pg_dump -h db -U wikijs -d wiki -F c -f "/backups/wiki-$$ts.dump"; then
+          rm -f /backups/*.part
+          if pg_dump -h wikijs-db -U wikijs -d wiki -F c -f "/backups/wiki-$$ts.dump.part" && mv "/backups/wiki-$$ts.dump.part" "/backups/wiki-$$ts.dump"; then
             echo "backup ok: wiki-$$ts.dump"
             ls -1t /backups/wiki-*.dump 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
           else
+            rm -f "/backups/wiki-$$ts.dump.part"
             echo "backup FAILED (postgres) at $$ts" >&2
           fi
-          if [ -f /mcp-data/mcp.sqlite ]; then
-            if sqlite3 /mcp-data/mcp.sqlite ".backup '/backups/mcp-$$ts.sqlite'"; then
-              echo "backup ok: mcp-$$ts.sqlite"
-              ls -1t /backups/mcp-*.sqlite 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
-            else
-              echo "backup FAILED (mcp sqlite) at $$ts" >&2
-            fi
+          if tar -czf "/backups/secrets-$$ts.tar.gz.part" -C /stack secrets mcp-secrets && mv "/backups/secrets-$$ts.tar.gz.part" "/backups/secrets-$$ts.tar.gz"; then
+            echo "backup ok: secrets-$$ts.tar.gz"
+            ls -1t /backups/secrets-*.tar.gz 2>/dev/null | tail -n +$$((BACKUP_KEEP + 1)) | xargs -r rm --
+          else
+            rm -f "/backups/secrets-$$ts.tar.gz.part"
+            echo "backup FAILED (secrets) at $$ts" >&2
           fi
           sleep "$$BACKUP_INTERVAL_SECONDS"
         done
 
+  # Tägliches Backup der MCP-Datenbank (Sitzungen, Audit-Log) ins Volume
+  # mcp-backups — ohne Netz, als unprivilegierter Nutzer, nichts wird nachinstalliert.
+  mcp-backup:
+    image: ${MCP_IMAGE:-ghcr.io/janschachtschabel/mcp-wiki-js-ai:main}
+    restart: unless-stopped
+    mem_limit: 128m
+    pids_limit: 64
+    network_mode: none
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    command: ["node", "/app/sqlite-backup.mjs"]
+    environment:
+      MCP_DB: /data/mcp.sqlite
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+    volumes:
+      - mcp-data:/data
+      - mcp-backups:/backups
+    # Der Healthcheck des Images prüft den MCP-Server, der hier nicht läuft.
+    healthcheck:
+      disable: true
+
 networks:
-  # Eigenes Netz mit festem Namen, über das Traefik Wiki.js und den MCP-Server
+  # Eingang: Netz mit festem Namen, über das Traefik Wiki.js und den MCP-Server
   # erreicht (Label traefik.docker.network). Wird angelegt, falls es fehlt;
   # gibt es schon ein Netz dieses Namens (z. B. das von Traefik), wird es genutzt.
   default:
     name: ${TRAEFIK_NETWORK:-wikijs-web}
+  # Intern zwischen MCP, Bootstrap und Wiki.js. Der Name des Stacks wird
+  # vorangestellt, der Alias wikijs-upstream ist deshalb eindeutig — auch wenn
+  # mehrere Installationen dasselbe Traefik-Netz nutzen.
+  backend:
+    internal: true
   db:
     internal: true
 
 volumes:
   stack-secrets:
+  mcp-secrets:
   db-data:
   db-backups:
   mcp-data:
+  mcp-backups:

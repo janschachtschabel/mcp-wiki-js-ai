@@ -84,16 +84,19 @@ services:
       - stack-secrets:/stack/secrets:ro
     labels:
       # Nur mit TRAEFIK_ENABLE=true aktiv (Variante b); sonst ignoriert Traefik den Container.
+      # Router-Namen mit INSTANCE-Präfix: für eine zweite Installation am selben Traefik umbenennen.
       - "traefik.enable=${TRAEFIK_ENABLE:-false}"
       - "traefik.docker.network=${TRAEFIK_NETWORK:-wikijs-mcp-web}"
-      - "traefik.http.routers.wikijs-mcponly.rule=Host(`${DOMAIN:-}`) && (Path(`/mcp`) || PathPrefix(`/mcp/`) || PathPrefix(`/oauth/`) || Path(`/me`) || PathPrefix(`/me/`) || Path(`/api/health`) || PathPrefix(`/_next/`) || PathPrefix(`/.well-known/oauth-authorization-server`) || PathPrefix(`/.well-known/oauth-protected-resource`) || Path(`/.well-known/mcp.json`))"
-      - "traefik.http.routers.wikijs-mcponly.priority=100"
-      - "traefik.http.routers.wikijs-mcponly.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
-      - "traefik.http.routers.wikijs-mcponly.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
-      - "traefik.http.routers.wikijs-mcponly.middlewares=wikijs-mcponly-headers"
-      - "traefik.http.routers.wikijs-mcponly.service=wikijs-mcponly"
-      - "traefik.http.services.wikijs-mcponly.loadbalancer.server.port=3000"
-      - "traefik.http.middlewares.wikijs-mcponly-headers.headers.stsSeconds=31536000"
+      - "traefik.http.routers.${INSTANCE:-wikijs-mcponly}.rule=Host(`${DOMAIN:-}`) && (Path(`/mcp`) || PathPrefix(`/mcp/`) || PathPrefix(`/oauth/`) || Path(`/me`) || PathPrefix(`/me/`) || Path(`/api/health`) || PathPrefix(`/_next/`) || PathPrefix(`/.well-known/oauth-authorization-server`) || PathPrefix(`/.well-known/oauth-protected-resource`) || Path(`/.well-known/mcp.json`))"
+      - "traefik.http.routers.${INSTANCE:-wikijs-mcponly}.priority=100"
+      - "traefik.http.routers.${INSTANCE:-wikijs-mcponly}.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.${INSTANCE:-wikijs-mcponly}.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.${INSTANCE:-wikijs-mcponly}.middlewares=${INSTANCE:-wikijs-mcponly}-headers"
+      - "traefik.http.routers.${INSTANCE:-wikijs-mcponly}.service=${INSTANCE:-wikijs-mcponly}"
+      - "traefik.http.services.${INSTANCE:-wikijs-mcponly}.loadbalancer.server.port=3000"
+      - "traefik.http.middlewares.${INSTANCE:-wikijs-mcponly}-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.${INSTANCE:-wikijs-mcponly}-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.${INSTANCE:-wikijs-mcponly}-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
 
 networks:
   # Eigenes Netz mit festem Namen (wird angelegt, falls es fehlt). Läuft Traefik

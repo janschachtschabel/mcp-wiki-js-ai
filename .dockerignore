@@ -6,6 +6,7 @@ deploy/
 # Exceptions: these ship in the image (self-contained compose variants run them from there).
 !deploy/scripts/bootstrap.mjs
 !deploy/scripts/standalone-init.mjs
+!deploy/scripts/sqlite-backup.mjs
 !deploy/caddy/Caddyfile
 .github/
 .git/
