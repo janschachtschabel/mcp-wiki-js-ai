@@ -1,7 +1,7 @@
 # Nächste Ausbaustufe — offene Punkte
 
-Stand 2026-10-21, nach Audit, Re-Audit und unabhängiger Review-Runde (siehe
-[audits/](./audits/)). Nichts davon ist eine offene Sicherheitslücke im Standardbetrieb
+Stand 2026-10-23, nach Audit, Re-Audit, unabhängiger Review-Runde und Audit 2026-10-23
+(siehe [audits/](./audits/); dort steht der Status jedes Befunds). Nichts davon ist eine offene Sicherheitslücke im Standardbetrieb
 (Docker-Compose bzw. Helm mit OAuth); es sind Umbauten, Härtungen und bekannte Grenzen,
 die bewusst zurückgestellt wurden.
 
@@ -15,11 +15,20 @@ die bewusst zurückgestellt wurden.
 
 | # | Thema | Was | Warum | Aufwand |
 |---|---|---|---|---|
-| R-55 | **Test-Infrastruktur** | Umstieg auf `node --test` (keine neue Abhängigkeit) mit Coverage; Suiten unabhängig statt `&&`-Kette; Fake-Timer im Semaphore-Test; E2E prüft „existiert schon“ nicht als Erfolg; **E2E + Live-Tool-Suite in der CI** gegen einen Compose-Stack, inkl. eines Browser-Logins | Größter Hebel für die Qualität: die `no-referrer`-Regression (brach alle Browser-Logins) wäre mit E2E in der CI sofort aufgefallen | 2–3 Tage |
+| R-55 / A-30b / A-48 | **Test-Infrastruktur** | Umstieg auf `node --test` (keine neue Abhängigkeit) mit Coverage; Suiten unabhängig statt `&&`-Kette; Fake-Timer bzw. Zähler statt Wanduhr-Schwellen (Semaphore-, Format-, Routen-Tests); E2E prüft „existiert schon“ nicht als Erfolg; **E2E + Live-Tool-Suite in der CI** gegen einen Compose-Stack, inkl. eines Browser-Logins | Größter Hebel für die Qualität: die `no-referrer`-Regression (brach alle Browser-Logins) wäre mit E2E in der CI sofort aufgefallen | 2–3 Tage |
 | R-64 | **React 19 + `sharp`** | `react`/`react-dom`/`@types/react` auf 19 (Next 16 nutzt intern ohnehin seine eigene React-Version); entscheiden, ob `sharp`/libvips (LGPL, landet im Standalone-Build, wird nicht gebraucht) entfernt oder der Lizenzhinweis dokumentiert wird | Typen und Laufzeit konsistent halten; künftige Next-Updates | ½–1 Tag |
 | R-60 | **Store/Audit aus dem OAuth-Modul lösen** | sqlite-Store und Audit-Log nach `lib/store/` bzw. `lib/audit.ts`; Kern und OAuth nutzen beide | Ohne OAuth (stdio, Legacy-Key) gibt es bisher kein persistentes Audit-Log; Abhängigkeitsrichtung | ~1 Tag |
 
 ## 3. Härtungen und Erweiterungen
+
+- [ ] **Doppelte Nutzlast (A-19):** jedes Tool-Ergebnis steht als Text **und** als
+  `structuredContent` im Kontext. Nur eines senden (oder den Text kürzen), sobald geklärt ist,
+  welche Clients `structuredContent` zuverlässig lesen; dazu eine Größengrenze.
+- [ ] **Cookie-Vorrang (A-37, needs verification):** liegt ein Wiki.js-`jwt`-Cookie einer
+  Subdomain vor, gewinnt es gegenüber dem eigenen Login. Prüfen, ob Cookie-Tossing praktisch
+  möglich ist; mindestens die angemeldete Identität auf der Consent-Seite deutlicher zeigen.
+- [ ] **Deploy-Befunde aus Audit 2026-10-23** (A-09, A-14, A-16, A-30, A-32, A-33, A-36, A-43,
+  A-44, A-49, A-50, A-51): Compose/Helm/Backup-Härtungen, siehe Status im Audit-Bericht.
 
 - [ ] **Helm: eigene Dateien einhängen** (`extraVolumes`/`extraVolumeMounts`), z. B. für ein
   CA-Zertifikat (`NODE_EXTRA_CA_CERTS`), wenn `WIKIJS_URL` eine Domain mit internem Zertifikat ist.
