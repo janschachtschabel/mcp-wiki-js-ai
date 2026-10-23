@@ -36,7 +36,7 @@ Interaktive Fassung mit Quellenverweisen je Komponente: [docs/architektur.html](
 
 Alle Compose-Dateien außer A3 nutzen das fertige Image `ghcr.io/janschachtschabel/mcp-wiki-js-ai:main`,
 brauchen **keine Pflicht-Variablen** und erzeugen Datenbank-Passwort und `MCP_SESSION_SECRET` beim
-ersten Start selbst (Volume `stack-secrets`). **Ausführliche Anleitung mit allen Varianten,
+ersten Start selbst (Volumes `stack-secrets` und `mcp-secrets`). **Ausführliche Anleitung mit allen Varianten,
 Proxy-Beispielen und Variablen: [docs/installation-it.md](mcp-for-wiki-js/docs/installation-it.md).**
 
 ### A1: Docker-Panel mit Traefik

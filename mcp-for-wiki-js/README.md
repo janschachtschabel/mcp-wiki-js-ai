@@ -422,7 +422,7 @@ scripts/           gen-profile.mjs (Handle-Generator) · show-roles.ts · smoke*
 
 ```bash
 npm run typecheck                  # TypeScript ohne Build
-npm test                           # Offline-Suite: 19 Suiten (policy/config/nav/semaphore/context/oauth/store/oauth-routes/oauth-browser/guardrails/routing/format/pages/route/limits/escalation/gate/client/stdio), 801 Assertions
+npm test                           # Offline-Suite: 21 Suiten (policy/config/nav/semaphore/context/oauth/store/oauth-routes/oauth-browser/guardrails/routing/format/pages/route/limits/escalation/gate/client/stdio/bootstrap/deploy), 1003 Assertions
 npm run build                      # Production-Build (Next-standalone)
 
 # Live-Integrationstest: ALLE Tool-Handler gegen ein WEGWERF-/leeres Wiki.js
@@ -430,7 +430,7 @@ WIKIJS_URL=http://localhost:3000 WIKIJS_TOKEN=<key-oder-admin-jwt> npm run test:
 
 # OAuth-E2E gegen die laufende Appliance (Login → Code → Token → Tools →
 # Guardrails → /me inkl. Admin-Rendering-Gate). Braucht einen gestarteten
-# Stack + `docker compose run --rm bootstrap --demo` (siehe Skript-Kopf). 38 Assertions.
+# Stack + `docker compose run --rm bootstrap --demo` (siehe Skript-Kopf). 50 Assertions.
 npm run test:e2e                   # Basis/Creds via E2E_BASE / E2E_*_USER / E2E_*_PASS
 
 # E2E gegen ein Deployment (HTTP-Transport):
@@ -439,7 +439,7 @@ node scripts/smoke-urlauth.mjs  <url>   # URL-Parameter-Auth (?url=&token=&prese
 node scripts/probe-deploy.mjs   <url>   # Deploy ohne Creds prüfen (Env-Status)
 ```
 
-Vollständiges Per-Tool-Live-Ergebnis (alle 70 Tools): **[docs/TESTPROTOKOLL.md](./docs/TESTPROTOKOLL.md)**. Wegwerf-Wiki dafür: `docker compose -f docker-compose.test.yml up -d` (Setup-Automatisierung siehe Protokoll). In der CI (`.github/workflows/ci.yml`) laufen Typecheck, Offline-Suite (801 Assertions) und Build. OAuth-E2E (50, davon 12 Seiten-Tool-Aufrufe als Team-Nutzer ohne Admin-Rechte) und Live-Tool-Suite (79 Tool-Aufrufe) brauchen einen laufenden Stack und laufen lokal (`docker-compose.yml` + `docker-compose.local.yml`, siehe Skriptköpfe).
+Vollständiges Per-Tool-Live-Ergebnis (alle 70 Tools): **[docs/TESTPROTOKOLL.md](./docs/TESTPROTOKOLL.md)**. Wegwerf-Wiki dafür: `docker compose -f docker-compose.test.yml up -d` (Setup-Automatisierung siehe Protokoll). In der CI (`.github/workflows/ci.yml`) laufen Typecheck, Offline-Suite (1003 Assertions), Build und die Prüfung der Deploy-Dateien (alle Compose-Dateien, beide Helm-Charts). OAuth-E2E (50, davon 12 Seiten-Tool-Aufrufe als Team-Nutzer ohne Admin-Rechte) und Live-Tool-Suite (79 Tool-Aufrufe) brauchen einen laufenden Stack und laufen lokal (`docker-compose.yml` + `docker-compose.local.yml`, siehe Skriptköpfe).
 
 ---
 

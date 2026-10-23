@@ -32,8 +32,8 @@ AI then works with exactly that person's wiki permissions.
 - **Never** give AI users `manage:system` in Wiki.js — it bypasses all page rules.
 - The compose files for A1, A2, B1, B2 and C1 pull the published image
   `ghcr.io/janschachtschabel/mcp-wiki-js-ai:main` (public, no login), need **no required variables**
-  and generate their secrets on first start (service `init`, volume `stack-secrets` — include it in
-  backups).
+  and generate their secrets on first start (service `init`, volumes `stack-secrets` and — for the
+  MCP secret that Wiki.js must not see — `mcp-secrets`; the backups include both).
 
 ---
 
@@ -581,7 +581,7 @@ docker compose start mcp
 | "Zu viele Anmeldeversuche" (too many login attempts) | login limit: 10 attempts per IP or 5 per account within 15 minutes |
 | Client registration returns `429` | more than 20 registrations per IP and hour |
 | `/api/health` returns `503` | session store (SQLite under `/data`) unavailable — check volume/permissions |
-| Sessions gone after a restart | `/data` or `stack-secrets` are not persistent volumes |
+| Sessions gone after a restart | `/data`, `stack-secrets` or `mcp-secrets` are not persistent volumes |
 | Kubernetes: wiki pages like `/meeting` end up at the MCP, or `/me` at the wiki | older chart version with `Prefix` paths and no Traefik priority — update the chart (`Exact` paths + `traefik.ingress.kubernetes.io/router.priority`) |
 | Kubernetes: `wiki` pods restart, log "password authentication failed" | database created with a different password than the Secret holds — do not delete/regenerate `<release>-secrets`; use `secrets.existingSecret` with GitOps |
 | Kubernetes: `helm install` fails with "admin.email is required …" | first-run setup is active (`bootstrap.enabled=true`) but admin credentials are missing — set them, or after setup `bootstrap.enabled=false` |

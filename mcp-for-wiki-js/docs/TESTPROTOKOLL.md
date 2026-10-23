@@ -2,21 +2,22 @@
 
 **Tool-Suite-Protokoll:** 70 Tools, alle live end-to-end verifiziert.
 
-> Dieses Protokoll dokumentiert den Live-Lauf der **Tool-Handler** (Stand
-> 2026-06-17, damals 69 Tools; inzwischen 70 mit `wiki_asset_download`). Die
-> Handler wurden seither im Zuge der Audit-Umsetzung geändert (u. a.
-> Massenlöschen, Tag-Sperre, Upload-Prüfung); dieses Protokoll ist ein
-> historischer Lauf. Die **aktuellen** Testzahlen: **801 Offline-Assertions**
-> (19 Suiten) + **50 OAuth-E2E** + **79 Live-Tool-Aufrufe**
-> (`npm test` + `npm run test:e2e` + `npm run test:live`) — siehe [README › Tests](../README.md#tests).
+> **Letzter Lauf: 2026-10-23** (nach der Umsetzung des Audits 2026-10-23), gegen den lokalen
+> Test-Stack (Wiki.js 2.5, PostgreSQL 15, Image aus dem aktuellen Stand):
+> **1003 Offline-Assertions** (21 Suiten) · **79/79 Live-Tool-Aufrufe** (69 der 70 Tools) ·
+> **50/50 OAuth-E2E** (deckt das 70. Tool `wiki_asset_download` ab) — `npm test`,
+> `npm run test:live`, `npm run test:e2e`; siehe [README › Tests](../README.md#tests).
+> Die Tabellen unten stammen aus dem ausführlichen Lauf vom 2026-06-17; die Kategorien sind auf den
+> heutigen Stand gebracht (fünf Tools liegen seit dem Audit in `manage_system`).
 
 ## 1. Verdikt
 Alle Tools sind verifiziert — **live end-to-end** gegen ein echtes Wiki.js (inkl. `wiki_asset_upload` → rename → delete). **MCP-Code = release-ready.**
 
 | Ebene | Ergebnis |
 |---|---|
-| Offline-Unit-Tests (`npm test`) | ✅ 22 Policy + 7 Nav + 7 Semaphor + 14 Context = 50/50 |
-| Live-Integrationstest (`npm run test:live`) | ✅ **79 ok / 0 FAIL** |
+| Offline-Tests (`npm test`) | ✅ 1003 Assertions in 21 Suiten (Stand 2026-10-23) |
+| Live-Integrationstest (`npm run test:live`) | ✅ **79 ok / 0 FAIL** (2026-10-23) |
+| OAuth-E2E (`npm run test:e2e`) | ✅ **50/50** (2026-10-23) |
 | `npm run typecheck` / `npm run build` | ✅ sauber / Compiled successfully |
 
 ## 2. Testumgebung
@@ -41,42 +42,43 @@ Alle Tools sind verifiziert — **live end-to-end** gegen ein echtes Wiki.js (in
 | `wiki_pages_links` | interne Links | ✅ |
 | `wiki_tags_list` | Tag-Liste | ✅ |
 | `wiki_tags_search` | Tag-Vorschläge | ✅ |
-| `wiki_navigation_get` | Navigation lesen | ✅ |
 | `wiki_comments_list` | Kommentare einer Seite | ✅ |
 | `wiki_comment_get` | einzelner Kommentar | ✅ |
 | `wiki_assets_list` | Assets im Ordner | ✅ |
 | `wiki_asset_folders` | Unterordner | ✅ |
+| `wiki_asset_download` | Datei herunterladen (nur Asset-Pfade, Größenlimit) | ✅ (im OAuth-E2E) |
 
-### write (12)
+### write (10)
 | Tool | Operation | Ergebnis |
 |---|---|---|
 | `wiki_page_create` | Seite anlegen (mit Tag) | ✅ |
 | `wiki_page_update` | Edit (find/replace) **und** Vollersatz | ✅ |
 | `wiki_page_move` | verschieben/umbenennen | ✅ |
-| `wiki_page_render` | neu rendern | ✅ |
 | `wiki_page_restore` | auf Version zurücksetzen | ✅ |
 | `wiki_page_convert` | md→html | ⚠️ Tool ok — Wiki.js lehnt diese Kombi ab („unsupported content types"); bekanntes Wiki.js-Limit |
-| `wiki_tag_update` | Tag umbenennen | ✅ |
 | `wiki_comment_create` | Kommentar posten | ✅ |
 | `wiki_comment_update` | Kommentar editieren | ✅ |
 | `wiki_asset_create_folder` | Asset-Ordner anlegen | ✅ |
 | `wiki_asset_upload` | Datei hochladen (Multipart-REST `/u`) | ✅ |
 | `wiki_asset_rename` | Datei umbenennen | ✅ |
 
-### delete (7)
+### delete (5)
 | Tool | Operation | Ergebnis |
 |---|---|---|
 | `wiki_page_delete` | Einzel-Seite | ✅ |
 | `wiki_pages_delete_batch` | Mehrfach per Pfad | ✅ |
 | `wiki_pages_delete_tree` | Teilbaum inkl. Root | ✅ |
-| `wiki_pages_purge_history` | Historie purge (No-op `P100Y`) | ✅ |
-| `wiki_tag_delete` | Tag löschen | ✅ |
 | `wiki_comment_delete` | Kommentar löschen | ✅ |
 | `wiki_asset_delete` | Datei löschen | ✅ (Datei aus `wiki_asset_upload`) |
 
-### manage_system (9)
+### manage_system (14)
 | Tool | Operation | Ergebnis |
 |---|---|---|
+| `wiki_navigation_get` | Navigation lesen (read-only) | ✅ |
+| `wiki_page_render` | neu rendern | ✅ |
+| `wiki_tag_update` | Tag umbenennen | ✅ |
+| `wiki_tag_delete` | Tag löschen | ✅ |
+| `wiki_pages_purge_history` | Historie purge (No-op `P100Y`, ISO-8601-Dauer) | ✅ |
 | `wiki_site_config` | Site-Konfig | ✅ |
 | `wiki_system_info` | System/DB-Info | ✅ |
 | `wiki_system_flags` | Feature-Flags | ✅ |
@@ -143,7 +145,7 @@ Alle Tools sind verifiziert — **live end-to-end** gegen ein echtes Wiki.js (in
 ## 6. Reproduktion
 ```bash
 # Offline (kein Wiki nötig):
-npm run typecheck && npm test          # 50 Assertions
+npm run typecheck && npm test          # 1003 Assertions (21 Suiten)
 npm run build
 
 # Live gegen ein WEGWERF-/leeres Wiki (alle Tool-Handler):

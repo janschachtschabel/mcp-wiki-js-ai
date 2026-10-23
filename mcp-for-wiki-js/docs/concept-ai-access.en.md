@@ -197,9 +197,9 @@ render/tree/links/comments. Details and open points:
 **frozen** — not needed in OAuth container operation and switched off
 there by default (`WIKIJS_ALLOW_LEGACY`).
 
-**Verification (as of 2026-10-21):** 775 offline assertions (19 suites), 38 E2E assertions and
-79 live tool calls against the real stack through a public URL (OAuth → tool call as the real
-user → guardrails → revocation), load test 1350 requests / 0 errors.
+**Verification (as of 2026-10-23):** 1003 offline assertions (21 suites), 50 E2E assertions and
+79 live tool calls (all 70 tools) against the local stack (OAuth → tool call as the real user → guardrails →
+revocation). Earlier (2026-10-21) also checked through a public URL, load test 1350 requests / 0 errors.
 
 ---
 

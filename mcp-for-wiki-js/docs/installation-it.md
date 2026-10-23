@@ -32,8 +32,9 @@ normalen Wiki-Konto an; die KI arbeitet dann mit genau deren Wiki-Rechten.
 - KI-Nutzern in Wiki.js **nie `manage:system`** geben — das hebelt alle Seitenregeln aus.
 - Die Compose-Dateien der Wege A1, A2, B1, B2 und C1 laden das fertige Image
   `ghcr.io/janschachtschabel/mcp-wiki-js-ai:main` (öffentlich, kein Login), brauchen **keine
-  Pflicht-Variablen** und erzeugen ihre Geheimnisse beim ersten Start selbst (Dienst `init`, Volume
-  `stack-secrets` — gehört zur Datensicherung).
+  Pflicht-Variablen** und erzeugen ihre Geheimnisse beim ersten Start selbst (Dienst `init`, Volumes
+  `stack-secrets` und — für das MCP-Secret, das Wiki.js nicht sehen soll — `mcp-secrets`; die Backups
+  sichern beide mit).
 
 ---
 
@@ -569,7 +570,7 @@ docker compose start mcp
 | „Zu viele Anmeldeversuche“ | Login-Sperre: 10 Versuche pro IP bzw. 5 pro Konto in 15 Minuten |
 | Client-Registrierung liefert `429` | mehr als 20 Registrierungen pro IP und Stunde |
 | `/api/health` liefert `503` | Session-Speicher (SQLite unter `/data`) nicht erreichbar — Volume/Rechte prüfen |
-| Sessions nach Neustart weg | `/data` bzw. `stack-secrets` sind keine dauerhaften Volumes |
+| Sessions nach Neustart weg | `/data`, `stack-secrets` bzw. `mcp-secrets` sind keine dauerhaften Volumes |
 | Kubernetes: Wiki-Seiten wie `/meeting` landen beim MCP, oder `/me` beim Wiki | ältere Chart-Fassung mit `Prefix`-Pfaden ohne Traefik-Priorität — Chart aktualisieren (`Exact`-Pfade + `traefik.ingress.kubernetes.io/router.priority`) |
 | Kubernetes: Pods `wiki` starten neu, Log „password authentication failed“ | Datenbank mit anderem Passwort angelegt als im Secret — Secret `<release>-secrets` nicht löschen/neu erzeugen; bei GitOps `secrets.existingSecret` nutzen |
 | Kubernetes: `helm install` bricht mit „admin.email is required …“ ab | Ersteinrichtung ist aktiv (`bootstrap.enabled=true`), aber Admin-Daten fehlen — setzen, oder nach erfolgter Einrichtung `bootstrap.enabled=false` |

@@ -232,9 +232,9 @@ und offene Punkte: [Audit](audits/2026-10-21-audit.md) ·
 sind dort standardmäßig abgeschaltet (`WIKIJS_ALLOW_LEGACY`) und werden nicht
 weiterentwickelt.
 
-**Verifikation (Stand 2026-10-21):** 775 Offline-Assertions (19 Suiten), 38 E2E-Assertions und
-79 Live-Tool-Aufrufe gegen den echten Stack (OAuth → Tool-Call als echter User → Guardrails → Widerruf),
-Lasttest 1350 Requests / 0 Fehler.
+**Verifikation (Stand 2026-10-23):** 1003 Offline-Assertions (21 Suiten), 50 E2E-Assertions und
+79 Live-Tool-Aufrufe (alle 70 Tools) gegen den lokalen Stack (OAuth → Tool-Call als echter User → Guardrails → Widerruf).
+Früher (2026-10-21) zusätzlich über eine öffentliche URL geprüft, Lasttest 1350 Requests / 0 Fehler.
 
 ---
 

@@ -38,7 +38,7 @@ Interactive version with per-component source links (German labels): [docs/archi
 
 All compose files except A3 use the published image `ghcr.io/janschachtschabel/mcp-wiki-js-ai:main`,
 need **no required variables** and generate the database password and `MCP_SESSION_SECRET` on first
-start (volume `stack-secrets`). **Full guide with every path, proxy examples and variables:
+start (volumes `stack-secrets` and `mcp-secrets`). **Full guide with every path, proxy examples and variables:
 [docs/installation-it.en.md](mcp-for-wiki-js/docs/installation-it.en.md).**
 
 ### A1: Docker panel with Traefik
