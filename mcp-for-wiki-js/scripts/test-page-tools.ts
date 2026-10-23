@@ -604,6 +604,12 @@ async function s4Tests(tool: (name: string) => ToolDef): Promise<void> {
   w = fakeWiki([{ id: 1, path: 'docs/a', locale: 'en', content: 'x' }]);
   r = await outcome(tool('wiki_page_restore'), { pageId: 1, versionId: 2 }, stubCtx(w.respond, 's4r2'));
   check('A-18: restore of an untagged page has no tag warning', !r.isError && !/removed/i.test(r.text));
+  w = fakeWiki([{ id: 1, path: 'docs/a', locale: 'en', content: 'x', tags: ['team'] }], (q) => {
+    if (q.includes('conflictLatest(')) throw new Error('Wiki.js request timed out after 30000 ms.');
+    return undefined;
+  });
+  r = await outcome(tool('wiki_page_restore'), { pageId: 1, versionId: 2 }, stubCtx(w.respond, 's6r'));
+  check('S6: restore still runs when the tags cannot be read first, and says so', !r.isError && mutation(w, 'restore') !== undefined && /could not be read/i.test(r.text));
   w = fakeWiki([{ id: 1, path: 'docs/a', locale: 'en', content: 'x' }], (q) =>
     q.includes('version(') ? { pages: { version: { versionId: 2, pageId: 1, path: 'docs/a', content: 'old' } } } : undefined,
   );
@@ -647,6 +653,22 @@ async function s4Tests(tool: (name: string) => ToolDef): Promise<void> {
   check('A-23: a comment of an unblocked page still loads', !r.isError && commentCalls.includes('single'));
   r = await commentRun('wiki_comment_delete', { id: 7 }, 's4c5');
   check('A-23: a comment of an unblocked page can still be deleted', !r.isError && commentCalls.includes('delete'));
+
+  // S6: a caller without read:comments on a blocked page is not locked out of all comment tools.
+  const forbiddenOnBlocked = (q: string, v: Record<string, unknown>) => {
+    if (q.includes('comments { list') && v.path === 'intern/geheim') throw new Error('You are not authorized to view comments for this page.');
+    return comments(q, v);
+  };
+  commentCalls.length = 0;
+  let wf = fakeWiki(pagesWithComments, forbiddenOnBlocked);
+  r = await outcome(tool('wiki_comment_get'), { id: 7 }, stubCtx(wf.respond, 's6c1'));
+  check('S6: CommentViewForbidden on a blocked page does not block other comments', !r.isError && commentCalls.includes('single'));
+  wf = fakeWiki(pagesWithComments, (q, v) => {
+    if (q.includes('comments { list')) throw new Error('Wiki.js request timed out after 30000 ms.');
+    return comments(q, v);
+  });
+  r = await outcome(tool('wiki_comment_get'), { id: 7 }, stubCtx(wf.respond, 's6c2'));
+  check('S6: other lookup errors still fail closed', r.isError && /timed out/.test(r.text));
 
   // ---- A-27: an unreadable comment is an error, not ok(null) --------------------
   r = await commentRun('wiki_comment_get', { id: 77 }, 's4c6');

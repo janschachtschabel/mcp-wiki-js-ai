@@ -97,4 +97,14 @@ check('A-11: a preset overlay (X-Wikijs-Preset) carries the role tool rules too'
 check('A-11: other manage_system tools keep the preset category mode', () =>
   assert.equal(basePolicyFromEnv({ WIKIJS_PERMISSION_PRESET: 'betreuer' }).resolve('wiki_site_config', 'manage_system'), 'confirm'));
 
+// 10. review of A-11 (S6): inside ONE overlay a preset's tool rule and an explicit
+// category both tighten — neither shadows the other.
+const sysCeiling = basePolicyFromEnv({ WIKIJS_PERMISSION_PRESET: 'systemadmin' });
+check('S6: overlay {preset kommentator, categories.write block} blocks comment_create', () =>
+  assert.equal(sysCeiling.withOverlay({ preset: 'kommentator', categories: { write: 'block' } }).resolve('wiki_comment_create', 'write'), 'block'));
+check('S6: overlay preset kommentator alone still allows comment_create', () =>
+  assert.equal(sysCeiling.withOverlay({ preset: 'kommentator' }).resolve('wiki_comment_create', 'write'), 'allow'));
+check('S6: overlay preset kommentator alone blocks page_create', () =>
+  assert.equal(sysCeiling.withOverlay({ preset: 'kommentator' }).resolve('wiki_page_create', 'write'), 'block'));
+
 console.log(`\n${passed} policy assertions passed.`);

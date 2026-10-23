@@ -259,13 +259,26 @@ export const pageWriteTools: ToolDef[] = [
     handler: async (a, ctx) => {
       await assertPageIdNotBlocked(ctx, a.pageId, `Page ${a.pageId}`);
       // Wiki.js restores through updatePage with the version's tags, and versions carry
-      // none: every tag is dropped (audit A-18). Name them so they can be re-applied.
-      const { tags } = await fetchLatestPage(ctx, a.pageId);
+      // none: every tag is dropped (audit A-18). Name them so they can be re-applied —
+      // best effort: the restore itself does not depend on reading them.
+      let tags: string[] | undefined;
+      let tagsUnreadable = '';
+      try {
+        tags = (await fetchLatestPage(ctx, a.pageId)).tags;
+      } catch (e) {
+        tagsUnreadable = e instanceof Error ? e.message : String(e);
+      }
       const data = await ctx.client.request(
         `mutation($pageId:Int!,$versionId:Int!){ pages { restore(pageId:$pageId,versionId:$versionId){ ${DEFAULT_RESPONSE} } } }`,
         { pageId: a.pageId, versionId: a.versionId },
       );
       assertOk(data.pages.restore.responseResult, 'Restore page');
+      if (tags === undefined) {
+        return ok(
+          { pageId: a.pageId, versionId: a.versionId },
+          `✅ Page restored. ⚠️ Wiki.js removes all tags on restore; the previous tags could not be read (${tagsUnreadable}) — check them with wiki_page_get.`,
+        );
+      }
       if (tags.length === 0) return ok({ pageId: a.pageId, versionId: a.versionId }, '✅ Page restored.');
       return ok(
         { pageId: a.pageId, versionId: a.versionId, tagsRemoved: tags },

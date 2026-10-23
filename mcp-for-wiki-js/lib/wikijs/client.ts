@@ -5,9 +5,10 @@
  * in serverless functions without bundling a GraphQL client library.
  *
  * OVERLOAD PROTECTION: all upstream requests pass through a concurrency gate per wiki
- * (WIKIJS_MAX_CONCURRENCY per base URL — audit A-20). This caps how many simultaneous
- * GraphQL requests the server fires at one Wiki.js so it can never exhaust that wiki's DB
- * connection pool, while a slow wiki cannot starve requests to another one (BYOK). When the
+ * (WIKIJS_MAX_CONCURRENCY per base URL — audit A-20) inside one gate over all wikis
+ * (WIKIJS_MAX_CONCURRENCY_TOTAL, default 4×). This caps how many simultaneous GraphQL
+ * requests the server fires at one Wiki.js so it can never exhaust that wiki's DB
+ * connection pool, while a slow wiki cannot starve requests to another one (BYOK). When a
  * gate is full, requests queue briefly; if no slot frees within the timeout, the request is
  * shed with a clear "busy" error instead of piling up into a 60 s pool-acquire hang.
  *
@@ -19,7 +20,7 @@
 
 import { Kind, parse } from 'graphql';
 import { exceedsByteLimit } from './format';
-import { gated } from './gate';
+import { createGates } from './gate';
 
 export interface GraphQLErrorEntry {
   message: string;
@@ -41,6 +42,8 @@ export function envInt(raw: string | undefined, def: number, min: number, max = 
 const MAX_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_TIMEOUT_MS = envInt(process.env.WIKIJS_TIMEOUT_MS, 30_000, 1, MAX_TIMEOUT_MS);
 const MAX_CONCURRENCY = envInt(process.env.WIKIJS_MAX_CONCURRENCY, 8, 1);
+const MAX_TOTAL_CONCURRENCY = envInt(process.env.WIKIJS_MAX_CONCURRENCY_TOTAL, MAX_CONCURRENCY * 4, 1);
+const gated = createGates(MAX_CONCURRENCY, MAX_TOTAL_CONCURRENCY);
 const MAX_RETRIES = envInt(process.env.WIKIJS_RETRIES, 2, 0);
 /** Cap on a buffered GraphQL response body (audit R-45). */
 const MAX_RESPONSE_BYTES = envInt(process.env.WIKIJS_MAX_RESPONSE_BYTES, 16 * 1024 * 1024, 1024);
@@ -238,22 +241,48 @@ export class WikiClient {
   }
 
   /**
-   * The BYOK target check (DNS lookup) runs before a concurrency slot is taken and
-   * is bounded by the request timeout, so a hanging resolver blocks nobody (A-46).
+   * Classify a failure of an upstream call. Cancellation first: the SDK aborts with
+   * any reason value (a string, an Error) and undici rejects with exactly that, so the
+   * error itself does not say "aborted". Then our own timeout.
    */
-  private async checkTarget(): Promise<void> {
+  private abortFailure(err: unknown, timedOut: string): unknown {
+    if (this.signal?.aborted) return new Error(CANCELLED);
+    if (err instanceof Error && err.name === 'AbortError') return new Error(timedOut);
+    return err;
+  }
+
+  /** Whether a fetch() rejection is an abort (ours or the client's) rather than a network failure. */
+  private isAbort(err: unknown): boolean {
+    return Boolean(this.signal?.aborted) || (err instanceof Error && err.name === 'AbortError');
+  }
+
+  /** Time left until `deadline`; every step of a call draws on one budget (A-47). */
+  private static remaining(deadline: number): number {
+    return Math.max(1, deadline - Date.now());
+  }
+
+  /**
+   * The BYOK target check (DNS lookup) runs before a concurrency slot is taken and
+   * is bounded by the call's budget and its cancellation, so a hanging resolver
+   * blocks nobody (A-46).
+   */
+  private async checkTarget(budgetMs: number): Promise<void> {
     if (!this.assertTarget) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
+    let onAbort: (() => void) | undefined;
+    const stop = new Promise<never>((_, reject) => {
       timer = setTimeout(
-        () => reject(new Error(`Wiki.js target check timed out after ${this.timeoutMs} ms (${this.baseUrl}).`)),
-        this.timeoutMs,
+        () => reject(new Error(`Wiki.js target check timed out after ${budgetMs} ms (${this.baseUrl}).`)),
+        budgetMs,
       );
+      onAbort = () => reject(new Error(CANCELLED));
+      this.signal?.addEventListener('abort', onAbort, { once: true });
     });
     try {
-      await Promise.race([this.assertTarget(this.baseUrl), timeout]);
+      await Promise.race([this.assertTarget(this.baseUrl), stop]);
     } finally {
       clearTimeout(timer);
+      if (onAbort) this.signal?.removeEventListener('abort', onAbort);
     }
   }
 
@@ -265,24 +294,30 @@ export class WikiClient {
    * Run a GraphQL request with retry on connection failures. Every attempt takes
    * its own concurrency slot, so a backoff never blocks other callers (R-47).
    * Reads retry on any connection failure and on a proxy 502/503/504 (A-47); writes
-   * only when nothing was sent (R-32). Retries stop at an overall deadline of one
-   * timeout, so a retry chain cannot outlast the invocation (A-47).
+   * only when nothing was sent (R-32). Target check, queueing, request and retries all
+   * draw on ONE budget of `timeoutMs`, so a call cannot outlast it by much (A-47).
    * Never retried: timeouts, redirects, GraphQL errors, other HTTP statuses, cancellation.
    */
   async request<T = any>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
     const readOnly = isReadOnlyDocument(query);
-    const startedAt = Date.now();
+    const deadline = Date.now() + this.timeoutMs;
     for (let attempt = 0; ; attempt++) {
       try {
         this.throwIfCancelled();
-        await this.checkTarget();
-        return await gated(this.baseUrl, MAX_CONCURRENCY, () => this.send<T>(query, variables), this.timeoutMs);
+        await this.checkTarget(WikiClient.remaining(deadline));
+        return await gated(
+          this.baseUrl,
+          () => this.send<T>(query, variables, deadline),
+          WikiClient.remaining(deadline),
+          this.signal,
+        );
       } catch (err) {
+        if (this.signal?.aborted) throw new Error(CANCELLED);
         const retryable =
           err instanceof WikiConnectionError && !(err instanceof WikiRedirectError) && (readOnly || err.nothingSent);
         const backoff = backoffMs(attempt);
-        const withinDeadline = Date.now() - startedAt + backoff < this.timeoutMs;
-        if (attempt < this.retries && retryable && withinDeadline && !this.signal?.aborted) {
+        const withinDeadline = deadline - Date.now() > backoff;
+        if (attempt < this.retries && retryable && withinDeadline) {
           await sleep(backoff);
           continue;
         }
@@ -291,11 +326,11 @@ export class WikiClient {
     }
   }
 
-  private async send<T = any>(query: string, variables: Record<string, unknown>): Promise<T> {
-    // Abort after timeoutMs — covering headers AND body — so a hung Wiki.js never
+  private async send<T = any>(query: string, variables: Record<string, unknown>, deadline: number): Promise<T> {
+    // Abort at the call's deadline — covering headers AND body — so a hung Wiki.js never
     // ties up a serverless invocation or a concurrency slot (R-45).
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), WikiClient.remaining(deadline));
     let res: Response;
     let raw: string;
     try {
@@ -313,17 +348,13 @@ export class WikiClient {
           redirect: 'error',
         });
       } catch (err) {
-        if (err instanceof Error && err.name === 'AbortError') throw err;
+        if (this.isAbort(err)) throw err;
         throw fetchFailure(err, this.endpoint);
       }
       this.captureRenewedJwt(res);
       raw = await readCapped(res, MAX_RESPONSE_BYTES);
     } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        this.throwIfCancelled();
-        throw new Error(`Wiki.js request timed out after ${this.timeoutMs} ms (${this.endpoint}).`);
-      }
-      throw err;
+      throw this.abortFailure(err, `Wiki.js request timed out after ${this.timeoutMs} ms (${this.endpoint}).`);
     } finally {
       clearTimeout(timer);
     }
@@ -360,11 +391,12 @@ export class WikiClient {
    * this covers the real case; without one the body is read only up to `maxBytes` (A-45).
    */
   async download(path: string, maxBytes = Infinity): Promise<{ data: Uint8Array; mime: string }> {
+    const deadline = Date.now() + this.timeoutMs;
     this.throwIfCancelled();
-    await this.checkTarget();
-    return gated(this.baseUrl, MAX_CONCURRENCY, async () => {
+    await this.checkTarget(WikiClient.remaining(deadline));
+    return gated(this.baseUrl, async () => {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+      const timer = setTimeout(() => controller.abort(), WikiClient.remaining(deadline));
       try {
         const url = `${this.baseUrl}/${path.replace(/^\/+/, '')}`;
         const res = await fetch(url, {
@@ -373,7 +405,7 @@ export class WikiClient {
           // Assets are served directly; a redirect (e.g. to /login) leaves the asset space.
           redirect: 'error',
         }).catch((err) => {
-          throw err instanceof Error && err.name === 'AbortError' ? err : fetchFailure(err, url);
+          throw this.isAbort(err) ? err : fetchFailure(err, url);
         });
         this.captureRenewedJwt(res);
         if (!res.ok) throw new Error(`Asset download failed: HTTP ${res.status} for ${path}`);
@@ -390,15 +422,11 @@ export class WikiClient {
         );
         return { data, mime: res.headers.get('content-type') ?? 'application/octet-stream' };
       } catch (err) {
-        if (err instanceof Error && err.name === 'AbortError') {
-          this.throwIfCancelled();
-          throw new Error(`Asset download timed out after ${this.timeoutMs} ms.`);
-        }
-        throw err;
+        throw this.abortFailure(err, `Asset download timed out after ${this.timeoutMs} ms.`);
       } finally {
         clearTimeout(timer);
       }
-    }, this.timeoutMs);
+    }, WikiClient.remaining(deadline), this.signal);
   }
 
   /** Upload a file via Wiki.js' multipart REST endpoint (/u). Returns {succeeded, message}. */
@@ -408,11 +436,12 @@ export class WikiClient {
     mime?: string;
     folderId?: number;
   }): Promise<{ succeeded: boolean; message?: string }> {
+    const deadline = Date.now() + this.timeoutMs;
     this.throwIfCancelled();
-    await this.checkTarget();
-    return gated(this.baseUrl, MAX_CONCURRENCY, async () => {
+    await this.checkTarget(WikiClient.remaining(deadline));
+    return gated(this.baseUrl, async () => {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+      const timer = setTimeout(() => controller.abort(), WikiClient.remaining(deadline));
       try {
         const form = new FormData();
         // Wiki.js' /u route reads the folder metadata AND the file from the SAME field name.
@@ -429,7 +458,7 @@ export class WikiClient {
           signal: this.abortSignal(controller),
           redirect: 'error',
         }).catch((err) => {
-          throw err instanceof Error && err.name === 'AbortError' ? err : fetchFailure(err, url);
+          throw this.isAbort(err) ? err : fetchFailure(err, url);
         });
         this.captureRenewedJwt(res);
         const answer = await readCappedBytes(
@@ -446,14 +475,10 @@ export class WikiClient {
           return { succeeded: res.ok, message: res.ok ? undefined : `HTTP ${res.status}: ${text.slice(0, 200)}` };
         }
       } catch (err) {
-        if (err instanceof Error && err.name === 'AbortError') {
-          this.throwIfCancelled();
-          throw new Error(`Wiki.js upload timed out after ${this.timeoutMs} ms.`);
-        }
-        throw err;
+        throw this.abortFailure(err, `Wiki.js upload timed out after ${this.timeoutMs} ms.`);
       } finally {
         clearTimeout(timer);
       }
-    }, this.timeoutMs);
+    }, WikiClient.remaining(deadline), this.signal);
   }
 }

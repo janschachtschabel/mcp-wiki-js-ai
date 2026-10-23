@@ -83,6 +83,16 @@ check('A-24: a {key, value} pair with a secret key name has its value redacted',
 check('A-24: API-key metadata lists and createApiKey results are not swallowed whole', red.includes('visible-key-name') && red.includes('"succeeded":true'));
 check('A-24: providerKey, key, keyShort and passage stay visible', red.includes('"providerKey":"local"') && red.includes('"key":"local"') && red.includes('"keyShort":"abc"') && red.includes('visible-text'));
 
+// Review 2026-10-23 (S6): real Wiki.js secret fields; jwt only as a whole key.
+const wiki = JSON.stringify(redactSecrets({
+  mail: { config: { dkimPrivateKey: 'K1', host: 'smtp.example.org' } },
+  targets: [{ config: [{ key: 'sshPrivateKeyContent', value: 'K2' }, { key: 'passphrase', value: 'K3' }, { key: 'accountKey', value: 'K4' }, { key: 'branch', value: 'main' }] }],
+  saml: { decryptionPvk: 'K5' },
+  site: { authJwtAudience: 'urn:wiki.js', authJwtExpiration: '30m' },
+}));
+check('S6: dkimPrivateKey, sshPrivateKeyContent, passphrase, accountKey, decryptionPvk are redacted', ['K1', 'K2', 'K3', 'K4', 'K5'].every((x) => !wiki.includes(`"${x}"`)));
+check('S6: harmless neighbours stay visible (host, branch, authJwt* settings)', wiki.includes('smtp.example.org') && wiki.includes('"main"') && wiki.includes('urn:wiki.js') && wiki.includes('30m'));
+
 if (failed === 0) {
   console.log(`\n${pass} format assertions passed.`);
 } else {

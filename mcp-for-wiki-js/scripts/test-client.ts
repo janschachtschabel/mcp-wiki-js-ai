@@ -16,6 +16,7 @@ import http from 'node:http';
 
 process.env.WIKIJS_RETRIES = '0';
 process.env.WIKIJS_MAX_CONCURRENCY = '1';
+process.env.WIKIJS_MAX_CONCURRENCY_TOTAL = '2';
 process.env.WIKIJS_MAX_RESPONSE_BYTES = '4096';
 // Above setTimeout's 2^31-1 ms limit, which Node turns into a 1 ms timer (review #9).
 process.env.WIKIJS_TIMEOUT_MS = '99999999999';
@@ -357,6 +358,85 @@ async function main(): Promise<void> {
   const sameHost = await rejection(new WikiClient('https://d.example', 't', 1000).request(QUERY), 500);
   check('A-46: a hanging target check does not hold the concurrency slot', sameHost === 'RESOLVED');
   await hanging;
+
+  // ---- Review 2026-10-23 (S6) -----------------------------------------------------
+  // A global ceiling over all wikis (WIKIJS_MAX_CONCURRENCY_TOTAL=2 here).
+  const releases: Array<() => void> = [];
+  handler = (url) =>
+    url.startsWith('https://slow')
+      ? new Promise<Response>((r) => releases.push(() => r(json({ data: { ok: 1 } }))))
+      : json({ data: { ok: 2 } });
+  const s1 = new WikiClient('https://slow1.example', 't', 2000).request(QUERY);
+  const s2 = new WikiClient('https://slow2.example', 't', 2000).request(QUERY);
+  await sleep(20);
+  const third = await rejection(new WikiClient('https://fast.example', 't', 2000).request(QUERY), 300);
+  check(`S6: a global ceiling caps requests across all wikis (${third})`, third === 'GUARD-TIMEOUT');
+  releases.forEach((r) => r());
+  await Promise.allSettled([s1, s2]);
+  await sleep(50);
+
+  // The per-wiki gate key is canonical: case and default port do not open a second gate.
+  releases.length = 0;
+  const slowA2 = new WikiClient('https://slow3.example', 't', 2000).request(QUERY);
+  await sleep(20);
+  handler = (url) => (url.startsWith('https://slow') || url.startsWith('https://SLOW') ? json({ data: { ok: 3 } }) : json({ data: {} }));
+  const alias = await rejection(new WikiClient('https://SLOW3.example:443', 't', 2000).request(QUERY), 300);
+  check(`S6: "https://SLOW3.example:443" shares the gate of "https://slow3.example" (${alias})`, alias === 'GUARD-TIMEOUT');
+  releases.forEach((r) => r());
+  await Promise.allSettled([slowA2]);
+  await sleep(50);
+
+  // The SDK aborts with a reason (string or Error); undici rejects with that reason as is.
+  const acReason = new AbortController();
+  handler = async (_u, init) => {
+    await sleep(50);
+    if (init.signal?.aborted) throw init.signal.reason;
+    return json({ data: {} });
+  };
+  const withReason = rejection(new WikiClient(URL_, 't', 5000, { signal: acReason.signal, retries: 2 }).request(QUERY));
+  setTimeout(() => acReason.abort('user pressed stop'), 10);
+  check('S6: a cancellation with a reason is reported as cancelled, not as a network error', /cancel/i.test(await withReason));
+
+  // Cancelled while queued for a slot: leaves the queue at once.
+  releases.length = 0;
+  handler = (url) =>
+    url.startsWith('https://slow')
+      ? new Promise<Response>((r) => releases.push(() => r(json({ data: { ok: 1 } }))))
+      : json({ data: {} });
+  const holder = new WikiClient('https://slow4.example', 't', 3000).request(QUERY);
+  await sleep(20);
+  const acQueue = new AbortController();
+  const queued = rejection(new WikiClient('https://slow4.example', 't', 3000, { signal: acQueue.signal }).request(QUERY), 500);
+  setTimeout(() => acQueue.abort(), 20);
+  check('S6: a call cancelled while queued leaves the queue at once', /cancel/i.test(await queued));
+  releases.forEach((r) => r());
+  await Promise.allSettled([holder]);
+
+  // Cancelled during the target check (DNS): returns at once.
+  const acCheck = new AbortController();
+  const checking = rejection(
+    new WikiClient('https://e.example', 't', 3000, { signal: acCheck.signal, assertTarget: () => new Promise(() => {}) }).request(QUERY),
+    500,
+  );
+  setTimeout(() => acCheck.abort(), 20);
+  check('S6: a call cancelled during the target check returns at once', /cancel/i.test(await checking));
+
+  // One budget for target check + queue + request (A-47/A-46). Like undici, the stub
+  // rejects as soon as the signal aborts.
+  handler = (_u, init) =>
+    new Promise<Response>((resolve, reject) => {
+      const t = setTimeout(() => resolve(json({ data: {} })), 200);
+      init.signal?.addEventListener('abort', () => {
+        clearTimeout(t);
+        reject(new DOMException('aborted', 'AbortError'));
+      });
+    });
+  const t0 = Date.now();
+  const budget = await rejection(
+    new WikiClient('https://f.example', 't', 300, { assertTarget: () => sleep(200).then(() => undefined) }).request(QUERY),
+    2000,
+  );
+  check(`S6: target check and request share one timeout budget (${budget}, ${Date.now() - t0} ms)`, /timed out/i.test(budget) && Date.now() - t0 < 380);
 
   globalThis.fetch = realFetch;
   if (failed === 0) {

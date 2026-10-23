@@ -31,10 +31,13 @@ export function isDryRun(result: CallToolResult): boolean {
 
 /**
  * Key names whose values never belong in a preview or raw result (and so the model
- * context). Bare "key" is not listed: Wiki.js uses it for strategy/engine ids;
- * `providerKey`, `apiKeys` (metadata) and `createApiKey` stay readable (audit A-24).
+ * context), incl. Wiki.js' own secret fields: dkimPrivateKey (mail), sshPrivateKeyContent,
+ * passphrase, accountKey (storage), decryptionPvk (SAML). Bare "key" is not listed:
+ * Wiki.js uses it for strategy/engine ids; `providerKey`, `apiKeys` (metadata),
+ * `createApiKey` and the authJwt* site settings stay readable (audit A-24).
  */
-const SECRET_KEY = /password|passwd|^pass$|secret|token|^private_?key$|^api_?key$|credential|jwt/i;
+const SECRET_KEY =
+  /password|passwd|^pass$|passphrase|secret|token|private_?key|pvk|account_?key|^api_?key$|credential|^jwt$/i;
 
 /**
  * Deep copy of a JSON-like value with every secret-named key's value replaced (R-19).

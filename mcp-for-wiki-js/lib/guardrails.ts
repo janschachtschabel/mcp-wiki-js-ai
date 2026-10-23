@@ -100,6 +100,8 @@ export function blockedPathKey(path: string): string {
 }
 
 const cache = new Map<string, { at: number; sets: BlockedPageSets }>();
+/** Wiki.js' CommentViewForbidden message (server/helpers/error.js, code 8006). */
+const COMMENT_VIEW_FORBIDDEN = /not authorized to view comments/i;
 /** Lookups in flight per credential: concurrent callers share one upstream round (A-35). */
 const inflight = new Map<string, Promise<BlockedPageSets>>();
 
@@ -207,17 +209,25 @@ export async function assertNotInBlockedSet(ctx: WikiContext, page: { id?: numbe
 /**
  * For comment tools that only have a comment id: CommentPost carries no pageId, so
  * the comments of every blocked page are listed and the id looked up (audit A-23).
- * Always fresh. Fails closed — an error listing a blocked page's comments propagates.
+ * Always fresh. Fails closed — an error listing a blocked page's comments propagates,
+ * except Wiki.js' CommentViewForbidden: without read:comments there the caller cannot
+ * read those comments either. Limitation: a page-rule set that grants manage:comments
+ * while denying read:comments on a blocked page lets its comments pass this check.
  */
 export async function assertCommentNotBlocked(ctx: WikiContext, commentId: number, what: string): Promise<void> {
   if (blockedTags().size === 0) return;
   const { pages } = await blockedPageSets(ctx, { fresh: true });
   const lists = await Promise.all(
     pages.map((p) =>
-      ctx.client.request<{ comments: { list: { id: number }[] } }>(
-        `query($locale:String!,$path:String!){ comments { list(locale:$locale,path:$path){ id } } }`,
-        { locale: p.locale, path: p.path },
-      ),
+      ctx.client
+        .request<{ comments: { list: { id: number }[] } }>(
+          `query($locale:String!,$path:String!){ comments { list(locale:$locale,path:$path){ id } } }`,
+          { locale: p.locale, path: p.path },
+        )
+        .catch((err: unknown) => {
+          if (err instanceof Error && COMMENT_VIEW_FORBIDDEN.test(err.message)) return { comments: { list: [] } };
+          throw err;
+        }),
     ),
   );
   if (lists.some((l) => l.comments.list.some((c) => c.id === commentId))) throw blockedPageError(what);

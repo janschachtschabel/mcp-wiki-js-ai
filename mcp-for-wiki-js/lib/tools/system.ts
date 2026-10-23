@@ -3,6 +3,7 @@ import { ok, fail, assertOk, dryRun, redactSecrets } from '../wikijs/format';
 import { isWriteDocument } from '../wikijs/client';
 import { DEFAULT_RESPONSE, type ToolDef } from './types';
 import { GuardrailError } from '../guardrails';
+import { groupIsPrivileged } from './privileged';
 
 export const systemTools: ToolDef[] = [
   // ------------------------------------------------------------- DIAGNOSTIC ---
@@ -110,11 +111,14 @@ export const systemTools: ToolDef[] = [
       group: z.number().int().optional().describe('Restrict key to a group id (when not fullAccess).'),
     },
     handler: async (a, ctx) => {
-      // fullAccess and group 1 (Administrators) mint an admin credential that outlives
-      // this session and every policy — a self-confirmed "confirm" is not enough (audit A-13).
-      if ((a.fullAccess === true || a.group === 1) && ctx.policy.resolve('wiki_apikey_create', 'manage_auth') !== 'allow') {
+      // fullAccess and admin-level groups mint an admin credential that outlives this
+      // session and every policy — a self-confirmed "confirm" is not enough (audit A-13).
+      if (
+        ctx.policy.resolve('wiki_apikey_create', 'manage_auth') !== 'allow' &&
+        (a.fullAccess === true || (a.group != null && (await groupIsPrivileged(ctx, a.group))))
+      ) {
         throw new GuardrailError(
-          'Creating a full-access or Administrators-group API key needs manage_auth = "allow" in the active permission policy. ' +
+          'Creating a full-access or admin-level group API key needs manage_auth = "allow" in the active permission policy. ' +
             'Use a key for a less privileged group, or create it in the Wiki.js admin area.',
         );
       }

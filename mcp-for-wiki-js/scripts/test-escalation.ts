@@ -43,6 +43,9 @@ interface StubOpts {
   lookupFails?: boolean;
   /** Answer for queries the stub does not know (default { ok: true }). */
   fallback?: unknown;
+  /** groups.single answer for the API-key group lookup; null = no such group. */
+  group?: { permissions: string[] } | null;
+  groupLookupFails?: boolean;
 }
 
 const PLAIN_USER = { isSystem: false, groups: [{ id: 3, permissions: ['read:pages', 'write:pages'] }] };
@@ -59,6 +62,10 @@ function stubCtx(role: string, opts: StubOpts = {}): { ctx: WikiContext; calls: 
           return { users: { single: opts.target === undefined ? PLAIN_USER : opts.target } };
         }
         if (q.includes('disableTFA')) return { users: { disableTFA: { responseResult: { succeeded: true } } } };
+        if (q.includes('groups { single')) {
+          if (opts.groupLookupFails) throw new Error('Forbidden');
+          return { groups: { single: opts.group === undefined ? { permissions: ['read:pages'] } : opts.group } };
+        }
         if (q.includes('createApiKey')) return { authentication: { createApiKey: { responseResult: { succeeded: true }, key: 'new-key' } } };
         if (q.includes('users { create')) return { users: { create: { responseResult: { succeeded: true }, user: { id: 7 } } } };
         if (q.includes('users { update')) return { users: { update: { responseResult: { succeeded: true } } } };
@@ -259,6 +266,11 @@ async function main(): Promise<void> {
   s = stubCtx('moderator', { target: { isSystem: false, groups: [{ id: 5, permissions: ['manage:users'] }] } });
   const customAdmin = await settle(uReset.handler({ id: 4, confirm: true }, s.ctx));
   check('A-10: a custom group with manage:users counts as privileged', customAdmin.guardrail && !mutated(s.calls));
+  for (const perm of ['manage:theme', 'write:scripts', 'write:styles']) {
+    s = stubCtx('moderator', { target: { isSystem: false, groups: [{ id: 8, permissions: ['read:pages', perm] }] } });
+    const r = await settle(uReset.handler({ id: 4, confirm: true }, s.ctx));
+    check(`S6: ${perm} (site-wide HTML/JS/CSS) counts as privileged`, r.guardrail && !mutated(s.calls));
+  }
   s = stubCtx('moderator', { lookupFails: true });
   const unknown = await settle(uReset.handler({ id: 4, confirm: true }, s.ctx));
   check('A-10: an unreadable target account fails closed', unknown.guardrail && !mutated(s.calls));
@@ -292,7 +304,13 @@ async function main(): Promise<void> {
   const adminGroupKey = await settle(keyCreate.handler({ name: 'k', expiration: '30d', fullAccess: false, group: 1, confirm: true }, s.ctx));
   check('A-13: maintainer creates a key for the Administrators group -> refused', adminGroupKey.guardrail && s.calls.requests.length === 0);
   s = stubCtx('maintainer');
-  check('A-13: maintainer creates a key for another group -> runs', !(await keyCreate.handler({ name: 'k', expiration: '30d', fullAccess: false, group: 3, confirm: true }, s.ctx)).isError && s.calls.requests.length === 1);
+  check('A-13: maintainer creates a key for another group -> runs', !(await keyCreate.handler({ name: 'k', expiration: '30d', fullAccess: false, group: 3, confirm: true }, s.ctx)).isError && s.calls.requests.some((q) => q.includes('createApiKey')));
+  s = stubCtx('maintainer', { group: { permissions: ['read:pages', 'manage:api'] } });
+  const apiGroupKey = await settle(keyCreate.handler({ name: 'k', expiration: '30d', fullAccess: false, group: 5, confirm: true }, s.ctx));
+  check('S6: a key for a group with admin-level permissions is refused too', apiGroupKey.guardrail && !s.calls.requests.some((q) => q.includes('createApiKey')));
+  s = stubCtx('maintainer', { groupLookupFails: true });
+  const unknownGroupKey = await settle(keyCreate.handler({ name: 'k', expiration: '30d', fullAccess: false, group: 6, confirm: true }, s.ctx));
+  check('S6: an unreadable group fails closed', unknownGroupKey.guardrail && !s.calls.requests.some((q) => q.includes('createApiKey')));
   s = stubCtx('systemadmin');
   check('A-13: systemadmin (manage_auth allow) creates a full-access key -> runs', !(await keyCreate.handler({ name: 'k', expiration: '30d', fullAccess: true }, s.ctx)).isError && s.calls.requests.length === 1);
 

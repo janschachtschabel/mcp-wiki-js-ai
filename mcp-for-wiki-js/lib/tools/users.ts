@@ -5,6 +5,7 @@ import { ok, assertOk } from '../wikijs/format';
 import { DEFAULT_RESPONSE, type ToolDef } from './types';
 import { parameterGate } from './gate';
 import type { WikiContext } from '../context';
+import { isAdminPermission } from './privileged';
 
 /**
  * Setting groups through users.create/update IS group management — groups:[1]
@@ -23,9 +24,6 @@ function groupAssignmentGate(groups: number[] | undefined, confirm: unknown, ctx
   });
 }
 
-/** Wiki.js permissions that make an account an administrator of users, groups, keys or the site. */
-const ADMIN_PERMISSION = /^(manage:(system|users|groups|api)|write:(users|groups))$/;
-
 /**
  * Setting the password, e-mail or 2FA of a privileged account takes that account
  * over — with only manage_users that would bypass the R-12 gate on groups (audit
@@ -41,7 +39,7 @@ async function privilegedTargetGate(id: number, what: string, confirm: unknown, 
       { id },
     );
     const user = data.users.single;
-    privileged = !user || user.isSystem || user.groups.some((g) => g.id === 1 || g.permissions.some((p) => ADMIN_PERMISSION.test(p)));
+    privileged = !user || user.isSystem || user.groups.some((g) => g.id === 1 || g.permissions.some(isAdminPermission));
   } catch {
     // Unreadable target: keep privileged = true and let the gate decide.
   }

@@ -237,11 +237,14 @@ export class Policy {
   resolve(toolName: string, category: Category): PolicyMode {
     let mode: PolicyMode = this.tools[toolName] ?? this.cats[category] ?? this.base[category];
     for (const overlay of this.overlays) {
-      const presetMap = overlay.preset ? PRESETS[overlay.preset] : undefined;
+      const explicit = overlay.tools?.[toolName] ?? overlay.categories?.[category];
       // A preset is a whole role: its per-tool rules count too, not just its categories (A-11).
-      const presetTool = overlay.preset ? ROLES[overlay.preset]?.tools?.[toolName] : undefined;
-      const ov = overlay.tools?.[toolName] ?? presetTool ?? overlay.categories?.[category] ?? presetMap?.[category];
-      if (ov) mode = strictest(mode, ov);
+      // Explicit rules and the preset both only tighten — neither may shadow the other.
+      const preset = overlay.preset
+        ? (ROLES[overlay.preset]?.tools?.[toolName] ?? PRESETS[overlay.preset]?.[category])
+        : undefined;
+      if (explicit) mode = strictest(mode, explicit);
+      if (preset) mode = strictest(mode, preset);
     }
     return mode;
   }

@@ -252,8 +252,9 @@ export const pageDeleteTools: ToolDef[] = [
     description: 'Purge page version history older than an ISO-8601 duration (e.g. "P1M", "P30D", "P2W").',
     category: 'manage_system', // Wiki.js: manage:system (audit A-12)
     inputSchema: {
-      // Wiki.js parses this with Luxon: an invalid spec ("1w") is silently ignored, and a
-      // zero duration purges ALL history — both are rejected here (audit A-12).
+      // Wiki.js parses this with Luxon: an invalid spec ("1w") is silently ignored and a
+      // zero duration purges ALL history — both are rejected here (audit A-12). A tiny
+      // duration ("PT1S") does nearly the same; that is left to the manage_system gate.
       olderThan: z
         .string()
         .regex(ISO_DURATION, 'Must be an ISO-8601 duration such as "P30D", "P1M" or "PT12H".')

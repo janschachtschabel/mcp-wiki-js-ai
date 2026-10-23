@@ -104,7 +104,7 @@ Im Mehrbenutzer-Modus liegen die echten Keys **als Env-Variable in Vercel** (Ver
 | `WIKIJS_TOKEN` | nur Single-Tenant¹ | – | Wiki.js-API-Key (Bearer). **Secret.** (Alias: `WIKIJS_API_KEY`). Geht nur an `WIKIJS_URL`, nie an eine vom Aufrufer gewählte URL. Sind `WIKIJS_PROFILES` oder `WIKIJS_KEY_MAP` gesetzt, bekommen anonyme HTTP-Aufrufer ihn **nicht** |
 | `WIKIJS_PROFILES` | für Mehrbenutzer | – | JSON: geheimer Handle → `{ label, token, role, url? }`. **Secret.** Siehe [unten](#mehrbenutzer-profile--handle-generierung) |
 | `WIKIJS_PERMISSION_PRESET` | nein | `safe` (Compose/Helm: `full`) | **Globale Obergrenze** (Ceiling-Rolle) — sichtbare Tools + Maximum. Rollen in `config/roles.json` |
-| `WIKIJS_POLICY` | nein | – | JSON-Feinjustierung deploy-weit pro Kategorie/Tool |
+| `WIKIJS_POLICY` | nein | – | JSON-Feinjustierung deploy-weit pro Kategorie/Tool. Tool-Regeln der Preset-Rolle (z. B. `wiki_graphql: block`) gelten mit; aufheben nur gezielt über `tools` |
 | `WIKIJS_ROLES` | nein | – | JSON, das die **Rollen-Definitionen** zur Laufzeit überschreibt (Form wie `config/roles.json`) |
 | `WIKIJS_SHOW_BLOCKED` | nein | `false` | geblockte Tools als deaktivierte Stubs in `tools/list` zeigen |
 | `WIKIJS_ALLOWED_URLS` | nein | – | Kommaliste erlaubter Wiki-Origins für `X-Wikijs-Url`/`?url=` (nur mit eigenem BYOK-Key; serverseitige Keys gehen immer nur an `WIKIJS_URL`). Ohne Liste wird eine Client-URL nur akzeptiert, wenn sie `WIKIJS_URL` entspricht oder kein `WIKIJS_URL` gesetzt ist (reiner Multi-Tenant-BYOK). Im reinen BYOK werden interne Ziele abgelehnt — IP-Literale (Loopback, private Netze, Link-Local, Multicast, reservierte Bereiche, auch IPv4 in IPv6 verpackt) und interne Namen (ohne Punkt, `localhost`, `*.local`, `*.internal`); vor **jedem** Request prüft der Server zusätzlich alle aufgelösten Adressen des Namens. Ein internes Wiki dort über diese Liste freigeben. Grenze: DNS-Rebinding zwischen Prüfung und Verbindungsaufbau ist nicht abgedeckt (Startwarnung „reines BYOK“) |
@@ -112,6 +112,7 @@ Im Mehrbenutzer-Modus liegen die echten Keys **als Env-Variable in Vercel** (Ver
 | `WIKIJS_KEY_MAP` | nein | – | Legacy-Map Handle→Token (nur Token; Policy aus Env). Die Keys gehen nur an `WIKIJS_URL` (ohne `WIKIJS_URL` sind die Aliase unbrauchbar). Von `WIKIJS_PROFILES` abgelöst |
 | `WIKIJS_TIMEOUT_MS` | nein | `30000` | Timeout pro GraphQL-Request inkl. Lesen der Antwort (AbortController) |
 | `WIKIJS_MAX_CONCURRENCY` | nein | `8` (Compose: `12`) | Max. parallele Upstream-Requests **pro Wiki** (Overload-Schutz; queued/sheddet bei Überlast) |
+| `WIKIJS_MAX_CONCURRENCY_TOTAL` | nein | 4 × `WIKIJS_MAX_CONCURRENCY` | Obergrenze über alle Wikis zusammen (nur bei BYOK relevant, wenn Aufrufer das Ziel-Wiki wählen) |
 | `WIKIJS_RETRIES` | nein | `2` | Wiederholungen bei Verbindungsfehlern und Proxy-502/503/504: Lesezugriffe immer, Mutationen nur, wenn der Request sicher nicht gesendet wurde; insgesamt höchstens eine Timeout-Dauer. `0` = aus |
 | `WIKIJS_MAX_RESPONSE_BYTES` | nein | `16777216` (16 MiB) | Obergrenze für eine GraphQL-Antwort (min. `1024`); größere Antworten werden abgebrochen |
 | `WIKIJS_AUDIT` | nein | `true` | Audit-Log für write/delete/admin (`false` = aus; nie Secrets) |
